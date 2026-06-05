@@ -12,6 +12,8 @@
     "local:clear-cache": "node scripts/clear-render-cache.js",
     "cache:clear": "node scripts/clear-render-cache.js",
     "palettes:generate": "node scripts/generate-public-color-maps.js",
+    "palettes:qa": "node scripts/generate-palette-qa-report.js",
+    "palettes:check": "npm run palettes:generate && npm run palettes:qa",
     "noaa:build": "node scripts/build-noaa-beta-artifacts.js",
     "noaa:build:full": "node scripts/build-noaa-beta-recent-runs.js",
     "noaa:build:test": "node scripts/build-noaa-beta-test-render.js",

@@ -133,6 +133,7 @@ const {
 } = require("../scripts/build-noaa-beta-artifacts");
 const REFLECTIVITY_PRECIP_TYPE_COLORS = require("../shared/reflectivity-precip-type-colors.json");
 const PLANNED_COLOR_MAPS = require("../shared/noaa-beta-planned-color-maps.json");
+const CATALOG_SCALE_PALETTES = require("../shared/catalog-scale-palettes.json");
 
 const SAMPLE_IDX = [
   "1:0:d=2026042512:PRMSL:mean sea level:anl:",
@@ -272,6 +273,38 @@ test("NOAA planned color maps use generated public provenance and stable hashes"
       assert.ok(map.valueStops.length >= 2, `${mapKey} should expose value stops`);
       assert.ok(map.normalizedRgbaStops.length >= 2, `${mapKey} should expose normalized stops`);
     }
+  }
+});
+
+test("NOAA catalog scale palettes use generated public provenance and stable hashes", () => {
+  const expectedScaleKeys = [
+    "pressureHpa",
+    "heightFt",
+    "heightContourDam",
+    "cape",
+    "cin",
+    "helicity",
+    "pwat",
+    "pblHeight",
+    "cloudCeilingFt",
+    "height250m",
+    "height500m",
+    "height700m",
+    "height850m",
+    "snowWaterEqIn",
+    "hailSizeIn",
+  ];
+
+  assert.match(CATALOG_SCALE_PALETTES.provenance, /First-party generated public/i);
+  assert.equal(CATALOG_SCALE_PALETTES.sourceDirectory, undefined);
+  for (const scaleKey of expectedScaleKeys) {
+    const scale = CATALOG_SCALE_PALETTES.scales[scaleKey];
+    assert.ok(scale, `${scaleKey} should be generated`);
+    assert.match(scale.sourceSha256 || "", /^[a-f0-9]{64}$/, `${scaleKey} should record a stable generated hash`);
+    assert.equal(scale.sourceFile, undefined, `${scaleKey} should not reference external palette source files`);
+    assert.ok(scale.valueStops.length >= 2, `${scaleKey} should expose value stops`);
+    assert.ok(scale.normalizedRgbaStops.length >= 2, `${scaleKey} should expose normalized stops`);
+    assert.deepEqual(SCALES[scaleKey].legendStops, scale.normalizedRgbaStops, `${scaleKey} catalog scale`);
   }
 });
 
@@ -601,16 +634,22 @@ test("NOAA derived grids do not synthesize precip-rate type from APCP", () => {
   assert.equal(grids.precipRate, undefined);
 });
 
-test("supplied palettes preserve hard threshold color breaks", () => {
+test("supplied palettes preserve clean hard threshold color breaks", () => {
   assertDuplicateValueStopExists(COLOR_MAPS.temperatureF, 32);
   assertDuplicateValueStopExists(COLOR_MAPS.temperature850C, 0);
   assertDuplicateValueStopExists(COLOR_MAPS.temperature700C, 0);
   assertDuplicateValueStopExists(COLOR_MAPS.temperature500C, -20);
+  assert.equal(valueStopColors(COLOR_MAPS.temperatureF, 32).length, 2);
+  assert.equal(valueStopColors(COLOR_MAPS.temperature850C, 0).length, 2);
+  assert.equal(valueStopColors(COLOR_MAPS.temperature700C, 0).length, 2);
+  assert.equal(valueStopColors(COLOR_MAPS.temperature500C, -20).length, 2);
   for (const value of [50, 60, 70, 80]) {
     assertDuplicateValueStopExists(COLOR_MAPS.dewPointF, value);
+    assert.equal(valueStopColors(COLOR_MAPS.dewPointF, value).length, 2);
   }
   for (const value of [1, 3, 6, 10]) {
     assertDuplicateValueStopExists(COLOR_MAPS.visibilityMi, value);
+    assert.equal(valueStopColors(COLOR_MAPS.visibilityMi, value).length, 2);
   }
 
   for (const value of [1, 6, 12, 24, 36]) {
@@ -1019,7 +1058,7 @@ test("NOAA direct planned parameters use model gates and staged palettes", () =>
     colorLookup: uhLookup,
   }).rgba;
   assert.equal(uhPixels[3], 0);
-  assert.ok(uhPixels[7] > 0, "UH values under 25 should be visible through source opacity ramp");
+  assert.ok(uhPixels[7] > 0, "UH values under 25 should be visible through generated opacity ramp");
   assert.ok(uhPixels[11] > uhPixels[7]);
   assert.ok(uhPixels[15] > uhPixels[11]);
   assert.deepEqual(metadata.sbcape.legendStops, PLANNED_COLOR_MAPS.maps.capeJkg.normalizedRgbaStops);
@@ -1796,7 +1835,7 @@ test("NOAA UH run max composes pixelwise maxima instead of current-frame values"
   assert.deepEqual(Array.from(runMax), [25, 60, 80, 10]);
 });
 
-test("NOAA UH run max source opacity ramp is not gated off below 25", () => {
+test("NOAA UH run max generated opacity ramp is not gated off below 25", () => {
   const decoded = {
     updraftHelicity2to5km1h: new Float32Array([0, 5, 10, 20]),
   };
