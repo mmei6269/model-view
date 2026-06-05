@@ -4,6 +4,7 @@ const SHARED_CONFIG = require("../../shared/modelview-config.json");
 const REFLECTIVITY_PRECIP_TYPE_COLORS = require("../../shared/reflectivity-precip-type-colors.json");
 const SNOWFALL_LEGEND_COLORS = require("../../shared/snowfall-legend-colors.json");
 const PLANNED_COLOR_MAPS = require("../../shared/noaa-beta-planned-color-maps.json");
+const CATALOG_SCALE_PALETTES = require("../../shared/catalog-scale-palettes.json");
 const { loadColorMaps } = require("./color-maps");
 
 const SURFACE_GROUP = "Surface & Boundary Layer";
@@ -73,7 +74,7 @@ const SCALES = Object.freeze({
     legendTicks: [0, 25, 50, 75, 100],
     legendStops: normalizedStopsFromValueScale(LEGACY_COLOR_MAPS.humidityPct),
   },
-  pressureHpa: {
+  pressureHpa: catalogScale("pressureHpa", {
     min: 960,
     max: 1040,
     alpha: 0.8,
@@ -84,7 +85,7 @@ const SCALES = Object.freeze({
       [0.58, [238, 221, 142]],
       [1, [186, 78, 85]],
     ],
-  },
+  }),
   visibilityMi: {
     min: LEGACY_COLOR_MAPS.visibilityMi.min,
     max: LEGACY_COLOR_MAPS.visibilityMi.max,
@@ -101,7 +102,7 @@ const SCALES = Object.freeze({
     legendTicks: [0, 25, 50, 75, 100],
     legendStops: normalizedStopsFromValueScale(LEGACY_COLOR_MAPS.cloudCoverPct),
   },
-  heightFt: {
+  heightFt: catalogScale("heightFt", {
     min: 0,
     max: 20000,
     alpha: 0.78,
@@ -112,7 +113,7 @@ const SCALES = Object.freeze({
       [0.66, [223, 194, 102]],
       [1, [215, 104, 83]],
     ],
-  },
+  }),
   windMph: {
     min: LEGACY_COLOR_MAPS.windMph.min,
     max: LEGACY_COLOR_MAPS.windMph.max,
@@ -134,7 +135,7 @@ const SCALES = Object.freeze({
   wind700850Kt: upperWindScale(LEGACY_COLOR_MAPS.wind850Kt, [20, 30, 40, 50, 60, 70, 80]),
   wind500Kt: upperWindScale(LEGACY_COLOR_MAPS.wind500Kt, [20, 40, 60, 80, 100, 120, 140]),
   wind250Kt: upperWindScale(LEGACY_COLOR_MAPS.wind250Kt, [50, 70, 90, 110, 130, 150, 170]),
-  heightContourDam: {
+  heightContourDam: catalogScale("heightContourDam", {
     min: 0,
     max: 1,
     alpha: 1,
@@ -143,7 +144,7 @@ const SCALES = Object.freeze({
       [0, [23, 23, 23]],
       [1, [23, 23, 23]],
     ],
-  },
+  }),
   precipIn: {
     min: 0.01,
     max: LEGACY_COLOR_MAPS.precipIn.max,
@@ -174,7 +175,7 @@ const SCALES = Object.freeze({
     legendTicks: [],
     legendStops: [],
   },
-  cape: {
+  cape: catalogScale("cape", {
     min: 0,
     max: 5000,
     minVisible: 100,
@@ -187,8 +188,8 @@ const SCALES = Object.freeze({
       [0.8, [221, 112, 69]],
       [1, [169, 54, 82]],
     ],
-  },
-  cin: {
+  }),
+  cin: catalogScale("cin", {
     min: 0,
     max: 300,
     minVisible: 25,
@@ -201,8 +202,8 @@ const SCALES = Object.freeze({
       [0.65, [101, 105, 174]],
       [1, [76, 50, 120]],
     ],
-  },
-  helicity: {
+  }),
+  helicity: catalogScale("helicity", {
     min: 0,
     max: 500,
     minVisible: 25,
@@ -215,8 +216,8 @@ const SCALES = Object.freeze({
       [0.75, [221, 112, 69]],
       [1, [190, 70, 92]],
     ],
-  },
-  pwat: {
+  }),
+  pwat: catalogScale("pwat", {
     min: 0,
     max: 70,
     alpha: 0.82,
@@ -227,8 +228,8 @@ const SCALES = Object.freeze({
       [0.7, [94, 180, 117]],
       [1, [224, 184, 87]],
     ],
-  },
-  pblHeight: {
+  }),
+  pblHeight: catalogScale("pblHeight", {
     min: 0,
     max: 4000,
     alpha: 0.74,
@@ -239,7 +240,7 @@ const SCALES = Object.freeze({
       [0.7, [179, 192, 100]],
       [1, [214, 111, 81]],
     ],
-  },
+  }),
   absoluteVorticity1e5S1: plannedScale("absoluteVorticity1e5S1", {
     alpha: 1,
     legendTicks: [0, 10, 20, 30, 40, 50, 60, 70],
@@ -277,7 +278,7 @@ const SCALES = Object.freeze({
   cinJkg: plannedScale("cinJkg", {
     alpha: 1,
     legendTicks: [-1000, -600, -400, -200, -100, -50, 0],
-    thresholdNote: "Signed negative; near-zero values fade out through the source opacity ramp",
+    thresholdNote: "Signed negative; near-zero values fade out through the generated opacity ramp",
   }),
   surfaceBasedLclM: plannedScale("surfaceBasedLclM", {
     alpha: 1,
@@ -317,7 +318,7 @@ const SCALES = Object.freeze({
     legendTicks: [0, 1, 2, 4, 6, 8, 10],
     thresholdNote: "Low-end opacity ramp",
   }),
-  cloudCeilingFt: {
+  cloudCeilingFt: catalogScale("cloudCeilingFt", {
     min: 0,
     max: 20000,
     alpha: 0.78,
@@ -329,8 +330,8 @@ const SCALES = Object.freeze({
       [0.6, [187, 186, 104, 0.76]],
       [1, [218, 142, 93, 0.68]],
     ],
-  },
-  hailSizeIn: {
+  }),
+  hailSizeIn: catalogScale("hailSizeIn", {
     min: 0,
     max: 4,
     minVisible: 0.25,
@@ -345,7 +346,7 @@ const SCALES = Object.freeze({
       [0.75, [196, 72, 83, 0.94]],
       [1, [151, 60, 138, 0.98]],
     ],
-  },
+  }),
   precipRateType: {
     min: 0,
     max: 0.5,
@@ -355,34 +356,34 @@ const SCALES = Object.freeze({
     legendTicks: [0.01, 0.05, 0.1, 0.2, 0.5],
     legendStops: buildPrecipRateTypeOverviewStops(),
   },
-  height250m: {
+  height250m: catalogScale("height250m", {
     min: 9000,
     max: 11500,
     alpha: 0.74,
     legendTicks: [9000, 9500, 10000, 10500, 11000, 11500],
     legendStops: UPPER_HEIGHT_STOPS,
-  },
-  height500m: {
+  }),
+  height500m: catalogScale("height500m", {
     min: 4800,
     max: 6000,
     alpha: 0.74,
     legendTicks: [4800, 5100, 5400, 5700, 6000],
     legendStops: UPPER_HEIGHT_STOPS,
-  },
-  height700m: {
+  }),
+  height700m: catalogScale("height700m", {
     min: 2400,
     max: 3400,
     alpha: 0.74,
     legendTicks: [2400, 2600, 2800, 3000, 3200, 3400],
     legendStops: UPPER_HEIGHT_STOPS,
-  },
-  height850m: {
+  }),
+  height850m: catalogScale("height850m", {
     min: 900,
     max: 1800,
     alpha: 0.74,
     legendTicks: [900, 1200, 1500, 1800],
     legendStops: UPPER_HEIGHT_STOPS,
-  },
+  }),
   snowDepthIn: {
     min: 0,
     max: SNOWFALL_IN_MAX,
@@ -393,7 +394,7 @@ const SCALES = Object.freeze({
     legendTicks: snowfallLegendTicks(SNOWFALL_LEGEND_COLORS, SNOWFALL_IN_MAX),
     legendStops: normalizedStopsFromValueRows(SNOWFALL_IN_VALUE_STOPS, 0, SNOWFALL_IN_MAX),
   },
-  snowWaterEqIn: {
+  snowWaterEqIn: catalogScale("snowWaterEqIn", {
     min: 0,
     max: 8,
     minVisible: 0.05,
@@ -406,7 +407,7 @@ const SCALES = Object.freeze({
       [0.75, [207, 226, 235]],
       [1, [244, 248, 252]],
     ],
-  },
+  }),
   snowfallIn: {
     min: 0,
     max: SNOWFALL_IN_MAX,
@@ -1857,6 +1858,59 @@ function plannedScale(key, options = {}) {
     valueStops: valueStopsFromPlannedMap(map, options),
     lookup: options.lookup || (map.lookup === "step" || map.interpolation === "step" ? "step" : null),
   };
+}
+
+function catalogScale(key, fallback = {}) {
+  const source = CATALOG_SCALE_PALETTES?.scales?.[key];
+  if (!source || typeof source !== "object") {
+    return fallback;
+  }
+  const out = { ...fallback };
+  for (const property of ["min", "max", "alpha", "minVisible", "maxVisible"]) {
+    if (Number.isFinite(Number(source[property]))) {
+      out[property] = Number(source[property]);
+    }
+  }
+  if (typeof source.thresholdNote === "string") {
+    out.thresholdNote = source.thresholdNote;
+  }
+  if (Array.isArray(source.legendTicks)) {
+    out.legendTicks = source.legendTicks.map((tick) => Number(tick)).filter(Number.isFinite);
+  }
+  const legendStops = normalizedStopsFromCatalogScale(source);
+  if (legendStops.length >= 2) {
+    out.legendStops = legendStops;
+  }
+  const valueStops = valueStopsFromCatalogScale(source);
+  if (valueStops.length >= 2) {
+    out.valueStops = valueStops;
+  }
+  if (source.lookup === "step" || source.interpolation === "step") {
+    out.lookup = "step";
+  }
+  return out;
+}
+
+function normalizedStopsFromCatalogScale(source) {
+  const rows = Array.isArray(source?.normalizedRgbaStops) ? source.normalizedRgbaStops : [];
+  return rows
+    .map((row) => {
+      const position = clamp01(Number(row?.[0]));
+      const color = normalizeLegendRgba(row?.[1], row?.[1]?.[3]);
+      return Number.isFinite(position) ? [position, color] : null;
+    })
+    .filter(Boolean);
+}
+
+function valueStopsFromCatalogScale(source) {
+  const rows = Array.isArray(source?.valueStops) ? source.valueStops : [];
+  return rows
+    .map((row) => {
+      const value = Number(row?.[0]);
+      const color = normalizeLegendRgba(row?.[1], row?.[2]);
+      return Number.isFinite(value) ? [value, color] : null;
+    })
+    .filter(Boolean);
 }
 
 function plannedLegendTicks(map, min, max) {

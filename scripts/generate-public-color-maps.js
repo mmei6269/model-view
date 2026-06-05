@@ -14,48 +14,38 @@ async function main() {
   await writeJson(outputDir, "snowfall-legend-colors.json", buildSnowfallLegend());
   await writeJson(outputDir, "reflectivity-precip-type-colors.json", buildReflectivityPrecipTypeColors());
   await writeJson(outputDir, "noaa-beta-planned-color-maps.json", buildPlannedColorMaps());
+  await writeJson(outputDir, "catalog-scale-palettes.json", buildCatalogScalePalettes());
 }
 
 function buildCoreColorMaps() {
-  const tempF = withBreaks(
-    interpolateValueStops(
-      [
-        [-60, "#3F1D83"],
-        [-40, "#2C4DA2"],
-        [-20, "#2179B8"],
-        [0, "#4BA7B0"],
-        [32, "#D7E8B2"],
-        [50, "#E8D46F"],
-        [70, "#E79A4F"],
-        [90, "#CF4E43"],
-        [110, "#9D2F5D"],
-        [120, "#6D246C"],
-      ],
-      1,
-    ),
-    [[32, "#4BA7B0", "#D7E8B2"]],
-  );
-  const dewPointF = withBreaks(
-    interpolateValueStops(
-      [
-        [-40, "#75624B"],
-        [-20, "#5F7358"],
-        [0, "#4E8C70"],
-        [32, "#58A85D"],
-        [50, "#3DBB54"],
-        [60, "#14793B"],
-        [70, "#246E8B"],
-        [80, "#65499D"],
-        [90, "#9B5A8A"],
-      ],
-      1,
-    ),
+  const tempF = interpolateHardBreakValueStops(
     [
+      [-60, "#3F1D83"],
+      [-40, "#2C4DA2"],
+      [-20, "#2179B8"],
+      [0, "#4BA7B0"],
+      [32, "#79C3BC", "#D7E8B2"],
+      [50, "#E8D46F"],
+      [70, "#E79A4F"],
+      [90, "#CF4E43"],
+      [110, "#9D2F5D"],
+      [120, "#6D246C"],
+    ],
+    1,
+  );
+  const dewPointF = interpolateHardBreakValueStops(
+    [
+      [-40, "#75624B"],
+      [-20, "#5F7358"],
+      [0, "#4E8C70"],
+      [32, "#58A85D"],
       [50, "#3DBB54", "#2DA044"],
       [60, "#14793B", "#246E8B"],
-      [70, "#246E8B", "#65499D"],
-      [80, "#65499D", "#9B5A8A"],
+      [70, "#174F64", "#65499D"],
+      [80, "#473073", "#9B5A8A"],
+      [90, "#9B5A8A"],
     ],
+    1,
   );
   const visibility = withBreaks(
     [
@@ -134,9 +124,9 @@ function buildCoreColorMaps() {
     dew_point_f: dewPointF,
     relative_humidity_pct: humidity,
     temp_f: tempF,
-    temp_850mb_c: withBreaks(temperatureCScale(-40, 40), [[0, "#4BA7B0", "#D7E8B2"]]),
-    temp_700mb_c: withBreaks(temperatureCScale(-40, 30), [[0, "#4BA7B0", "#D7E8B2"]]),
-    temp_500mb_c: withBreaks(temperatureCScale(-50, 0), [[-20, "#4BA7B0", "#D7E8B2"]]),
+    temp_850mb_c: temperatureCScale(-40, 40, 0),
+    temp_700mb_c: temperatureCScale(-40, 30, 0),
+    temp_500mb_c: temperatureCScale(-50, 0, -20),
     wind_700_850mb_kt: windScale(20, 80, 20, [
       "#77C8DA",
       "#549AD6",
@@ -199,16 +189,16 @@ function buildSnowfallLegend() {
       [18, [204, 57, 111, 1]],
       [24, [215, 92, 86, 1]],
       [30, [222, 133, 72, 1]],
-      [36, [229, 169, 78, 1]],
-      [48, [238, 212, 117, 1]],
-      [60, [249, 244, 181, 1]],
+      [36, [235, 183, 74, 1]],
+      [48, [198, 122, 55, 1]],
+      [60, [147, 78, 65, 1]],
     ],
     [
       [1, [150, 150, 150, 1], [130, 202, 220, 1]],
       [6, [45, 85, 170, 1], [116, 103, 190, 1]],
       [12, [190, 70, 156, 1], [204, 57, 111, 1]],
       [24, [215, 92, 86, 1], [222, 133, 72, 1]],
-      [36, [229, 169, 78, 1], [238, 212, 117, 1]],
+      [36, [235, 183, 74, 1], [198, 122, 55, 1]],
     ],
   );
   return {
@@ -622,6 +612,290 @@ function buildPlannedColorMaps() {
   };
 }
 
+function buildCatalogScalePalettes() {
+  const upperHeightAnchors = [
+    [0, "#4A547E"],
+    [0.25, "#4389B0"],
+    [0.5, "#6BAE82"],
+    [0.75, "#E0C560"],
+    [1, "#CB5B4E"],
+  ];
+  const scales = {
+    pressureHpa: catalogScale({
+      key: "pressureHpa",
+      label: "Mean Sea-Level Pressure",
+      units: "hPa",
+      min: 960,
+      max: 1040,
+      alpha: 0.82,
+      anchors: [
+        [960, "#5A4289"],
+        [975, "#496FB3"],
+        [990, "#4AA3B0"],
+        [1000, "#CAD9B5"],
+        [1013, "#E1D071"],
+        [1025, "#D9844E"],
+        [1040, "#B64A5F"],
+      ],
+      legendTicks: [960, 980, 1000, 1020, 1040],
+      hardBreakValues: [980, 1000, 1020],
+      description: "Diverging operational pressure palette: lower pressure reads cool, higher pressure reads warm.",
+    }),
+    heightFt: catalogScale({
+      key: "heightFt",
+      label: "Height",
+      units: "ft",
+      min: 0,
+      max: 20000,
+      alpha: 0.8,
+      anchors: [
+        [0, "#496CB0"],
+        [2500, "#3E9DB2"],
+        [5000, "#65B889"],
+        [10000, "#D5C55F"],
+        [15000, "#D9824B"],
+        [20000, "#B34D6C"],
+      ],
+      legendTicks: [0, 5000, 10000, 15000, 20000],
+      hardBreakValues: [5000, 10000, 15000],
+      description: "Sequential height palette used by wet-bulb-zero height; low levels emphasize cool colors.",
+    }),
+    heightContourDam: catalogScale({
+      key: "heightContourDam",
+      label: "Height Contours",
+      units: "dam",
+      min: 0,
+      max: 1,
+      alpha: 1,
+      anchors: [
+        [0, "#202020"],
+        [1, "#202020"],
+      ],
+      legendTicks: [],
+      description: "Neutral dark contour stroke color; contours encode magnitude by geometry and labels.",
+    }),
+    cape: catalogScale({
+      key: "cape",
+      label: "CAPE",
+      units: "J/kg",
+      min: 0,
+      max: 5000,
+      minVisible: 100,
+      alpha: 0.84,
+      anchors: [
+        [0, [100, 100, 100, 0]],
+        [100, [100, 100, 100, 0.25]],
+        [500, "#4A85A7"],
+        [1000, "#6BAE78"],
+        [2500, "#D8C75E"],
+        [4000, "#D87845"],
+        [5000, "#A64876"],
+      ],
+      legendTicks: [0, 1000, 2500, 4000, 5000],
+      hardBreakValues: [500, 1000, 2500, 4000],
+      thresholdNote: "Hidden below 100 J/kg; weak values use opacity.",
+    }),
+    cin: catalogScale({
+      key: "cin",
+      label: "CIN",
+      units: "J/kg",
+      min: 0,
+      max: 300,
+      minVisible: 25,
+      alpha: 0.78,
+      anchors: [
+        [0, [205, 205, 160, 0]],
+        [25, [205, 205, 160, 0.38]],
+        [50, "#A6BE83"],
+        [100, "#68A9A4"],
+        [200, "#5D6FB4"],
+        [300, "#56327C"],
+      ],
+      legendTicks: [0, 50, 100, 200, 300],
+      hardBreakValues: [25, 50, 100, 200],
+      thresholdNote: "Hidden below 25 J/kg; higher inhibition trends toward cool purple.",
+    }),
+    helicity: catalogScale({
+      key: "helicity",
+      label: "Storm-Relative Helicity",
+      units: "m^2 s^-2",
+      min: 0,
+      max: 500,
+      minVisible: 25,
+      alpha: 0.82,
+      anchors: [
+        [0, [100, 100, 100, 0]],
+        [25, [100, 100, 100, 0.35]],
+        [100, "#486C93"],
+        [200, "#6AA898"],
+        [300, "#D6C764"],
+        [400, "#DA7A45"],
+        [500, "#A64679"],
+      ],
+      legendTicks: [0, 100, 200, 300, 400, 500],
+      hardBreakValues: [100, 200, 300, 400],
+      thresholdNote: "Weak values fade in below 100 m^2 s^-2.",
+    }),
+    pwat: catalogScale({
+      key: "pwat",
+      label: "Precipitable Water",
+      units: "mm",
+      min: 0,
+      max: 70,
+      alpha: 0.84,
+      anchors: [
+        [0, "#4D536F"],
+        [10, "#437EA3"],
+        [20, "#43A6A0"],
+        [35, "#75B86F"],
+        [50, "#D5C25B"],
+        [60, "#D98248"],
+        [70, "#A94A76"],
+      ],
+      legendTicks: [0, 15, 30, 45, 60],
+      hardBreakValues: [15, 30, 45, 60],
+      description: "Moisture palette: dry cool grays/blues, tropical moisture warm yellow-magenta.",
+    }),
+    pblHeight: catalogScale({
+      key: "pblHeight",
+      label: "PBL Height",
+      units: "m",
+      min: 0,
+      max: 4000,
+      alpha: 0.76,
+      anchors: [
+        [0, "#4C577A"],
+        [500, "#3E82A6"],
+        [1000, "#50A9A0"],
+        [2000, "#A7BA6E"],
+        [3000, "#D99152"],
+        [4000, "#B45A70"],
+      ],
+      legendTicks: [0, 1000, 2000, 3000, 4000],
+      hardBreakValues: [1000, 2000, 3000],
+      description: "Boundary-layer depth palette with distinct low/mid/high mixing regimes.",
+    }),
+    cloudCeilingFt: catalogScale({
+      key: "cloudCeilingFt",
+      label: "Cloud Ceiling",
+      units: "ft",
+      min: 0,
+      max: 20000,
+      alpha: 0.82,
+      anchors: [
+        [0, "#7B3F8F"],
+        [500, "#B04472"],
+        [1000, "#D66D45"],
+        [3000, "#D6C760"],
+        [5000, "#77B07B"],
+        [10000, "#4A90A7"],
+        [20000, [90, 105, 125, 0.48]],
+      ],
+      legendTicks: [0, 500, 1000, 3000, 5000, 10000, 20000],
+      hardBreakValues: [500, 1000, 3000, 5000],
+      description: "Aviation-focused ceiling palette: low ceilings are warm/high-alert, high ceilings fade cooler.",
+    }),
+    height250m: catalogScaleFromNormalizedAnchors({
+      key: "height250m",
+      label: "250 mb Height",
+      units: "m",
+      min: 9000,
+      max: 11500,
+      alpha: 0.76,
+      anchors: upperHeightAnchors,
+      legendTicks: [9000, 9500, 10000, 10500, 11000, 11500],
+    }),
+    height500m: catalogScaleFromNormalizedAnchors({
+      key: "height500m",
+      label: "500 mb Height",
+      units: "m",
+      min: 4800,
+      max: 6000,
+      alpha: 0.76,
+      anchors: upperHeightAnchors,
+      legendTicks: [4800, 5100, 5400, 5700, 6000],
+    }),
+    height700m: catalogScaleFromNormalizedAnchors({
+      key: "height700m",
+      label: "700 mb Height",
+      units: "m",
+      min: 2400,
+      max: 3400,
+      alpha: 0.76,
+      anchors: upperHeightAnchors,
+      legendTicks: [2400, 2600, 2800, 3000, 3200, 3400],
+    }),
+    height850m: catalogScaleFromNormalizedAnchors({
+      key: "height850m",
+      label: "850 mb Height",
+      units: "m",
+      min: 900,
+      max: 1800,
+      alpha: 0.76,
+      anchors: upperHeightAnchors,
+      legendTicks: [900, 1200, 1500, 1800],
+    }),
+    snowWaterEqIn: catalogScale({
+      key: "snowWaterEqIn",
+      label: "Snow Water Equivalent",
+      units: "in",
+      min: 0,
+      max: 8,
+      minVisible: 0.05,
+      alpha: 0.86,
+      anchors: [
+        [0, [65, 100, 125, 0]],
+        [0.05, [65, 100, 125, 0.35]],
+        [0.5, "#4F9DC7"],
+        [1, "#6CC7DC"],
+        [2, "#A7DCE7"],
+        [4, "#D8EEF3"],
+        [6, "#E7D5F0"],
+        [8, "#B66CB8"],
+      ],
+      legendTicks: [0, 0.5, 1, 2, 4, 6, 8],
+      hardBreakValues: [0.5, 1, 2, 4, 6],
+      thresholdNote: "Trace SWE fades in below 0.05 in.",
+    }),
+    hailSizeIn: catalogScale({
+      key: "hailSizeIn",
+      label: "Maximum Hail Size",
+      units: "in",
+      min: 0,
+      max: 4,
+      minVisible: 0.25,
+      alpha: 0.9,
+      anchors: [
+        [0, [105, 105, 105, 0]],
+        [0.25, [96, 154, 188, 0.72]],
+        [0.5, "#73B582"],
+        [1, "#D7C45E"],
+        [2, "#D87545"],
+        [3, "#B44770"],
+        [4, "#743E89"],
+      ],
+      legendTicks: [0.25, 0.5, 1, 2, 3, 4],
+      hardBreakValues: [0.25, 0.5, 1, 2, 3],
+      thresholdNote: "Hidden below 0.25 in; severe hail sizes use warm-to-purple alerts.",
+    }),
+  };
+  const payload = {
+    schemaVersion: "modelview-public-catalog-scale-palettes-v1",
+    provenance:
+      "First-party generated public scale palettes for catalog-resident weather parameters. No vendor legend extraction is used.",
+    description:
+      "Complements color-mapping-v2 and noaa-beta-planned-color-maps so every parameter scale in the public catalog is backed by generated public palette data.",
+    designReferences: [
+      "Matplotlib colormap guidance: match sequential, diverging, and qualitative schemes to data semantics and avoid misleading lightness jumps.",
+      "ColorBrewer cartographic guidance: use ordered and diverging palettes appropriate for map interpretation and color-vision accessibility.",
+      "Crameri scientific colour-map principles: keep perceptual progression readable and avoid artificial visual extrema.",
+    ],
+    scales,
+  };
+  payload.sourceSha256 = stablePayloadHash(payload);
+  return payload;
+}
+
 function buildPrecipRateByTypeMap() {
   const rateStops = [0, 0.01, 0.03, 0.05, 0.1, 0.2, 0.35, 0.5];
   const configs = {
@@ -742,6 +1016,72 @@ function plannedMap({ key, label, units, min, max, anchors, hardBreakValues = []
   return payload;
 }
 
+function catalogScale({
+  key,
+  label,
+  units,
+  min,
+  max,
+  anchors,
+  alpha = 1,
+  minVisible = null,
+  maxVisible = null,
+  legendTicks = null,
+  hardBreakValues = [],
+  thresholdNote = null,
+  description = null,
+}) {
+  const breakSet = new Set(hardBreakValues.map((value) => Number(value)));
+  const values = uniqueSorted([min, max, ...anchors.map(([value]) => value), ...hardBreakValues]);
+  const base = values
+    .filter((value) => value === min || value === max || !breakSet.has(value))
+    .map((value) => [value, interpolateAnchors(anchors, value)]);
+  const breakOffset = Math.max((max - min) * 0.02, 1e-6);
+  const valueStops = withBreaks(
+    base,
+    hardBreakValues.map((value) => [
+      value,
+      interpolateAnchors(anchors, Math.max(min, value - breakOffset)),
+      interpolateAnchors(anchors, value),
+    ]),
+  );
+  const payload = {
+    key,
+    label,
+    units,
+    min,
+    max,
+    alpha,
+    minVisible,
+    maxVisible,
+    interpolation: hardBreakValues.length > 0 ? "hybrid" : "linear",
+    colorBehavior: "first-party-generated-catalog-scale",
+    hardBreakValues,
+    legendTicks: legendTicks || [min, max],
+    thresholdNote,
+    description,
+    valueStops,
+    normalizedRgbaStops: normalizeStops(valueStops, min, max),
+  };
+  payload.sourceSha256 = stablePayloadHash(payload);
+  return payload;
+}
+
+function catalogScaleFromNormalizedAnchors({ key, label, units, min, max, anchors, alpha = 1, legendTicks = null }) {
+  const valueAnchors = anchors.map(([position, color]) => [min + Number(position) * (max - min), color]);
+  return catalogScale({
+    key,
+    label,
+    units,
+    min,
+    max,
+    alpha,
+    anchors: valueAnchors,
+    legendTicks,
+    description: "Generated upper-air height fill palette shared across pressure levels.",
+  });
+}
+
 function precipitationScale() {
   return [
     [0.01, "#5AA3CF", 0],
@@ -778,22 +1118,28 @@ function reflectivityScale() {
   return out;
 }
 
-function temperatureCScale(min, max) {
+function temperatureCScale(min, max, breakValue = null) {
   const anchors = [
     [min, "#3F1D83"],
     [-30, "#2C4DA2"],
     [-20, "#2179B8"],
     [-10, "#4BA7B0"],
-    [0, "#D7E8B2"],
+    [0, "#79C3BC"],
     [10, "#E8D46F"],
     [20, "#E79A4F"],
     [30, "#CF4E43"],
     [max, "#7A2A6A"],
-  ].filter(
-    ([value], index, rows) =>
-      value >= min && value <= max && rows.findIndex(([candidate]) => candidate === value) === index,
-  );
-  return interpolateValueStops(anchors, 5);
+  ]
+    .filter(([value]) => value >= min && value <= max)
+    .map(([value, color]) => {
+      if (Number(value) !== Number(breakValue)) {
+        return [value, color];
+      }
+      const lowerColor = breakValue === -20 ? "#2179B8" : "#79C3BC";
+      return [value, lowerColor, "#D7E8B2"];
+    })
+    .filter(([value], index, rows) => rows.findIndex(([candidate]) => Number(candidate) === Number(value)) === index);
+  return breakValue == null ? interpolateValueStops(anchors, 5) : interpolateHardBreakValueStops(anchors, 5);
 }
 
 function windScale(min, max, fadeEnd, colors) {
@@ -817,8 +1163,51 @@ function interpolateValueStops(anchors, step = 1) {
   return out;
 }
 
+function interpolateHardBreakValueStops(points, step = 1) {
+  const sorted = points
+    .map(([value, lowerColor, upperColor = null]) => ({
+      value: Number(value),
+      lowerColor: rgba(lowerColor),
+      upperColor: upperColor == null ? null : rgba(upperColor),
+    }))
+    .filter((point) => Number.isFinite(point.value))
+    .sort((left, right) => left.value - right.value);
+  const out = [];
+  for (let index = 0; index < sorted.length; index += 1) {
+    const point = sorted[index];
+    if (index === 0) {
+      pushHardBreakValueStop(out, point.value, point.upperColor || point.lowerColor);
+      if (point.upperColor) {
+        pushHardBreakValueStop(out, point.value, point.upperColor);
+      }
+      continue;
+    }
+
+    const previous = sorted[index - 1];
+    const startValue = previous.value;
+    const endValue = point.value;
+    const startColor = previous.upperColor || previous.lowerColor;
+    const endColor = point.lowerColor;
+    for (let value = startValue + step; value < endValue - 1e-9; value += step) {
+      const t = (value - startValue) / Math.max(1e-9, endValue - startValue);
+      pushHardBreakValueStop(out, value, mixRgba(startColor, endColor, t));
+    }
+    pushHardBreakValueStop(out, endValue, endColor);
+    if (point.upperColor) {
+      pushHardBreakValueStop(out, endValue, point.upperColor);
+    }
+  }
+  return out;
+}
+
+function pushHardBreakValueStop(out, value, color) {
+  const normalizedValue = Math.abs(value) < 1e-9 ? 0 : Number(value.toFixed(6));
+  out.push([normalizedValue, rgbToHex(color), Number.isFinite(color[3]) ? roundAlpha(color[3]) : 1]);
+}
+
 function withBreaks(rows, breaks) {
-  const out = [...rows];
+  const breakValues = new Set(breaks.map(([value]) => Number(value)));
+  const out = rows.filter(([value]) => !breakValues.has(Number(value)));
   for (const [value, lowerColor, upperColor, alpha = null] of breaks) {
     out.push([value, colorToOutput(lowerColor), alphaFromColor(lowerColor, alpha)]);
     out.push([value, colorToOutput(upperColor), alphaFromColor(upperColor, alpha)]);
@@ -829,7 +1218,10 @@ function withBreaks(rows, breaks) {
 function normalizeOutputStop(row) {
   const value = Number(row[0]);
   const color = colorToOutput(row[1]);
-  const alpha = Number.isFinite(Number(row[2])) ? Number(row[2]) : alphaFromColor(row[1], null);
+  const alpha =
+    row.length >= 3 && row[2] != null && Number.isFinite(Number(row[2]))
+      ? Number(row[2])
+      : alphaFromColor(row[1], null);
   return Number.isFinite(alpha) ? [value, color, roundAlpha(alpha)] : [value, color];
 }
 

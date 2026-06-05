@@ -46,10 +46,6 @@
     },
     {
       "valueInches": 1,
-      "rgba": [150, 150, 150, 1]
-    },
-    {
-      "valueInches": 1,
       "rgba": [130, 202, 220, 1]
     },
     {
@@ -59,10 +55,6 @@
     {
       "valueInches": 4,
       "rgba": [30, 114, 180, 1]
-    },
-    {
-      "valueInches": 6,
-      "rgba": [45, 85, 170, 1]
     },
     {
       "valueInches": 6,
@@ -86,19 +78,11 @@
     },
     {
       "valueInches": 12,
-      "rgba": [190, 70, 156, 1]
-    },
-    {
-      "valueInches": 12,
       "rgba": [204, 57, 111, 1]
     },
     {
       "valueInches": 18,
       "rgba": [204, 57, 111, 1]
-    },
-    {
-      "valueInches": 24,
-      "rgba": [215, 92, 86, 1]
     },
     {
       "valueInches": 24,
@@ -114,23 +98,19 @@
     },
     {
       "valueInches": 36,
-      "rgba": [229, 169, 78, 1]
+      "rgba": [235, 183, 74, 1]
     },
     {
       "valueInches": 36,
-      "rgba": [229, 169, 78, 1]
-    },
-    {
-      "valueInches": 36,
-      "rgba": [238, 212, 117, 1]
+      "rgba": [198, 122, 55, 1]
     },
     {
       "valueInches": 48,
-      "rgba": [238, 212, 117, 1]
+      "rgba": [198, 122, 55, 1]
     },
     {
       "valueInches": 60,
-      "rgba": [249, 244, 181, 1]
+      "rgba": [147, 78, 65, 1]
     }
   ]
 }
