@@ -1,0 +1,262 @@
+@import "tailwindcss";
+
+@theme {
+  --font-family-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+@utility glass-panel {
+  backdrop-filter: blur(20px) saturate(1.3);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  background: rgba(2, 9, 20, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  background: #020914;
+}
+
+/* ── Global interactive transitions ── */
+
+button,
+select,
+label,
+[role="button"] {
+  transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+  transition-duration: 200ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Custom range slider ── */
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  height: 20px;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(148, 163, 184, 0.2);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgb(34, 211, 238);
+  margin-top: -5px;
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.35);
+  transition:
+    box-shadow 200ms,
+    transform 200ms;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.5);
+  transform: scale(1.15);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(148, 163, 184, 0.2);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgb(34, 211, 238);
+  border: none;
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.35);
+}
+
+input[type="range"].timeline-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--timeline-track-fill, rgba(148, 163, 184, 0.2));
+}
+
+input[type="range"].timeline-range::-webkit-slider-thumb {
+  margin-top: -4px;
+}
+
+input[type="range"].timeline-range::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--timeline-track-fill, rgba(148, 163, 184, 0.2));
+}
+
+/* ── Leaflet ── */
+
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+}
+
+.leaflet-top.leaflet-left {
+  top: var(--chrome-top, 96px) !important;
+}
+
+.leaflet-control-zoom a {
+  background: rgba(2, 9, 20, 0.7) !important;
+  backdrop-filter: blur(12px);
+  color: #94a3b8 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  transition:
+    background 200ms,
+    color 200ms;
+}
+
+.leaflet-control-zoom a:hover {
+  background: rgba(2, 9, 20, 0.85) !important;
+  color: #e2e8f0 !important;
+}
+
+.leaflet-image-layer.pixelated-overlay {
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+}
+
+.leaflet-image-layer.wx-weather-overlay {
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+}
+
+/* ── Pressure markers ── */
+
+.pressure-marker-icon {
+  background: transparent;
+  border: 0;
+}
+
+.pressure-marker {
+  --pressure-marker-size: 24px;
+  --pressure-value-size: 11px;
+  --pressure-marker-color: #0072b2;
+  --pressure-value-color: var(--pressure-marker-color);
+  --pressure-value-offset: 2px;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  transform-origin: center center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--pressure-marker-color);
+  font-family: "Roboto Condensed", "Arial Narrow", Arial, sans-serif;
+}
+
+.pressure-marker-symbol {
+  font-size: var(--pressure-marker-size);
+  font-weight: 900;
+  letter-spacing: -0.015em;
+  font-stretch: condensed;
+  transform: scaleX(0.94);
+  text-shadow:
+    -0.7px -0.7px 0 rgba(4, 11, 18, 0.9),
+    0.7px -0.7px 0 rgba(4, 11, 18, 0.9),
+    -0.7px 0.7px 0 rgba(4, 11, 18, 0.9),
+    0.7px 0.7px 0 rgba(4, 11, 18, 0.9),
+    0 0 2px rgba(255, 255, 255, 0.45);
+}
+
+.pressure-marker-value {
+  margin-bottom: -3px;
+  font-size: var(--pressure-value-size);
+  font-weight: 820;
+  letter-spacing: -0.012em;
+  font-stretch: condensed;
+  transform: scaleX(0.95);
+  text-shadow:
+    -0.65px -0.65px 0 rgba(4, 11, 18, 0.88),
+    0.65px -0.65px 0 rgba(4, 11, 18, 0.88),
+    -0.65px 0.65px 0 rgba(4, 11, 18, 0.88),
+    0.65px 0.65px 0 rgba(4, 11, 18, 0.88);
+}
+
+.pressure-high {
+  color: #59d8ff;
+}
+
+.pressure-low {
+  color: #ff5858;
+}
+
+/* ── Synoptic contour labels ── */
+
+.synoptic-contour-label-icon {
+  background: transparent;
+  border: 0;
+}
+
+.synoptic-contour-label {
+  font-family: "Roboto Condensed", "Arial Narrow", Arial, sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-block;
+  transform-origin: center center;
+  line-height: 1;
+  text-shadow:
+    -0.7px -0.7px 0 rgba(255, 255, 255, 0.88),
+    0.7px -0.7px 0 rgba(255, 255, 255, 0.88),
+    -0.7px 0.7px 0 rgba(255, 255, 255, 0.88),
+    0.7px 0.7px 0 rgba(255, 255, 255, 0.88),
+    0 0 2px rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+}
+
+/* ── Keyframe animations ── */
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulseGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 12px rgba(34, 211, 238, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(34, 211, 238, 0.4);
+  }
+}

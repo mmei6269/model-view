@@ -1,0 +1,194 @@
+{
+  "styleVersion": "v4-operational-contrast",
+  "zoomBuckets": [
+    { "id": "z0_3", "min": 0, "max": 3 },
+    { "id": "z4_6", "min": 4, "max": 6 },
+    { "id": "z7_9", "min": 7, "max": 9 },
+    { "id": "z10_12", "min": 10, "max": 12 }
+  ],
+  "mslp": {
+    "minorIntervalHpa": 4,
+    "majorIntervalHpa": 8,
+    "showMinorAtZoomGte": 0,
+    "minor": {
+      "color": "#171717",
+      "alpha": 0.74,
+      "widthPx": 0.9,
+      "haloColor": "#FFFFFF",
+      "haloAlpha": 0.46,
+      "haloWidthPx": 1.45
+    },
+    "major": {
+      "color": "#171717",
+      "alpha": 0.76,
+      "widthPx": 1.08,
+      "haloColor": "#FFFFFF",
+      "haloAlpha": 0.46,
+      "haloWidthPx": 1.6
+    },
+    "labels": {
+      "majorOnly": false,
+      "minorShowAtZoomGte": 9,
+      "minorMinPolylinePx": 450,
+      "repeatDistancePxByBucket": {
+        "z0_3": 450,
+        "z4_6": 320,
+        "z7_9": 240,
+        "z10_12": 180
+      },
+      "minSpacingPxByBucket": {
+        "z0_3": 220,
+        "z4_6": 180,
+        "z7_9": 140,
+        "z10_12": 110
+      },
+      "fontFamily": "\"Roboto Condensed\", \"Arial Narrow\", Arial, sans-serif",
+      "fontWeight": 700,
+      "fontSizePxByBucket": {
+        "z0_3": 11,
+        "z4_6": 12,
+        "z7_9": 13,
+        "z10_12": 14
+      },
+      "fillColor": "#111111",
+      "fillAlpha": 0.95,
+      "haloColor": "#FFFFFF",
+      "haloAlpha": 0.85,
+      "haloWidthPx": 3.0
+    }
+  },
+  "thickness": {
+    "minorIntervalDam": 6,
+    "majorIntervalDam": 12,
+    "emphasisDam": 540,
+    "showMinorAtZoomGte": 4,
+    "coldColor": "#0072B2",
+    "warmColor": "#D7302F",
+    "boundaryColor": "#6A1B9A",
+    "minor": {
+      "alpha": 0.66,
+      "widthPx": 1.05,
+      "dash": [6, 4],
+      "haloColor": "transparent",
+      "haloAlpha": 0,
+      "haloWidthPx": 0
+    },
+    "major": {
+      "alpha": 0.74,
+      "widthPx": 1.45,
+      "dash": [10, 4],
+      "haloColor": "transparent",
+      "haloAlpha": 0,
+      "haloWidthPx": 0
+    },
+    "emphasis": {
+      "alpha": 0.86,
+      "widthPx": 1.85,
+      "dash": [10, 4],
+      "haloColor": "transparent",
+      "haloAlpha": 0,
+      "haloWidthPx": 0
+    },
+    "labels": {
+      "majorOnly": false,
+      "alwaysLabelDam": [540],
+      "repeatDistancePxByBucket": {
+        "z0_3": 520,
+        "z4_6": 360,
+        "z7_9": 280,
+        "z10_12": 220
+      },
+      "fontFamily": "\"Roboto Condensed\", \"Arial Narrow\", Arial, sans-serif",
+      "fontWeight": 700,
+      "fontSizePxByBucket": {
+        "z0_3": 11,
+        "z4_6": 12,
+        "z7_9": 13,
+        "z10_12": 14
+      },
+      "fillAlpha": 0.95,
+      "haloColor": "#FFFFFF",
+      "haloAlpha": 0.85,
+      "haloWidthPx": 3.0
+    }
+  },
+  "centers": {
+    "highColor": "#0072B2",
+    "lowColor": "#FF4545",
+    "prominenceMinHpa": 1.8,
+    "glyphFillAlpha": 0.95,
+    "glyphHaloColor": "#FFFFFF",
+    "glyphHaloAlpha": 0.9,
+    "glyphHaloWidthPx": 3.5,
+    "fontFamily": "\"Roboto Condensed\", \"Arial Narrow\", Arial, sans-serif",
+    "fontWeight": 900,
+    "letterSizePxByBucket": {
+      "z0_3": 20,
+      "z4_6": 24,
+      "z7_9": 28,
+      "z10_12": 32
+    },
+    "valueSizePxByBucket": {
+      "z0_3": 9,
+      "z4_6": 11,
+      "z7_9": 13,
+      "z10_12": 15
+    },
+    "valueColor": "#111111",
+    "valueAlpha": 0.95,
+    "valueHaloColor": "#FFFFFF",
+    "valueHaloAlpha": 0.85,
+    "valueHaloWidthPx": 3.0,
+    "valueOffsetPx": 2,
+    "markerMinDistancePxByBucket": {
+      "z0_3": 360,
+      "z4_6": 280,
+      "z7_9": 220,
+      "z10_12": 170
+    },
+    "markerLabelMinDistancePxByBucket": {
+      "z0_3": 90,
+      "z4_6": 80,
+      "z7_9": 70,
+      "z10_12": 60
+    },
+    "edgeBufferPxByBucket": {
+      "z0_3": 30,
+      "z4_6": 30,
+      "z7_9": 40,
+      "z10_12": 40
+    },
+    "maxMarkersByBucket": {
+      "z0_3": 8,
+      "z4_6": 12,
+      "z7_9": 16,
+      "z10_12": 20
+    }
+  },
+  "declutter": {
+    "candidateStepPx": 30,
+    "candidatePaddingPx": 6,
+    "straightnessWindowPx": 20,
+    "maxTurnDeg": 18,
+    "edgeBufferLabelPxByBucket": {
+      "z0_3": 20,
+      "z4_6": 20,
+      "z7_9": 28,
+      "z10_12": 28
+    },
+    "weights": {
+      "straightness": 0.4,
+      "edgeClear": 0.2,
+      "separation": 0.25,
+      "backgroundEase": 0.15
+    }
+  },
+  "smoothing": {
+    "mslpSigmaKmByModel": {
+      "gfs": 60,
+      "nam": 45,
+      "nam3km": 30,
+      "hrrr": 30
+    }
+  }
+}
