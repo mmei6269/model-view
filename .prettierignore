@@ -1,0 +1,15 @@
+# Dependencies and generated output
+node_modules/
+dist-next/
+output/
+playwright-report/
+test-results/
+package-lock.json
+
+# Large data/source artifacts
+next/public/geo/
+scripts/geo-source/
+
+# Local/editor metadata
+.claude/
+.DS_Store

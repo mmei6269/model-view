@@ -1,0 +1,17 @@
+# Dependencies and local tooling
+node_modules/
+.playwright-cli/
+
+# Build, test, and debug output
+playwright-report/
+test-results/
+dist-next/
+output/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# macOS / Finder metadata
+.DS_Store

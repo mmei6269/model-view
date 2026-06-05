@@ -1,0 +1,18 @@
+{
+  "kind": "linear-regression-snow-to-liquid-ratio",
+  "sourceRepo": "pveals/Veals_etal_2025",
+  "sourceCommit": "5304094f1907f6f9c1029522d6287b29e3148b66",
+  "sourceModel": "Models/V1c_slr_model.npy",
+  "sourceModelSha256": "5616e6c7fd6123b7c02fb807473325cafc9e781789b0183660d5ebfd4c509aeb",
+  "sourceKeys": "Models/V1c_slr_model_keys.npy",
+  "sourceKeysSha256": "8818f7cf06bc65c698adbdbd998b8e9ac7bc0ce6d656425ed87171c0e33f955f",
+  "featureKeys": ["T04K", "T24K", "SPD04K", "SPD24K"],
+  "inputUnits": {
+    "T04K": "K",
+    "T24K": "K",
+    "SPD04K": "m s-1",
+    "SPD24K": "m s-1"
+  },
+  "intercept": 175.77922006647756,
+  "coefficients": [-0.5658923009849022, -0.03800487156496504, -0.2584244800211978, -0.033285591001853895]
+}

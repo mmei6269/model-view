@@ -1,0 +1,14 @@
+{
+  "source": "mdpletcher/utahrfslr",
+  "commit": "2d35566fd41e99dcdc75a0f107ddb6bdc6a46b61",
+  "importedFiles": [
+    {
+      "path": "models/rf/rf_slr_model.pkl",
+      "sha256": "1e53b00fb7cebb4bab2a3bffaccdfaacd3bedd483c4a4b29f7b8963d21718cbf"
+    },
+    {
+      "path": "models/rf/rf_slr_model_keys.npy",
+      "sha256": "40b236da30099c554e1dd893af57b989366d0c3007ab7a83dc011e8db0a7a774"
+    }
+  ]
+}
