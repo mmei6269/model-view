@@ -2,6 +2,14 @@
 
 Historical test and validation notes moved out of `plan.md`. Keep this file for run evidence and use `plan.md` for live future work.
 
+## 2026-06-10 DCAPE v3 (Pseudoadiabatic Descent)
+
+- Replaced the dry-adiabatic-descent DCAPE (v2) in both gridded and point paths with SPC/SHARPpy-style conventions: minimum theta-e source in the lowest 400 mb above ground with a 100 mb mean source layer, pressure-aware Normand wet-bulb at the source level, pseudoadiabatic (saturated) descent, and a net plain-temperature buoyancy integral clamped to 0-4000 J/kg. Gridded uses the fixed-step moist-lapse Euler integrator (new `integrateMoistParcelDescentK`); point soundings use the exact Wobus pseudoadiabat on the full profile.
+- Cross-method validation: the independent gridded Euler and point Wobus implementations agree within 0.1% on an inverted-V test profile (719 vs 720 J/kg); a saturated stable profile yields ~10 J/kg. Covered by a new unit test with banded assertions and a 2% cross-method tolerance.
+- Artifact A/B on the 8-frame fixture (same NOAA runs via interleaved stash rebuild): exactly 8 of 336 artifact files changed - `dcape.png` and `hover-grid.bin.gz` on each model - with zero collateral diffs. Frame profile DCAPE distributions moved from p99~430/max~800 J/kg (dry descent) to p99~1500/max~2000 J/kg, matching SPC mesoanalysis magnitudes for the regime.
+- Measured cost: derivedGrid +24.3s across 28 base partials (~+0.87s/frame average), inside the pre-implementation estimate of +0.4 to +1.3s/frame.
+- `node --test` passes with 111 tests; typecheck, lint --quiet, React smoke (33), Prettier, and `git diff --check` pass.
+
 ## 2026-05-01 Upper-Air Height Contours
 
 - `node --test tests-node/noaa-beta.test.js`: passed, 40 tests.
@@ -34,7 +42,7 @@ Historical test and validation notes moved out of `plan.md`. Keep this file for 
   - `npm run lint`: passed with the repo's existing 42 warning-class hotspots.
   - `npm run test:local-runtime`: passed on escalated rerun after sandboxed `127.0.0.1` bind `EPERM`.
   - `npm run noaa:build:test -- --models=gfs,nam,nam3km,hrrr --frames=6 --run-offset=1`: previously passed; 24/24 frames built, 0 failures, about 22s wall-clock with cached raw inputs before the snowfall RF additions.
-  - `npm run noaa:snow-rf:export -- --source-dir=/path/to/utahrfslr --python=/path/to/python3`: exported the Pletcher CONUS RF to compact Node tree arrays and imported it into `tools/noaa-beta/snow-rf/conus-rf.json`.
+  - `npm run noaa:snow-rf:export -- --source-dir=/private/tmp/utahrfslr-codex --python=/Users/micha/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3`: exported the Pletcher CONUS RF to compact Node tree arrays and imported it into `tools/noaa-beta/snow-rf/conus-rf.json`.
 - Snowfall layer validation:
   - Manifests expose deterministic snowfall layers where source records exist and expose ML/formula layers only when their imported artifacts and profile fields exist.
   - HRRR exposes `snowHrrrAsnow` when `ASNOW:surface` is present.

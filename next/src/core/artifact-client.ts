@@ -93,10 +93,6 @@ const hoverGridPayloadInFlight = new Map<string, Promise<HoverGridPayload>>();
 const pointSoundingPayloadCache = new Map<string, PointSoundingPayload>();
 const pointSoundingPayloadInFlight = new Map<string, Promise<PointSoundingPayload>>();
 
-export async function fetchModelManifest(modelKey: ModelKey, viewKey: ViewKey): Promise<ModelManifest> {
-  return fetchModelManifestWithOptions(modelKey, viewKey, {});
-}
-
 export async function fetchModelManifestWithOptions(
   modelKey: ModelKey,
   viewKey: ViewKey,
@@ -198,21 +194,6 @@ export async function fetchModelRunsWithOptions(
   } catch {
     throw new Error(`Unable to load runs for ${modelKey}/${viewKey}. Tried: ${errors.join(" | ")}`);
   }
-}
-
-export function clearManifestCache(): void {
-  manifestCache.clear();
-  runListCache.clear();
-  synopticVectorPayloadCache.clear();
-  synopticVectorPayloadInFlight.clear();
-  contourVectorPayloadCache.clear();
-  contourVectorPayloadInFlight.clear();
-  hoverGridPayloadCache.clear();
-  hoverGridPayloadInFlight.clear();
-  pointSoundingPayloadCache.clear();
-  pointSoundingPayloadInFlight.clear();
-  clearLayerImageObjectUrlCache();
-  resetResolvedArtifactBaseUrl();
 }
 
 export async function prefetchFrameAssets(
@@ -484,7 +465,7 @@ export async function fetchPointSoundingPayload({
   const request = fetch(url, { cache: "no-store", signal })
     .then(async (response) => {
       if (!response.ok) {
-        let reason = "";
+        let reason: string;
         try {
           const payload = (await response.json()) as { error?: string };
           reason = payload.error ? `: ${payload.error}` : "";
@@ -524,7 +505,7 @@ async function fetchJson<T>(url: string): Promise<T> {
     response = await fetch(url, { cache: "no-store" });
   } catch (error) {
     const reason = String(error instanceof Error ? error.message : error);
-    throw new Error(`Network request failed for ${url} (${reason})`);
+    throw new Error(`Network request failed for ${url} (${reason})`, { cause: error });
   }
   if (!response.ok) {
     throw new Error(`Request failed (${response.status}): ${url}`);

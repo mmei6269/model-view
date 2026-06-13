@@ -97,14 +97,6 @@ export function markFrameSynopticVectorLoaded(
   markFramePrefetchCacheKeyLoaded(buildVectorCacheKey(frame, vectorUrl));
 }
 
-export function markFrameWeatherVectorLoaded(frame: FrameRecord | null | undefined, layer: LayerKey): void {
-  const vectorUrl = String(resolveWeatherVectorRequestUrl(frame, layer) || "").trim();
-  if (!frame || !vectorUrl) {
-    return;
-  }
-  markFramePrefetchCacheKeyLoaded(buildWeatherVectorCacheKey(frame, layer, vectorUrl));
-}
-
 function scheduleGlobalLoadedCacheNotify(): void {
   if (globalLoadedCacheNotifyScheduled) {
     return;

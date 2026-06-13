@@ -90,7 +90,7 @@ async function fetchImageBlob(url: string, signal?: AbortSignal): Promise<Blob> 
     if (isAbortLikeError(error)) {
       throw new DOMException("Aborted", "AbortError");
     }
-    throw new Error(`Image prefetch failed for ${url}`);
+    throw new Error(`Image prefetch failed for ${url}`, { cause: error });
   }
   if (!response.ok) {
     throw new Error(`Image prefetch failed for ${url} (${response.status})`);
