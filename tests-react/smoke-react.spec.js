@@ -1009,7 +1009,7 @@ test("model switch does not inherit stale error from aborted prior prefetch run"
     });
   });
 
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   const panel = page.locator("article").first();
   await panel
     .getByRole("button", { name: /Frames/ })

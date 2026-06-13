@@ -132,13 +132,13 @@ input[type="range"].timeline-range::-moz-range-track {
 }
 
 .leaflet-image-layer.pixelated-overlay {
-  image-rendering: crisp-edges;
   image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 .leaflet-image-layer.wx-weather-overlay {
-  image-rendering: crisp-edges;
   image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 /* ── Pressure markers ── */

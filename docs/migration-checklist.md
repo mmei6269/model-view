@@ -50,7 +50,7 @@ Install or restore `wgrib2`; NOAA artifact builds require it on `PATH` or via `W
 ```bash
 mkdir -p ~/Development
 cd ~/Development
-git clone https://github.com/YOUR_GITHUB_USER/model-view.git "model-view"
+git clone https://github.com/mmei6269/model-view.git "model-view"
 cd "model-view"
 npm install
 npm run install:browsers
@@ -129,7 +129,7 @@ The app starts but data is missing:
 xcode-select --install
 mkdir -p ~/Development
 cd ~/Development
-git clone https://github.com/YOUR_GITHUB_USER/model-view.git "model-view"
+git clone https://github.com/mmei6269/model-view.git "model-view"
 cd "$HOME/Development/model-view"
 npm install
 npm run install:browsers

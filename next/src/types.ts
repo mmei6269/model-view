@@ -340,6 +340,9 @@ export interface PointSoundingIndices {
   liftedIndexC?: number | null;
   showalterIndexC?: number | null;
   cape0to3kmJkg?: number | null;
+  mixedLayerCape0to3kmJkg?: number | null;
+  modelCape0to3kmJkg?: number | null;
+  shipParameter?: number | null;
   sbcapeJkg?: number | null;
   sbcinJkg?: number | null;
   mlcapeJkg?: number | null;

@@ -68,6 +68,10 @@ const {
   _testCalculateEffectiveLayerBunkersMotionFromRows,
   _testCalculateBunkersMotionFromRows,
   _testCalculateLiftedIndexForPointSoundingSource,
+  _testWetBulbTemperatureC,
+  _testCalculateReducedProfileDcapeFromSources,
+  _testCalculatePointDcapeJkg,
+  _testWetBulbTemperatureCAtPressure,
   _testCalculatePointScp,
   _testCalculateParcelCapeCinForSource,
   _testCalculatePressureStepParcelCapeCinForSource,
@@ -1139,8 +1143,8 @@ test("NOAA derived planned parameters gate on source inputs and expose formula m
   assert.match(metadata.surfaceThetaE.sourceNote, /TMP at 2 m above ground/);
   assert.equal(metadata.lapseRate700to500.group, "Severe: Thermodynamics");
   assert.match(metadata.lapseRate0to3km.sourceNote, /Profile inputs: TMP\/HGT/);
-  assert.equal(metadata.dcape.methodVersion, "reduced-profile-dcape-v2");
-  assert.match(metadata.dcape.formulaReference, /not a full MetPy\/Emanuel/);
+  assert.equal(metadata.dcape.methodVersion, "reduced-profile-dcape-v4");
+  assert.match(metadata.dcape.formulaReference, /pseudoadiabatic descent/);
   assert.match(metadata.dcape.sourceNote, /Profile inputs: TMP\/HGT\/RH at 1000, 925, 850, 700, 500, 300 mb/);
   assert.deepEqual(metadata.dcape.legendTicks, [0, 500, 1000, 1500, 2000, 2500]);
   assert.equal(SCALES.dcapeJkg.max, 2500);
@@ -1158,7 +1162,7 @@ test("NOAA derived planned parameters gate on source inputs and expose formula m
   assert.equal(metadata.supercellCompositeParameter.methodVersion, "scp-0to3km-srh-effective-shear-proxy-v1");
   assert.equal(metadata.effectiveLayerSupercellCompositeParameter.label, "SCP (Effective Layer)");
   assert.match(metadata.effectiveLayerSupercellCompositeParameter.sourceNote, /25\/50 mb spacing/);
-  assert.equal(metadata.effectiveLayerSupercellCompositeParameter.methodVersion, "spc-effective-scp-parcel-sparse-v2");
+  assert.equal(metadata.effectiveLayerSupercellCompositeParameter.methodVersion, "spc-effective-scp-parcel-sparse-v3");
   assert.equal(_testEffectiveParcelSourceStepHpa, 25);
   assert.match(metadata.effectiveLayerSupercellCompositeParameter.derivation, /50 mb spacing from 700-300 mb/);
   assert.match(metadata.effectiveLayerSupercellCompositeParameter.derivation, /fixed 0-6 km Bunkers fallback/);
@@ -1166,15 +1170,15 @@ test("NOAA derived planned parameters gate on source inputs and expose formula m
   assert.equal(metadata.significantTornadoParameter.methodVersion, "spc-fixed-layer-stp-v2");
   assert.match(metadata.significantTornadoParameter.derivation, /surface-based CAPE/);
   assert.equal(metadata.effectiveLayerSignificantTornadoParameter.label, "STP (Effective Layer)");
-  assert.equal(metadata.effectiveLayerSignificantTornadoParameter.methodVersion, "spc-effective-stp-parcel-sparse-v2");
+  assert.equal(metadata.effectiveLayerSignificantTornadoParameter.methodVersion, "spc-effective-stp-parcel-sparse-v3");
   assert.match(metadata.effectiveLayerSignificantTornadoParameter.derivation, /50 mb spacing from 700-300 mb/);
   assert.match(metadata.effectiveLayerSignificantTornadoParameter.derivation, /fixed 0-6 km Bunkers fallback/);
   assert.equal(metadata.gustRunMax.methodVersion, "run-max-gust-v2");
   assert.equal(metadata.updraftHelicity2to5kmRunMax.methodVersion, "run-max-interval-mxuphl-v2");
-  assert.equal(metadata.updraftHelicity2to5kmRunMax.thresholdNote, "Low-end opacity ramp");
+  assert.equal(metadata.updraftHelicity2to5kmRunMax.thresholdNote, "Low-end opacity ramp from generated palette");
   assert.equal(metadata.freezingRainLiquidTotal.accumulationMode, "total");
   assert.match(metadata.framRadialIce.derivation, /FRAM/);
-  assert.equal(metadata.framRadialIce.thresholdNote, "FRAM accretion; trace opacity ramp");
+  assert.equal(metadata.framRadialIce.thresholdNote, "FRAM accretion; trace opacity ramp from generated palette");
   const firstFramVisibleStop = SCALES.framIceIn.legendStops.find(([, color]) => Number(color?.[3]) > 0);
   assert.ok(firstFramVisibleStop, "FRAM ice scale should have visible stops");
   assert.deepEqual(firstFramVisibleStop[1].slice(0, 3), [130, 130, 130]);
@@ -1639,7 +1643,7 @@ test("point sounding parcel CAPE uses pressure-step virtual-temperature buoyancy
   assert.equal(indices.sbcinJkg, 0);
 });
 
-test("point sounding effective inflow top uses the first failing parcel level", () => {
+test("point sounding effective inflow top uses the last passing parcel level", () => {
   const indices = _testBuildPointSoundingIndices([
     { source: "surface", press: 1000, hght: 0, temp: 26.85, dwpt: 20.85, uKt: 0, vKt: 0 },
     { source: "pressure", press: 925, hght: 800, temp: 20.85, dwpt: 15.15, uKt: 10, vKt: 2 },
@@ -1649,7 +1653,17 @@ test("point sounding effective inflow top uses the first failing parcel level", 
     { source: "pressure", press: 300, hght: 9000, temp: -43.15, dwpt: -55.15, uKt: 60, vKt: -5 },
   ]);
   assert.equal(indices.effectiveBaseM, 0);
-  assert.equal(indices.effectiveTopM, 3000);
+  assert.equal(indices.effectiveTopM, 1500);
+});
+
+test("point sounding wet-bulb uses pressure-aware Normand lift, not the surface-pressure formula", () => {
+  const surfaceWetBulb = _testWetBulbTemperatureCAtPressure(293.15, 283.15, 1000);
+  assert.ok(Math.abs(surfaceWetBulb - _testWetBulbTemperatureC(293.15, 283.15)) < 0.3);
+  const saturated = _testWetBulbTemperatureCAtPressure(283.15, 283.15, 850);
+  assert.ok(Math.abs(saturated - 10) < 0.05);
+  const aloft = _testWetBulbTemperatureCAtPressure(268.15, 258.15, 500);
+  assert.ok(aloft < _testWetBulbTemperatureC(268.15, 258.15) - 0.5);
+  assert.ok(aloft > -15 && aloft < -5);
 });
 
 test("point sounding lifted index uses virtual temperatures", () => {
@@ -1665,7 +1679,7 @@ test("point sounding lifted index uses virtual temperatures", () => {
   assert.ok(Math.abs(liftedIndex - -20.14) < 0.05);
 });
 
-test("Bunkers storm motion uses 500 m mean-wind shear layers", () => {
+test("Bunkers storm motion deviates 7.5 m/s orthogonal to point-wind shear", () => {
   const scratch = {
     heights: new Float64Array([0, 500, 3000, 5500, 6000]),
     pressure: new Float64Array([1000, 950, 700, 500, 450]),
@@ -1674,8 +1688,13 @@ test("Bunkers storm motion uses 500 m mean-wind shear layers", () => {
   };
   const motion = _testCalculateBunkersMotionFromRows(scratch, 5);
   assert.ok(motion);
-  assert.ok(Math.abs(motion.right.u - motion.left.u) < 0.1);
-  assert.ok(Math.abs(motion.left.v - motion.right.v - 15) < 0.1);
+  const shearU = 30;
+  const shearV = 10;
+  const deviationU = (motion.right.u - motion.left.u) / 2;
+  const deviationV = (motion.right.v - motion.left.v) / 2;
+  assert.ok(Math.abs(Math.hypot(deviationU, deviationV) - 7.5) < 1e-6);
+  assert.ok(Math.abs(deviationU * shearU + deviationV * shearV) < 1e-6);
+  assert.ok(shearU * deviationV - shearV * deviationU < 0);
 
   const weightedMotion = _testCalculateBunkersMotionFromRows(scratch, 5, { pressureWeightedMean: true });
   assert.ok(weightedMotion.right.u < motion.right.u);
@@ -3972,4 +3991,82 @@ test("NOAA beta runtime writes current manifest contract into separate cache roo
     await fs.promises.readFile(runtime.getFrameMarkerPath("nam", summary.runId, "conus", 0), "utf8"),
   );
   assert.equal(marker.rendererSignature, metadata.rendererSignature);
+});
+
+test("NOAA DCAPE v4 uses pseudoadiabatic descent with consistent gridded and point paths", () => {
+  const rows = [
+    { p: 1000, z: 110, t: 36.0, rh: 14 },
+    { p: 925, z: 790, t: 29.5, rh: 18 },
+    { p: 850, z: 1500, t: 22.5, rh: 24 },
+    { p: 700, z: 3100, t: 8.0, rh: 55 },
+    { p: 500, z: 5800, t: -12.5, rh: 40 },
+    { p: 300, z: 9600, t: -38.0, rh: 30 },
+  ];
+  const sources = rows.map((row) => ({ level: row.p, hgt: [row.z], tmp: [row.t + 273.15], rh: [row.rh] }));
+  const scratch = {
+    heights: new Float64Array(8),
+    temps: new Float64Array(8),
+    pressures: new Float64Array(8),
+    dewpoints: new Float64Array(8),
+    thetaE: new Float64Array(8),
+  };
+  const gridded = _testCalculateReducedProfileDcapeFromSources(sources, 0, 80, 38 + 273.15, 1008, scratch);
+  const dewpointC = (tempC, rh) => {
+    const gamma = Math.log(rh / 100) + (17.625 * tempC) / (243.04 + tempC);
+    return (243.04 * gamma) / (17.625 - gamma);
+  };
+  const levels = [
+    { source: "surface", press: 1008, hght: 80, temp: 38, dwpt: 2, rh: 12 },
+    ...rows.map((row) => ({
+      source: "pressure",
+      press: row.p,
+      hght: row.z,
+      temp: row.t,
+      dwpt: dewpointC(row.t, row.rh),
+      rh: row.rh,
+    })),
+  ];
+  const point = _testCalculatePointDcapeJkg(levels);
+  assert.ok(gridded > 500 && gridded < 1100, `gridded DCAPE out of band: ${gridded}`);
+  assert.ok(point > 500 && point < 1100, `point DCAPE out of band: ${point}`);
+  assert.ok(Math.abs(gridded - point) / Math.max(gridded, point) < 0.02);
+
+  const wetRows = [
+    { p: 1000, z: 110, t: 14.0, rh: 99 },
+    { p: 925, z: 760, t: 10.0, rh: 99 },
+    { p: 850, z: 1430, t: 6.5, rh: 99 },
+    { p: 700, z: 2990, t: -1.5, rh: 99 },
+    { p: 500, z: 5560, t: -16, rh: 95 },
+    { p: 300, z: 9100, t: -40, rh: 90 },
+  ];
+  const wetSources = wetRows.map((row) => ({ level: row.p, hgt: [row.z], tmp: [row.t + 273.15], rh: [row.rh] }));
+  const wet = _testCalculateReducedProfileDcapeFromSources(wetSources, 0, 80, 14 + 273.15, 1008, scratch);
+  assert.ok(wet >= 0 && wet < 50, `saturated stable DCAPE should be near zero: ${wet}`);
+});
+
+test("PNG deflate backend produces IDAT streams that inflate to identical raw bytes", () => {
+  const zlibNode = require("zlib");
+  const { deflatePngIdatSync, pngDeflateBackendName } = require("../scripts/lib/noaa-beta/deflate-backend");
+  const cols = 320;
+  const rows = 200;
+  const raw = Buffer.alloc(rows * (1 + cols * 4));
+  for (let y = 0; y < rows; y += 1) {
+    const rowOffset = y * (1 + cols * 4);
+    raw[rowOffset] = 0;
+    for (let x = 0; x < cols; x += 1) {
+      const offset = rowOffset + 1 + x * 4;
+      if ((x + y) % 3 === 0) {
+        continue;
+      }
+      raw[offset] = (x * 7 + y) & 255;
+      raw[offset + 1] = (x + y * 5) & 255;
+      raw[offset + 2] = (x * 3) & 255;
+      raw[offset + 3] = 255;
+    }
+  }
+  const compressed = deflatePngIdatSync(raw, 1);
+  assert.ok(zlibNode.inflateSync(compressed).equals(raw), `${pngDeflateBackendName()} roundtrip mismatch`);
+  const levelSix = deflatePngIdatSync(raw, 6);
+  assert.ok(levelSix.equals(zlibNode.deflateSync(raw, { level: 6 })));
+  assert.ok(zlibNode.inflateSync(levelSix).equals(raw));
 });

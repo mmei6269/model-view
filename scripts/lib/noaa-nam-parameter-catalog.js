@@ -256,24 +256,24 @@ const SCALES = Object.freeze({
   stormRelativeHelicityM2S2: plannedScale("stormRelativeHelicityM2S2", {
     alpha: 1,
     legendTicks: [0, 100, 200, 300, 400, 500, 600, 850],
-    thresholdNote: "Low-end opacity ramp",
+    thresholdNote: "Low-end opacity ramp from generated palette",
   }),
   updraftHelicity2to5kmM2S2: plannedScale("updraftHelicity2to5kmM2S2", {
     alpha: 1,
     legendTicks: [0, 50, 100, 150, 200, 300, 400],
-    thresholdNote: "Low-end opacity ramp",
+    thresholdNote: "Low-end opacity ramp from generated palette",
   }),
   capeJkg: plannedScale("capeJkg", {
     alpha: 1,
     legendTicks: [0, 1000, 2000, 3000, 4000, 6000, 10000],
-    thresholdNote: "Low-end opacity ramp",
+    thresholdNote: "Low-end opacity ramp from generated palette",
   }),
   dcapeJkg: plannedScale("capeJkg", {
     forceMin: 0,
     forceMax: 2500,
     alpha: 1,
     legendTicks: [0, 500, 1000, 1500, 2000, 2500],
-    thresholdNote: "Low-end opacity ramp; values above 2500 J/kg clamp to the top color",
+    thresholdNote: "Low-end opacity ramp from generated palette; values above 2500 J/kg clamp to the top color",
   }),
   cinJkg: plannedScale("cinJkg", {
     alpha: 1,
@@ -287,12 +287,12 @@ const SCALES = Object.freeze({
   freezingRainIceIn: plannedScale("freezingRainIceIn", {
     alpha: 1,
     legendTicks: [0.01, 0.05, 0.25, 0.5, 1, 2],
-    thresholdNote: "Trace opacity ramp",
+    thresholdNote: "Trace opacity ramp from generated palette",
   }),
   framIceIn: plannedScale("freezingRainIceIn", {
     alpha: 1,
     legendTicks: [0.01, 0.05, 0.25, 0.5, 1, 2],
-    thresholdNote: "FRAM accretion; trace opacity ramp",
+    thresholdNote: "FRAM accretion; trace opacity ramp from generated palette",
   }),
   lapseRateCKm: plannedScale("lapseRateCKm", {
     alpha: 1,
@@ -306,17 +306,17 @@ const SCALES = Object.freeze({
   frontogenesisCPer100Km3Hr: plannedScale("frontogenesisCPer100Km3Hr", {
     alpha: 1,
     legendTicks: [0, 0.5, 1, 2, 5, 10, 15, 22],
-    thresholdNote: "Positive frontogenesis; low-end opacity ramp",
+    thresholdNote: "Positive frontogenesis; low-end opacity ramp from generated palette",
   }),
   supercellCompositeParameter: plannedScale("supercellCompositeParameter", {
     alpha: 1,
     legendTicks: [0, 1, 2, 4, 8, 12, 16],
-    thresholdNote: "Low-end opacity ramp",
+    thresholdNote: "Low-end opacity ramp from generated palette",
   }),
   significantTornadoParameter: plannedScale("significantTornadoParameter", {
     alpha: 1,
     legendTicks: [0, 1, 2, 4, 6, 8, 10],
-    thresholdNote: "Low-end opacity ramp",
+    thresholdNote: "Low-end opacity ramp from generated palette",
   }),
   cloudCeilingFt: catalogScale("cloudCeilingFt", {
     min: 0,
@@ -1078,9 +1078,9 @@ const DERIVED_PARAMETERS = [
     profileVariables: ["HGT", "TMP", "RH", "UGRD", "VGRD"],
     profileLevels: EFFECTIVE_LAYER_PROFILE_LEVELS,
     surfaceHeightRequired: true,
-    methodVersion: "spc-effective-scp-parcel-sparse-v2",
+    methodVersion: "spc-effective-scp-parcel-sparse-v3",
     derivation:
-      "SPC effective-layer SCP formula using every loaded pressure-profile source row for the effective inflow layer: 25 mb spacing from 1000-700 mb and 50 mb spacing from 700-300 mb. Uses model MUCAPE where available, parcel-scanned MU EL, effective-layer Bunkers SRH when valid with fixed 0-6 km Bunkers fallback, and effective bulk wind difference.",
+      "SPC effective-layer SCP formula using every loaded pressure-profile source row for the effective inflow layer: 25 mb spacing from 1000-700 mb and 50 mb spacing from 700-300 mb. The inflow top is the last parcel level meeting the CAPE/CIN thresholds. Uses model MUCAPE where available, parcel-scanned MU EL, effective-layer Bunkers SRH when valid with fixed 0-6 km Bunkers fallback, and effective bulk wind difference spanning the inflow base to 50% of the MU parcel equilibrium-level height with no extra depth clamps.",
     applicability:
       "All NOAA beta models with MUCAPE, near-surface thermodynamics, and effective-layer pressure-level thermodynamic/wind profiles. Expensive parcel work is limited to conservatively prefiltered instability candidates.",
     formulaReference: "SPC Supercell Composite Parameter effective-layer formula.",
@@ -1117,9 +1117,9 @@ const DERIVED_PARAMETERS = [
     profileVariables: ["HGT", "TMP", "RH", "UGRD", "VGRD"],
     profileLevels: EFFECTIVE_LAYER_PROFILE_LEVELS,
     surfaceHeightRequired: true,
-    methodVersion: "spc-effective-stp-parcel-sparse-v2",
+    methodVersion: "spc-effective-stp-parcel-sparse-v3",
     derivation:
-      "SPC effective-layer STP formula using MLCAPE and every loaded pressure-profile source row for the effective inflow layer: 25 mb spacing from 1000-700 mb and 50 mb spacing from 700-300 mb. Uses mixed-layer LCL, effective-layer Bunkers SRH when valid with fixed 0-6 km Bunkers fallback, EBWD, and MLCIN. The index is zeroed when the effective inflow base is above ground.",
+      "SPC effective-layer STP formula using MLCAPE and every loaded pressure-profile source row for the effective inflow layer: 25 mb spacing from 1000-700 mb and 50 mb spacing from 700-300 mb. The inflow top is the last parcel level meeting the CAPE/CIN thresholds. Uses mixed-layer LCL, effective-layer Bunkers SRH when valid with fixed 0-6 km Bunkers fallback, EBWD spanning the inflow base to 50% of the MU parcel equilibrium-level height with no extra depth clamps, and MLCIN. The index is zeroed when the effective inflow base is above ground.",
     applicability:
       "All NOAA beta models with mixed-layer CAPE/CIN, near-surface thermodynamics, and effective-layer pressure-level thermodynamic/wind profiles. Expensive parcel work is limited to conservatively prefiltered instability candidates.",
     formulaReference: "SPC effective-layer Significant Tornado Parameter.",
@@ -1138,12 +1138,13 @@ const DERIVED_PARAMETERS = [
     profileVariables: ["TMP", "HGT", "RH"],
     profileLevels: DERIVED_DIAGNOSTIC_PROFILE_LEVELS,
     surfaceHeightRequired: false,
-    methodVersion: "reduced-profile-dcape-v2",
+    methodVersion: "reduced-profile-dcape-v4",
     derivation:
-      "Reduced-profile downdraft CAPE approximation using the minimum wet-bulb/theta-e layer from 500-800 mb and a dry-adiabatic descent buoyancy integration against the sampled environmental temperature profile.",
-    applicability: "All NOAA beta models with near-surface thermodynamics plus pressure-level temperature/RH/height.",
+      "Reduced-profile downdraft CAPE with SHARPpy/NSHARP source selection: every above-ground level in the lowest 400 mb is scored by the mean theta-e of the 100 mb layer extending upward from it, and the parcel source is the midpoint (candidate pressure minus 50 mb) of the minimum-mean-theta-e layer. The parcel starts from the pressure-aware Normand wet-bulb of the log-pressure interpolated temperature/dewpoint at that source and descends pseudoadiabatically (saturated moist-lapse integration) to the surface. DCAPE is the net plain-temperature buoyancy integral g*(Tenv-Tparcel)/Tenv over the descent path, clamped to 0-4000 J/kg.",
+    applicability:
+      "All NOAA beta models with near-surface thermodynamics, surface or mean-sea-level pressure, plus pressure-level temperature/RH/height. Vertical resolution is limited to the reduced diagnostic profile levels.",
     formulaReference:
-      "Fast reduced-profile DCAPE approximation; not a full MetPy/Emanuel downdraft parcel calculation.",
+      "SHARPpy params.dcape conventions (minimum 100 mb layer-mean theta-e source in the lowest 400 mb, layer-midpoint wet-bulb parcel, pseudoadiabatic descent) on a reduced profile with knot-trapezoid layer means; point soundings use the same conventions with 1 hPa layer-mean steps and an exact Wobus pseudoadiabat on the full profile.",
   }),
   derivedScalar("frontogenesis850", "850 mb Frontogenesis", "C/100km/3hr", UPPER_AIR_DIAGNOSTIC_GROUP, {
     scale: "frontogenesisCPer100Km3Hr",
@@ -1152,9 +1153,9 @@ const DERIVED_PARAMETERS = [
       { key: "wind850U", selector: selector("UGRD", "850 mb") },
       { key: "wind850V", selector: selector("VGRD", "850 mb") },
     ],
-    methodVersion: "petterssen-latlon-finite-difference-v2",
+    methodVersion: "petterssen-latlon-finite-difference-v3",
     derivation:
-      "Petterssen frontogenesis from 850 mb potential-temperature and wind gradients using latitude-aware finite differences; PNG rendering applies positive-only display smoothing while hover values remain raw.",
+      "Full Petterssen 2D kinematic frontogenesis (deformation plus divergence terms) from 850 mb potential-temperature and wind gradients using latitude-aware finite differences; PNG rendering applies positive-only display smoothing while hover values remain raw.",
     applicability: "All NOAA beta models with 850 mb temperature and winds.",
     formulaReference: "Petterssen two-dimensional frontogenesis.",
   }),
@@ -1165,9 +1166,9 @@ const DERIVED_PARAMETERS = [
       { key: "wind700U", selector: selector("UGRD", "700 mb") },
       { key: "wind700V", selector: selector("VGRD", "700 mb") },
     ],
-    methodVersion: "petterssen-latlon-finite-difference-v2",
+    methodVersion: "petterssen-latlon-finite-difference-v3",
     derivation:
-      "Petterssen frontogenesis from 700 mb potential-temperature and wind gradients using latitude-aware finite differences; PNG rendering applies positive-only display smoothing while hover values remain raw.",
+      "Full Petterssen 2D kinematic frontogenesis (deformation plus divergence terms) from 700 mb potential-temperature and wind gradients using latitude-aware finite differences; PNG rendering applies positive-only display smoothing while hover values remain raw.",
     applicability: "All NOAA beta models with 700 mb temperature and winds.",
     formulaReference: "Petterssen two-dimensional frontogenesis.",
   }),

@@ -29,13 +29,6 @@ export function formatTick(value: number): string {
   return value.toFixed(2);
 }
 
-export function formatMaybe(value: number | null, unit: string, digits: number): string {
-  if (!Number.isFinite(value)) {
-    return "--";
-  }
-  return `${(value as number).toFixed(digits)} ${unit}`;
-}
-
 export function formatCoordinate(value: number, positive: string, negative: string): string {
   const suffix = value >= 0 ? positive : negative;
   return `${Math.abs(value).toFixed(2)}°${suffix}`;
