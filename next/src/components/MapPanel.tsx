@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import L, { type Map as LeafletMap } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import SoundingDrawer from "./SoundingDrawer";
+import { MODEL_CONFIG } from "../config/constants";
 import type { MapDisplaySettings } from "../config/display";
 import { getLayerLegendConfig, getLayerStackOrder, type LayerLegendConfig } from "../config/layers";
 import { fetchPointSoundingPayload, formatRunLabel, resolveFrameByValidTime } from "../core/artifact-client";
 import { FramePrefetchEngine, subscribeFramePrefetchCacheChanges } from "../core/frame-prefetch";
+import { humanizeArtifactError } from "../core/humanize-error";
 import { startLatestRunMemoryWarmup } from "../core/latest-run-memory-cache";
-import { formatValidUtcLabel, normalizeIsoHour } from "../core/time";
+import { formatValidLabel, normalizeIsoHour, pickInitialValidTime } from "../core/time";
 import { useManifest } from "../hooks/useManifest";
 import { useModelRuns } from "../hooks/useModelRuns";
 import { formatCoordinate, formatTick } from "./map-panel/format-utils";
@@ -39,12 +41,14 @@ interface MapPanelProps {
   panel: PanelState;
   viewKey: ViewKey;
   selectedValidTimeIso: ValidTimeIso | null;
+  initialValidTimeIso: ValidTimeIso | null;
   showIsobars: boolean;
   showThickness: boolean;
   showCenters: boolean;
   synopticDetailMode: SynopticDetailMode;
   reflectivityGate: ReflectivityGateDbz;
   display: MapDisplaySettings;
+  timeZone: string;
   canRemove: boolean;
   layoutVersion: number;
   onMapReady: (panelId: string, map: LeafletMap) => void;
@@ -57,6 +61,9 @@ interface MapPanelProps {
   onRunChange: (panelId: string, runId: string | null) => void;
   onRemove: (panelId: string) => void;
   onManifestInfoChange: (panelId: string, info: ManifestUiInfo) => void;
+  // Bumped by App when Escape is pressed; the panel closes its own transient
+  // surfaces (sounding drawer, panel menus) in response.
+  escapeNonce: number;
 }
 
 const MAP_OVERLAY_GAP = "12px";
@@ -67,12 +74,14 @@ export default function MapPanel({
   panel,
   viewKey,
   selectedValidTimeIso,
+  initialValidTimeIso,
   showIsobars,
   showThickness,
   showCenters,
   synopticDetailMode,
   reflectivityGate,
   display,
+  timeZone,
   canRemove,
   layoutVersion,
   onMapReady,
@@ -85,6 +94,7 @@ export default function MapPanel({
   onRunChange,
   onRemove,
   onManifestInfoChange,
+  escapeNonce,
 }: MapPanelProps) {
   const mapHostRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
@@ -98,6 +108,12 @@ export default function MapPanel({
   const vectorAbortRef = useRef<AbortController | null>(null);
   const soundingAbortRef = useRef<AbortController | null>(null);
   const soundingMarkerRef = useRef<L.CircleMarker | null>(null);
+  // Model/run that produced the current sounding payload; compared against the
+  // panel's current model/run to detect a stale profile under an open drawer.
+  const soundingSourceRef = useRef<{ model: ModelKey; runId: string } | null>(null);
+  // Last frame hour the sounding was sampled at (or tracked while follow is
+  // off); guards the follow-timeline effect against firing on mount/toggle.
+  const followHourRef = useRef<number | null>(null);
   const prefetchEngineRef = useRef<FramePrefetchEngine | null>(null);
   const hasInitialViewportFitRef = useRef(false);
   const lastViewportFitKeyRef = useRef<string>("");
@@ -112,6 +128,8 @@ export default function MapPanel({
   const [soundingLoading, setSoundingLoading] = useState(false);
   const [soundingError, setSoundingError] = useState<string | null>(null);
   const [soundingOpen, setSoundingOpen] = useState(false);
+  const [soundingPointManual, setSoundingPointManual] = useState(false);
+  const [followTimeline, setFollowTimeline] = useState(false);
   const [prefetchByHour, setPrefetchByHour] = useState<Record<number, PrefetchState>>({});
   const [prefetchCacheRevision, setPrefetchCacheRevision] = useState(0);
 
@@ -148,7 +166,10 @@ export default function MapPanel({
   );
   const frame = resolvedFrame ? frameByHour.get(resolvedFrame.hour) || null : null;
   const runLabel = useMemo(() => formatRunLabel(manifestState.manifest), [manifestState.manifest]);
-  const validLabel = useMemo(() => formatValidUtcLabel(frame?.validHourKey || null), [frame?.validHourKey]);
+  const validLabel = useMemo(
+    () => formatValidLabel(frame?.validHourKey || null, timeZone),
+    [frame?.validHourKey, timeZone],
+  );
   const {
     browserHourStatus,
     browserLoadedCount,
@@ -213,6 +234,10 @@ export default function MapPanel({
     effectiveHourStatus,
     frame,
     frameByHour,
+    // While the run list is still loading (or failed) we cannot distinguish a
+    // fresh empty cache from a transient gap, so treat runs as present to keep
+    // the onboarding hint scoped to a confirmed empty cache.
+    hasRuns: runState.loading || Boolean(runState.error) || runState.runs.length > 0,
     manifestState,
     plannedHours,
     selectedLayers,
@@ -246,9 +271,12 @@ export default function MapPanel({
       setSounding(null);
       setSoundingError(null);
       setSoundingLoading(true);
+      const requestModel = panel.modelKey;
+      const requestRunId = manifestState.manifest.run;
+      followHourRef.current = frame.hour;
       void fetchPointSoundingPayload({
-        modelKey: panel.modelKey,
-        runId: manifestState.manifest.run,
+        modelKey: requestModel,
+        runId: requestRunId,
         viewKey,
         hour: frame.hour,
         lat: latLng.lat,
@@ -257,6 +285,7 @@ export default function MapPanel({
       })
         .then((payload) => {
           if (!controller.signal.aborted) {
+            soundingSourceRef.current = { model: requestModel, runId: requestRunId };
             setSounding(payload);
           }
         })
@@ -273,7 +302,89 @@ export default function MapPanel({
     },
     [frame, manifestState.manifest, panel.modelKey, viewKey],
   );
-  const handleMapDoubleClick = useCallback((latLng: L.LatLng) => requestPointSounding(latLng), [requestPointSounding]);
+  const handleMapDoubleClick = useCallback(
+    (latLng: L.LatLng) => {
+      setSoundingPointManual(false);
+      requestPointSounding(latLng);
+    },
+    [requestPointSounding],
+  );
+  const handleManualPointRequest = useCallback(
+    (lat: number, lon: number) => {
+      setSoundingPointManual(true);
+      requestPointSounding(L.latLng(lat, lon));
+    },
+    [requestPointSounding],
+  );
+
+  const closeSounding = useCallback(() => {
+    soundingAbortRef.current?.abort();
+    setSoundingLoading(false);
+    setSoundingOpen(false);
+    setSoundingPoint(null);
+    setSoundingPointManual(false);
+  }, []);
+
+  // Stale notice: the panel's model/run moved underneath an open drawer. The
+  // old profile is never silently presented as current; the user chooses to
+  // refresh (re-request at the new model/run) or close. Reading the ref during
+  // render is safe because it is only written alongside a setSounding call.
+  const soundingSource = soundingSourceRef.current;
+  const soundingStale =
+    soundingOpen &&
+    sounding &&
+    soundingSource &&
+    (soundingSource.model !== panel.modelKey ||
+      (manifestState.manifest != null && manifestState.manifest.run !== soundingSource.runId))
+      ? `Profile is ${MODEL_CONFIG[soundingSource.model].label} run ${soundingSource.runId}; the panel is now ${
+          MODEL_CONFIG[panel.modelKey].label
+        }${manifestState.manifest ? ` run ${manifestState.manifest.run}` : ""}.`
+      : null;
+
+  const refreshSounding = useCallback(() => {
+    if (soundingPoint) {
+      requestPointSounding(soundingPoint);
+    }
+  }, [requestPointSounding, soundingPoint]);
+
+  const recenterOnSoundingPoint = useCallback((lat: number, lon: number) => {
+    const map = mapRef.current;
+    if (!map) {
+      return;
+    }
+    map.setView([lat, lon], map.getZoom());
+  }, []);
+
+  // Follow-timeline: an open drawer re-samples the profile when the selected
+  // frame hour changes. Debounced so scrubbing coalesces into one request; the
+  // hour ref (synced on every request and while the guard fails) keeps the
+  // initial mount and toggling follow on from firing a request by themselves.
+  // A stale profile never auto-refreshes: the model/run change must stay a
+  // visible, user-acknowledged transition.
+  useEffect(() => {
+    const hour = frame?.hour ?? null;
+    if (!followTimeline || !soundingOpen || !soundingPoint || soundingStale !== null || hour === null) {
+      followHourRef.current = hour;
+      return;
+    }
+    if (followHourRef.current === hour) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      requestPointSounding(soundingPoint);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [followTimeline, frame?.hour, requestPointSounding, soundingOpen, soundingPoint, soundingStale]);
+
+  // Escape (global keyboard shortcut) closes this panel's transient surfaces.
+  useEffect(() => {
+    if (escapeNonce === 0) {
+      return;
+    }
+    closeSounding();
+    setMenuOpen(false);
+    setParameterMenuOpen(false);
+  }, [closeSounding, escapeNonce]);
 
   useLeafletMap({
     panelId: panel.id,
@@ -395,9 +506,22 @@ export default function MapPanel({
   useEffect(() => {
     onAvailableValidTimesChange(panel.id, availableValidTimes);
     if (!selectedValidTimeIso && availableValidTimes.length > 0) {
-      onSelectValidTime(panel.id, availableValidTimes[0]);
+      // No prior selection: URL hour (when present and valid) > nearest-to-now,
+      // skipping frames the manifest marks unavailable/errored.
+      onSelectValidTime(
+        panel.id,
+        pickInitialValidTime(initialValidTimeIso, availableValidTimes, frameStatusByValidTime),
+      );
     }
-  }, [availableValidTimes, onAvailableValidTimesChange, onSelectValidTime, panel.id, selectedValidTimeIso]);
+  }, [
+    availableValidTimes,
+    frameStatusByValidTime,
+    initialValidTimeIso,
+    onAvailableValidTimesChange,
+    onSelectValidTime,
+    panel.id,
+    selectedValidTimeIso,
+  ]);
 
   useEffect(() => {
     onResolvedFrameChange(panel.id, resolvedFrame);
@@ -488,10 +612,23 @@ export default function MapPanel({
         viewKey,
         manifest: manifestState.manifest as NonNullable<typeof manifestState.manifest>,
         anchorHour: frame.hour,
+        activeLayers,
+        reflectivityGate,
+        synopticDetailMode,
       });
     }, 300);
     return () => window.clearTimeout(timeoutId);
-  }, [frame, frame?.hour, manifestState.manifest, panel.modelKey, selectedBrowserFrameStatus, viewKey]);
+  }, [
+    activeLayers,
+    frame,
+    frame?.hour,
+    manifestState.manifest,
+    panel.modelKey,
+    reflectivityGate,
+    selectedBrowserFrameStatus,
+    synopticDetailMode,
+    viewKey,
+  ]);
 
   return (
     <article className="relative flex min-h-0 flex-col bg-slate-950 overflow-hidden animate-[fadeIn_300ms_ease-out]">
@@ -503,6 +640,7 @@ export default function MapPanel({
         <div className="pointer-events-none absolute left-14 right-14 z-[530]" style={{ top: MAP_OVERLAY_TOP }}>
           <PanelChrome
             modelKey={panel.modelKey}
+            referenceTime={manifestState.manifest?.referenceTime ?? null}
             status={panelStatus}
             loadedCount={browserLoadedCount}
             totalHours={totalHours}
@@ -535,7 +673,7 @@ export default function MapPanel({
           style={{ top: "calc(var(--chrome-top, 96px) + 112px)" }}
         >
           {hoverLatLng ? (
-            <div className="pointer-events-auto min-w-[170px] rounded-lg glass-panel px-3 py-2 text-[11px] text-slate-100 shadow-xl">
+            <div className="min-w-[170px] rounded-lg glass-panel px-3 py-2 text-[11px] text-slate-100 shadow-xl">
               <p className="m-0 font-mono text-slate-400">
                 {formatCoordinate(hoverLatLng.lat, "N", "S")} {formatCoordinate(hoverLatLng.lng, "E", "W")}
               </p>
@@ -581,12 +719,36 @@ export default function MapPanel({
             {emptyMessage}
           </div>
         ) : null}
-        {manifestState.error ? (
+        {manifestState.error || runState.error ? (
           <div
-            className="pointer-events-none absolute left-14 z-[520] rounded-lg bg-rose-950/80 px-3 py-1.5 text-xs text-rose-200 shadow-lg"
+            className="pointer-events-auto absolute left-14 z-[540] grid max-w-md gap-1 rounded-lg bg-rose-950/80 px-3 py-1.5 text-xs text-rose-200 shadow-lg"
             style={{ top: "calc(var(--chrome-top, 96px) + 70px)" }}
           >
-            {manifestState.error}
+            {manifestState.error ? (
+              <div data-testid="manifest-error" className="flex items-start gap-2">
+                <span className="min-w-0 break-words">{manifestState.error}</span>
+                <button
+                  type="button"
+                  onClick={manifestState.retry}
+                  className="h-6 shrink-0 rounded border border-rose-300/40 bg-rose-500/15 px-2 text-[11px] font-semibold text-rose-100 hover:bg-rose-500/30 active:scale-95"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : null}
+            {runState.error ? (
+              <div data-testid="run-list-error" className="flex items-start gap-2">
+                <span className="min-w-0 break-words">Runs unavailable: {humanizeArtifactError(runState.error)}</span>
+                <button
+                  type="button"
+                  data-testid="run-list-retry"
+                  onClick={runState.retry}
+                  className="h-6 shrink-0 rounded border border-rose-300/40 bg-rose-500/15 px-2 text-[11px] font-semibold text-rose-100 hover:bg-rose-500/30 active:scale-95"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -598,13 +760,15 @@ export default function MapPanel({
           point={soundingPoint ? { lat: soundingPoint.lat, lon: soundingPoint.lng } : null}
           forecastHour={frame?.hour ?? null}
           validLabel={validLabel}
-          onRequestPoint={(lat, lon) => requestPointSounding(L.latLng(lat, lon))}
-          onClose={() => {
-            soundingAbortRef.current?.abort();
-            setSoundingLoading(false);
-            setSoundingOpen(false);
-            setSoundingPoint(null);
-          }}
+          timeZone={timeZone}
+          followTimeline={followTimeline}
+          onToggleFollowTimeline={() => setFollowTimeline((value) => !value)}
+          staleNotice={soundingStale}
+          onRefresh={refreshSounding}
+          recenterEnabled={soundingPointManual}
+          onRecenter={recenterOnSoundingPoint}
+          onRequestPoint={handleManualPointRequest}
+          onClose={closeSounding}
         />
 
         {/* ── Footer gradient overlay (above timeline) ── */}

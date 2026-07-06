@@ -19,7 +19,7 @@ const {
   buildNoaaGribUrl,
   getNoaaGribModelConfig,
 } = require("../noaa-beta/model-config");
-const { selectNoaaNamParameterRecords } = require("../noaa-beta/selection");
+const { selectNoaaNamParameterRecords, selectionAllows } = require("../noaa-beta/selection");
 
 const DEFAULT_HOURS = [0, 3, 6];
 
@@ -144,6 +144,10 @@ async function resolveNoaaModelRun({
 }) {
   const resolvedModelKey = normalizeNoaaModelKey(modelKey);
   if (date !== undefined || cycle !== undefined) {
+    if (date !== undefined && cycle === undefined) {
+      // normalizeCycle would pad undefined to "00" and silently render the 00Z run.
+      throw new Error("--date requires --cycle=HH (00 through 23).");
+    }
     const normalizedDate = normalizeDate(date);
     const normalizedCycle = normalizeCycle(cycle, resolvedModelKey);
     return { date: normalizedDate, cycle: normalizedCycle };
@@ -254,6 +258,33 @@ function selectNoaaParameterProbeHours(hours) {
   return Array.from(selected).sort((left, right) => left - right);
 }
 
+// Mirrors the renderer's selection gate (selectionAllows) so the manifest layer
+// plan and the rendered artifact set stay in lockstep. A null selection returns
+// the inputs untouched (same references) so a no-flags default build stays
+// byte-identical to today.
+function filterNoaaParameterSetByRenderSelection({ parameters, parameterOrder }, renderSelection) {
+  if (!renderSelection) {
+    return { parameters, parameterOrder };
+  }
+  const entryByKey = new Map(NOAA_NAM_PARAMETER_CATALOG.map((entry) => [entry.key, entry]));
+  const order = Array.isArray(parameterOrder) ? parameterOrder : [];
+  const allowedOrder = order.filter((key) => {
+    const entry = entryByKey.get(key);
+    return !entry || selectionAllows(renderSelection, entry);
+  });
+  if (allowedOrder.length === order.length) {
+    return { parameters, parameterOrder };
+  }
+  const allowedKeys = new Set(allowedOrder);
+  const filteredParameters = {};
+  for (const [key, value] of Object.entries(parameters || {})) {
+    if (allowedKeys.has(key) || !entryByKey.has(key)) {
+      filteredParameters[key] = value;
+    }
+  }
+  return { parameters: filteredParameters, parameterOrder: allowedOrder };
+}
+
 function buildNoaaModelMetadata({
   modelKey = "nam",
   run,
@@ -261,6 +292,7 @@ function buildNoaaModelMetadata({
   noaaBaseUrl,
   parameters = null,
   parameterOrder = null,
+  renderSelection = null,
 }) {
   const resolvedModelKey = normalizeNoaaModelKey(modelKey);
   const modelConfig = getNoaaGribModelConfig(resolvedModelKey);
@@ -270,6 +302,13 @@ function buildNoaaModelMetadata({
   const referenceTime = referenceTimeFromRun(run);
   const runId = formatRunIdFromReference(referenceTime);
   const validTimes = hours.map((hour) => addHours(referenceTime, hour));
+  const parameterSet = filterNoaaParameterSetByRenderSelection(
+    {
+      parameters: parameters || getNoaaNamParameterMetadata(),
+      parameterOrder: parameterOrder || getNoaaNamParameterOrder(),
+    },
+    renderSelection,
+  );
   return {
     modelKey: resolvedModelKey,
     openDataModel: modelConfig.openDataModel,
@@ -302,9 +341,12 @@ function buildNoaaModelMetadata({
     },
     rendererSignature: getNoaaGribRendererSignature(),
     hoverGridFormat: "binary",
-    parameters: parameters || getNoaaNamParameterMetadata(),
-    parameterOrder: parameterOrder || getNoaaNamParameterOrder(),
-    parameterKeys: parameterOrder || getNoaaNamParameterOrder(),
+    parameters: parameterSet.parameters,
+    parameterOrder: parameterSet.parameterOrder,
+    parameterKeys: parameterSet.parameterOrder,
+    // Additive: only selective builds carry the selection so a null selection
+    // leaves the metadata (and thus the manifest) without the key entirely.
+    ...(renderSelection ? { renderSelection } : {}),
   };
 }
 
@@ -464,6 +506,7 @@ module.exports = {
   buildNoaaModelMetadata,
   buildNoaaNamMetadata,
   buildRecentCycleCandidates,
+  filterNoaaParameterSetByRenderSelection,
   formatHoursByModel,
   isFullRunRequest,
   mapWithConcurrency,

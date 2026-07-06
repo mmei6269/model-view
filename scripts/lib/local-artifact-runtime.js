@@ -64,6 +64,15 @@ class LocalArtifactRuntime {
     this.stateCache = new Map();
     this.stateLoads = new Map();
     this.frameRenders = new Map();
+    // Short-TTL cache of completeness-applied manifests keyed by
+    // `${model}|${run}|${view}` -> { mtimeMs, etag, manifest, cachedAt }. Keyed on
+    // the manifest file's mtime AND a short TTL so a frame finishing render (new
+    // .complete.json marker, unchanged manifest mtime) still re-surfaces within a
+    // poll or two while an idle run avoids re-running hundreds of fs ops per poll.
+    this.manifestCompletenessCache = new Map();
+    this.manifestCompletenessTtlMs = Number.isFinite(options.manifestCompletenessTtlMs)
+      ? Math.max(0, Number(options.manifestCompletenessTtlMs))
+      : 2_000;
     this.stats = {
       latestFetches: 0,
       buildRuns: 0,
@@ -131,6 +140,32 @@ class LocalArtifactRuntime {
     return this.applyManifestArtifactCompleteness(modelKey, runId, viewKey, manifest);
   }
 
+  async readManifestWithEtag(modelKey, runId, viewKey = this.defaultViewKey) {
+    const manifestPath = this.getManifestStoragePath(modelKey, runId, viewKey);
+    let mtimeMs = 0;
+    try {
+      mtimeMs = (await fs.promises.stat(manifestPath)).mtimeMs;
+    } catch {
+      return null;
+    }
+    const cacheKey = `${modelKey}|${runId}|${viewKey}`;
+    const cached = this.manifestCompletenessCache.get(cacheKey);
+    if (cached && cached.mtimeMs === mtimeMs && Date.now() - cached.cachedAt < this.manifestCompletenessTtlMs) {
+      return { manifest: cached.manifest, etag: cached.etag };
+    }
+    const manifest = await this.readManifestFromDisk(modelKey, runId, viewKey);
+    if (!manifest) {
+      return null;
+    }
+    // ETag folds mtime + the derived per-hour completeness so a marker landing
+    // (which changes hourStatus without touching the manifest file) still yields a
+    // fresh tag and defeats a stale 304.
+    const statusStamp = JSON.stringify(manifest.hourStatus || {});
+    const etag = `"${mtimeMs.toString(36)}-${hashString(statusStamp).toString(36)}"`;
+    this.manifestCompletenessCache.set(cacheKey, { mtimeMs, etag, manifest, cachedAt: Date.now() });
+    return { manifest, etag };
+  }
+
   async buildLatestState(modelKey, viewKey = this.defaultViewKey, options = {}) {
     const state = await this.ensureLatestState(modelKey, viewKey, { forceRefresh: true });
     const maxHoursPerModel = parseOptionalNumber(options.maxHoursPerModel, null);
@@ -153,8 +188,12 @@ class LocalArtifactRuntime {
       retryFrameConcurrency,
     );
     const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
+    // Only frames in this build's plan are targets; union-merged frames from
+    // earlier builds of the same run stay in the manifest without re-rendering.
     const targetFrames = state.manifest.frames.filter(
-      (frame) => maxHoursPerModel === null || Number(frame.hour) <= maxHoursPerModel,
+      (frame) =>
+        state.framePlanByHour.has(Number(frame.hour)) &&
+        (maxHoursPerModel === null || Number(frame.hour) <= maxHoursPerModel),
     );
     let built = 0;
     let reused = 0;
@@ -478,6 +517,7 @@ class LocalArtifactRuntime {
       parameters: latestMetadata.parameters || null,
       parameterOrder: latestMetadata.parameterOrder || latestMetadata.parameterKeys || null,
       hoverGridFormat: latestMetadata.hoverGridFormat || null,
+      renderSelection: latestMetadata.renderSelection || null,
     });
     const manifestPath = this.getManifestStoragePath(modelKey, runId, viewKey);
     const existingManifest = await readJsonIfExists(manifestPath);
@@ -523,7 +563,12 @@ class LocalArtifactRuntime {
 
   async renderFrameArtifactsForState(state, frame, options = {}) {
     this.stats.frameRenders += 1;
-    const framePlan = state.framePlanByHour.get(Number(frame.hour));
+    // Union-merged frames can predate this build's plan; fall back to the
+    // frame's own valid time so on-demand renders keep working.
+    const framePlan = state.framePlanByHour.get(Number(frame.hour)) || {
+      hour: Number(frame.hour),
+      validTime: String(frame.validHourKey),
+    };
     const renderParams = {
       modelKey: state.modelKey,
       viewKey: state.viewKey,
@@ -535,6 +580,7 @@ class LocalArtifactRuntime {
       renderWidth: frame.cols,
       renderHeight: frame.rows,
       renderMode: options.renderMode || "all",
+      renderSelection: options.renderSelection || null,
     };
     const rendered = await this.renderFrameArtifacts(renderParams);
     if (options.normalize === false) {
@@ -920,8 +966,35 @@ class LocalArtifactRuntime {
     const manifestPath = this.getManifestStoragePath(modelKey, runId, viewKey);
     const latestPointerPath = this.getLatestPointerStoragePath(modelKey, viewKey);
     await writeJsonAtomic(manifestPath, manifest);
+    this.stats.manifestWrites += 1;
+    if (!(await this.shouldAdvanceLatestPointer(modelKey, viewKey, runId, manifest))) {
+      return;
+    }
     await writeJsonAtomic(latestPointerPath, latestPointer);
-    this.stats.manifestWrites += 2;
+    this.stats.manifestWrites += 1;
+  }
+
+  // latest--<view>.json advances to a different run only once that run is
+  // usably complete. A missing pointer is bootstrapped immediately, and the
+  // run the pointer already names keeps refreshing so progressive builds of
+  // the current latest run stay live. In-progress runs remain selectable
+  // through their run manifests and listRunManifests regardless.
+  async shouldAdvanceLatestPointer(modelKey, viewKey, runId, manifest) {
+    // A corrupt pointer file must not abort the build: treat an unreadable or
+    // unparseable pointer as missing so the current run bootstraps over it.
+    let existingPointer = null;
+    try {
+      existingPointer = await readJsonIfExists(this.getLatestPointerStoragePath(modelKey, viewKey));
+    } catch {
+      existingPointer = null;
+    }
+    if (!existingPointer || String(existingPointer.run || "") === String(runId || "")) {
+      return true;
+    }
+    // Accepted edge: explicitly rebuilding an OLD completed run re-takes the
+    // pointer from a newer run. Production flow always resolves the current
+    // run first, so this is unreachable in normal operation.
+    return isManifestUsablyComplete(manifest);
   }
 
   async pruneStaleRuns(modelKey, activeRunId) {
@@ -1007,6 +1080,27 @@ function applyLatestMetadataToManifest(manifest, latestMetadata, sourceName = LO
   return manifest;
 }
 
+// A run is usably complete when every frame in its manifest is marker-verified
+// as loaded: builds set hourStatus per persisted frame, and loadLatestState
+// re-derives it from .complete.json markers plus on-disk artifacts.
+function isManifestUsablyComplete(manifest) {
+  const frames = Array.isArray(manifest?.frames) ? manifest.frames : [];
+  if (frames.length === 0) {
+    return false;
+  }
+  const hourStatus = manifest?.hourStatus && typeof manifest.hourStatus === "object" ? manifest.hourStatus : {};
+  return frames.every((frame) => hourStatus[String(frame.hour)] === "loaded");
+}
+
+function hashString(text) {
+  let hash = 5381;
+  const value = String(text || "");
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) + hash + value.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
 function byteLengthOfArtifactBody(body) {
   if (!body) {
     return 0;
@@ -1087,5 +1181,6 @@ module.exports = {
   buildEmptyHoverGridArtifact,
   buildEmptySynopticVectorPayload,
   createTransparentPng,
+  isManifestUsablyComplete,
   normalizeRenderedFrameArtifacts,
 };

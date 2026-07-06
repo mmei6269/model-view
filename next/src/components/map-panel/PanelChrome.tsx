@@ -7,6 +7,7 @@ import type {
   RunManifestPointer,
   ValidTimeIso,
 } from "../../types";
+import { computeRunStaleness } from "../../lib/run-staleness";
 import { hourChipClass } from "./format-utils";
 
 export interface PanelFrameOption {
@@ -24,6 +25,7 @@ interface PanelStatus {
 
 interface PanelChromeProps {
   modelKey: ModelKey;
+  referenceTime: string | null;
   status: PanelStatus;
   loadedCount: number;
   totalHours: number;
@@ -89,6 +91,7 @@ const SLOTTED_PARAMETER_GROUPS = new Set([
 
 export function PanelChrome({
   modelKey,
+  referenceTime,
   status,
   loadedCount,
   totalHours,
@@ -115,145 +118,166 @@ export function PanelChrome({
   const selectedRunMissing = selectedRunId && !runOptions.some((run) => run.run === selectedRunId);
 
   return (
-    <div className="pointer-events-auto w-fit max-w-full rounded-lg border border-white/[0.08] bg-slate-900/[0.72] px-3 py-2 shadow-lg shadow-slate-950/35 backdrop-blur-xl">
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <h2 className="text-lg font-semibold leading-none text-slate-50">{MODEL_CONFIG[modelKey].label}</h2>
-          <StatusBadge status={status} />
-        </div>
+    <>
+      {/* Outside-click dismissal for the inline menus, mirroring DisplayMenu's
+          fixed-inset backdrop idiom. It must sit outside the chrome root: that
+          div's backdrop-blur is a containing block for fixed descendants, which
+          would pin inset-0 to the chrome box instead of the viewport. The
+          chrome root below is relative z-50 so its controls stay clickable. */}
+      {parameterMenuOpen || menuOpen ? (
+        <div
+          className="pointer-events-auto fixed inset-0 z-40"
+          onClick={() => {
+            if (parameterMenuOpen) {
+              onToggleParameterMenu();
+            }
+            if (menuOpen) {
+              onToggleMenu();
+            }
+          }}
+        />
+      ) : null}
+      <div className="pointer-events-auto relative z-50 w-fit max-w-full rounded-lg border border-white/[0.08] bg-slate-900/[0.72] px-3 py-2 shadow-lg shadow-slate-950/35 backdrop-blur-xl">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <h2 className="text-lg font-semibold leading-none text-slate-50">{MODEL_CONFIG[modelKey].label}</h2>
+            <StatusBadge status={status} />
+            <RunAgeChip modelKey={modelKey} referenceTime={referenceTime} />
+          </div>
 
-        <select
-          value={modelKey}
-          onChange={(event) => onModelChange(event.target.value as ModelKey)}
-          className="h-8 rounded-lg border border-white/[0.12] bg-slate-950/[0.88] px-2.5 text-xs font-medium text-slate-100 shadow-inner shadow-black/20 outline-none hover:border-white/20 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/20"
-          aria-label="Model"
-        >
-          {MODEL_KEYS.map((key) => (
-            <option key={key} value={key} className="bg-slate-950">
-              {MODEL_CONFIG[key].label}
+          <select
+            value={modelKey}
+            onChange={(event) => onModelChange(event.target.value as ModelKey)}
+            className="h-8 rounded-lg border border-white/[0.12] bg-slate-950/[0.88] px-2.5 text-xs font-medium text-slate-100 shadow-inner shadow-black/20 outline-none hover:border-white/20 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/20"
+            aria-label="Model"
+          >
+            {MODEL_KEYS.map((key) => (
+              <option key={key} value={key} className="bg-slate-950">
+                {MODEL_CONFIG[key].label}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={selectedRunId || ""}
+            onChange={(event) => onRunChange(event.target.value || null)}
+            className="h-8 max-w-44 rounded-lg border border-white/[0.12] bg-slate-950/[0.88] px-2.5 text-xs font-medium text-slate-100 shadow-inner shadow-black/20 outline-none hover:border-white/20 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/20"
+            aria-label="Run"
+          >
+            <option value="" className="bg-slate-950">
+              Latest
             </option>
-          ))}
-        </select>
+            {selectedRunMissing ? (
+              <option value={selectedRunId} className="bg-slate-950">
+                {formatRunId(selectedRunId)}
+              </option>
+            ) : null}
+            {runOptions.map((run) => (
+              <option key={run.run} value={run.run} className="bg-slate-950">
+                {formatRunOptionLabel(run)}
+              </option>
+            ))}
+          </select>
 
-        <select
-          value={selectedRunId || ""}
-          onChange={(event) => onRunChange(event.target.value || null)}
-          className="h-8 max-w-44 rounded-lg border border-white/[0.12] bg-slate-950/[0.88] px-2.5 text-xs font-medium text-slate-100 shadow-inner shadow-black/20 outline-none hover:border-white/20 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/20"
-          aria-label="Run"
-        >
-          <option value="" className="bg-slate-950">
-            Latest
-          </option>
-          {selectedRunMissing ? (
-            <option value={selectedRunId} className="bg-slate-950">
-              {formatRunId(selectedRunId)}
-            </option>
-          ) : null}
-          {runOptions.map((run) => (
-            <option key={run.run} value={run.run} className="bg-slate-950">
-              {formatRunOptionLabel(run)}
-            </option>
-          ))}
-        </select>
-
-        <button
-          type="button"
-          onClick={onToggleParameterMenu}
-          className={`h-8 rounded-lg border px-2.5 text-xs font-semibold active:scale-95 ${
-            parameterMenuOpen
-              ? "border-cyan-300/40 bg-cyan-400/20 text-cyan-100"
-              : "border-white/[0.12] bg-white/[0.06] text-slate-200 hover:bg-white/[0.1]"
-          }`}
-          aria-expanded={parameterMenuOpen}
-        >
-          Parameters {selectedLayers.size}
-        </button>
-
-        <button
-          type="button"
-          onClick={onToggleMenu}
-          className={`h-8 rounded-lg border px-2.5 text-xs font-semibold active:scale-95 ${
-            menuOpen
-              ? "border-cyan-300/40 bg-cyan-400/20 text-cyan-100"
-              : "border-white/[0.12] bg-white/[0.06] text-slate-200 hover:bg-white/[0.1]"
-          }`}
-          aria-expanded={menuOpen}
-        >
-          Frames {loadedCount}/{totalHours}
-        </button>
-
-        {canRemove ? (
           <button
             type="button"
-            onClick={onRemove}
-            className="h-8 rounded-lg border border-rose-400/35 bg-rose-500/10 px-2.5 text-xs font-semibold text-rose-100 hover:bg-rose-500/20 active:scale-95"
+            onClick={onToggleParameterMenu}
+            className={`h-8 rounded-lg border px-2.5 text-xs font-semibold active:scale-95 ${
+              parameterMenuOpen
+                ? "border-cyan-300/40 bg-cyan-400/20 text-cyan-100"
+                : "border-white/[0.12] bg-white/[0.06] text-slate-200 hover:bg-white/[0.1]"
+            }`}
+            aria-expanded={parameterMenuOpen}
           >
-            Remove
+            Parameters {selectedLayers.size}
           </button>
-        ) : null}
-      </div>
 
-      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] leading-4 text-slate-200/90">
-        <span className="min-w-0 truncate">Run {runLabel}</span>
-        <span className="rounded border border-white/[0.08] bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-slate-100">
-          {frameLabel}
-        </span>
-        <span className="min-w-0 truncate">Valid {validLabel}</span>
-      </div>
+          <button
+            type="button"
+            onClick={onToggleMenu}
+            className={`h-8 rounded-lg border px-2.5 text-xs font-semibold active:scale-95 ${
+              menuOpen
+                ? "border-cyan-300/40 bg-cyan-400/20 text-cyan-100"
+                : "border-white/[0.12] bg-white/[0.06] text-slate-200 hover:bg-white/[0.1]"
+            }`}
+            aria-expanded={menuOpen}
+          >
+            Frames {loadedCount}/{totalHours}
+          </button>
 
-      <div
-        data-testid="parameter-menu-wrapper"
-        className={`origin-top transition-opacity duration-200 ${
-          parameterMenuOpen ? "mt-2 opacity-100" : "max-h-0 overflow-hidden opacity-0"
-        }`}
-      >
+          {canRemove ? (
+            <button
+              type="button"
+              onClick={onRemove}
+              className="h-8 rounded-lg border border-rose-400/35 bg-rose-500/10 px-2.5 text-xs font-semibold text-rose-100 hover:bg-rose-500/20 active:scale-95"
+            >
+              Remove
+            </button>
+          ) : null}
+        </div>
+
+        <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] leading-4 text-slate-200/90">
+          <span className="min-w-0 truncate">Run {runLabel}</span>
+          <span className="rounded border border-white/[0.08] bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-slate-100">
+            {frameLabel}
+          </span>
+          <span className="min-w-0 truncate">Valid {validLabel}</span>
+        </div>
+
         <div
-          data-testid="parameter-menu-scroll"
-          className="max-h-[min(34rem,62vh)] w-[min(52rem,calc(100vw-3.5rem))] max-w-full overflow-auto rounded-md border border-white/[0.06] bg-slate-950/35 p-1.5"
+          data-testid="parameter-menu-wrapper"
+          className={`origin-top transition-opacity duration-200 ${
+            parameterMenuOpen ? "mt-2 opacity-100" : "max-h-0 overflow-hidden opacity-0"
+          }`}
         >
-          {groupParameterOptions(parameterOptions).map((group) => (
-            <div key={group.name} className="py-1.5">
-              <div className="px-1.5 pb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-                {group.name}
+          <div
+            data-testid="parameter-menu-scroll"
+            className="max-h-[min(34rem,62vh)] w-[min(52rem,calc(100vw-3.5rem))] max-w-full overflow-auto rounded-md border border-white/[0.06] bg-slate-950/35 p-1.5"
+          >
+            {groupParameterOptions(parameterOptions).map((group) => (
+              <div key={group.name} className="py-1.5">
+                <div className="px-1.5 pb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                  {group.name}
+                </div>
+                <ParameterGroupControls
+                  groupName={group.name}
+                  options={group.options}
+                  selectedLayers={selectedLayers}
+                  onLayerToggle={onLayerToggle}
+                />
               </div>
-              <ParameterGroupControls
-                groupName={group.name}
-                options={group.options}
-                selectedLayers={selectedLayers}
-                onLayerToggle={onLayerToggle}
-              />
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
 
-      <div
-        className={`origin-top overflow-hidden transition-all duration-200 ${
-          menuOpen ? "mt-2 max-h-48 opacity-100" : "max-h-0 opacity-0"
-        }`}
-      >
-        <div className="grid max-h-40 grid-cols-8 gap-1 overflow-auto rounded-md border border-white/[0.06] bg-slate-950/35 p-1 sm:grid-cols-10 md:grid-cols-12">
-          {frameOptions.map((option) => {
-            const clickable = option.selectable && Boolean(option.validHourKey);
-            return (
-              <button
-                key={option.hour}
-                type="button"
-                disabled={!clickable}
-                onClick={() => {
-                  if (option.validHourKey) {
-                    onSelectValidTime(option.validHourKey);
-                  }
-                }}
-                className={hourChipClass(option.status, option.selected)}
-              >
-                {String(option.hour).padStart(3, "0")}
-              </button>
-            );
-          })}
+        <div
+          className={`origin-top overflow-hidden transition-all duration-200 ${
+            menuOpen ? "mt-2 max-h-48 opacity-100" : "max-h-0 opacity-0"
+          }`}
+        >
+          <div className="grid max-h-40 grid-cols-8 gap-1 overflow-auto rounded-md border border-white/[0.06] bg-slate-950/35 p-1 sm:grid-cols-10 md:grid-cols-12">
+            {frameOptions.map((option) => {
+              const clickable = option.selectable && Boolean(option.validHourKey);
+              return (
+                <button
+                  key={option.hour}
+                  type="button"
+                  disabled={!clickable}
+                  onClick={() => {
+                    if (option.validHourKey) {
+                      onSelectValidTime(option.validHourKey);
+                    }
+                  }}
+                  className={hourChipClass(option.status, option.selected)}
+                >
+                  {String(option.hour).padStart(3, "0")}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -632,6 +656,35 @@ function StatusBadge({ status }: { status: PanelStatus }) {
     <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${statusTextClass[status.kind]}`}>
       <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDotClass[status.kind]}`} />
       {status.label}
+    </span>
+  );
+}
+
+const runAgeChipClass: Record<"fresh" | "aging" | "stale", string> = {
+  fresh: "border-emerald-400/30 bg-emerald-500/10 text-emerald-100",
+  aging: "border-amber-400/35 bg-amber-500/12 text-amber-100",
+  stale: "border-rose-400/35 bg-rose-500/12 text-rose-100",
+};
+
+function RunAgeChip({ modelKey, referenceTime }: { modelKey: ModelKey; referenceTime: string | null }) {
+  const { ageHours, level, newerLikely } = computeRunStaleness({
+    referenceTime,
+    cycleHours: MODEL_CONFIG[modelKey].cycleHours,
+  });
+  if (ageHours === null) {
+    return null;
+  }
+  const rounded = ageHours < 1 ? "<1" : String(Math.round(ageHours));
+  const title = newerLikely
+    ? "A newer run is likely available — run npm run noaa:update"
+    : "Run age since reference time";
+  return (
+    <span
+      data-testid="run-age-chip"
+      title={title}
+      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${runAgeChipClass[level]}`}
+    >
+      {rounded}h old{newerLikely ? " · newer likely" : ""}
     </span>
   );
 }

@@ -56,9 +56,12 @@ class AsyncSemaphore {
 }
 
 class FrameWorkerPool {
-  constructor({ workerPath, size }) {
+  constructor({ workerPath, size, maxRespawns }) {
     this.workerPath = workerPath;
     this.size = clampInt(size, 1, 48, 2);
+    this.maxRespawns = clampInt(maxRespawns, 0, 64, 3);
+    this.respawnsUsed = 0;
+    this.failure = null;
     this.queue = [];
     this.workers = [];
     this.nextJobId = 1;
@@ -74,16 +77,13 @@ class FrameWorkerPool {
       worker,
       busy: false,
       activeJob: null,
+      dead: false,
     };
     worker.on("message", (message) => this.handleMessage(state, message));
-    worker.on("error", (error) => this.handleWorkerError(state, error));
+    worker.on("error", (error) => this.handleWorkerDeath(state, error));
     worker.on("exit", (code) => {
-      if (this.isClosed) {
-        return;
-      }
-      if (code !== 0) {
-        this.handleWorkerError(state, new Error(`Worker exited with code ${code}`));
-      }
+      // Any exit before close() is unexpected; even code 0 strands the in-flight job.
+      this.handleWorkerDeath(state, new Error(`Worker exited with code ${code}`));
     });
     return state;
   }
@@ -91,6 +91,9 @@ class FrameWorkerPool {
   run(payload) {
     if (this.isClosed) {
       return Promise.reject(new Error("Worker pool is closed."));
+    }
+    if (this.failure) {
+      return Promise.reject(this.failure);
     }
     return new Promise((resolve, reject) => {
       this.queue.push({
@@ -104,11 +107,11 @@ class FrameWorkerPool {
   }
 
   pump() {
-    if (this.isClosed) {
+    if (this.isClosed || this.failure) {
       return;
     }
     for (const state of this.workers) {
-      if (state.busy) {
+      if (state.busy || state.dead) {
         continue;
       }
       const next = this.queue.shift();
@@ -147,16 +150,39 @@ class FrameWorkerPool {
     this.pump();
   }
 
-  handleWorkerError(state, error) {
-    const err = error instanceof Error ? error : new Error(String(error || "worker-error"));
-    if (state.activeJob) {
-      state.activeJob.reject(err);
-      state.activeJob = null;
+  handleWorkerDeath(state, error) {
+    if (state.dead || this.isClosed) {
+      return;
     }
-    state.busy = false;
+    state.dead = true;
+    const err = error instanceof Error ? error : new Error(String(error || "worker-error"));
+    const index = this.workers.indexOf(state);
+    if (index !== -1) {
+      this.workers.splice(index, 1);
+    }
+    state.worker.terminate().catch(() => undefined);
+    if (state.activeJob) {
+      const job = state.activeJob;
+      state.activeJob = null;
+      state.busy = false;
+      job.reject(new Error(`Frame worker died mid-job (job ${job.id}): ${err.message}`));
+    }
+    if (this.respawnsUsed < this.maxRespawns) {
+      this.respawnsUsed += 1;
+      console.warn(
+        `[frame-worker-pool] worker died (${err.message}); respawning (${this.respawnsUsed}/${this.maxRespawns})`,
+      );
+      this.workers.push(this.createWorkerState());
+      this.pump();
+      return;
+    }
+    this.failure = new Error(
+      `Frame worker pool respawn budget exhausted (${this.maxRespawns} respawns); last worker error: ${err.message}`,
+    );
+    console.error(`[frame-worker-pool] ${this.failure.message}`);
     while (this.queue.length > 0) {
       const queued = this.queue.shift();
-      queued.reject(err);
+      queued.reject(this.failure);
     }
   }
 
@@ -165,9 +191,10 @@ class FrameWorkerPool {
     return {
       size: this.size,
       busy,
-      idle: Math.max(0, this.size - busy),
+      idle: Math.max(0, this.workers.length - busy),
       queued: this.queue.length,
       closed: this.isClosed,
+      respawnsUsed: this.respawnsUsed,
     };
   }
 

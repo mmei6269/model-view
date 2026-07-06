@@ -366,13 +366,16 @@ test("isobar detail selector switches synoptic vector key from simple to detaile
 
   await page.goto("/");
   await expect.poll(() => simpleHits).toBeGreaterThan(0);
-  await expect.poll(() => detailedHits, { timeout: 5_000 }).toBeGreaterThan(0);
+  // Warmup is scoped to the current synoptic detail mode, so the detailed
+  // vector is only fetched once the user switches the selector.
+  expect(detailedHits).toBe(0);
 
   const detailSelect = page.locator("label:has-text('Isobar Detail') select").first();
   await expect(detailSelect).toBeVisible();
   await expect(detailSelect).toHaveValue("simple");
   await detailSelect.selectOption("detailed");
   await expect(detailSelect).toHaveValue("detailed");
+  await expect.poll(() => detailedHits, { timeout: 5_000 }).toBeGreaterThan(0);
 });
 
 test("weather overlays render in raw pixel mode", async ({ page }) => {
@@ -697,6 +700,10 @@ test("frame status reaches loaded after visual assets even while hover is pendin
 
 test("transient prefetch failures stay selectable and recover after direct frame load", async ({ page }) => {
   let futureTempHits = 0;
+  let releaseFirstFutureTempAttempt;
+  const firstFutureTempAttemptGate = new Promise((resolve) => {
+    releaseFirstFutureTempAttempt = resolve;
+  });
 
   await page.route("**/__cf/manifests/gfs/latest.json**", async (route) => {
     await route.fulfill({
@@ -768,6 +775,11 @@ test("transient prefetch failures stay selectable and recover after direct frame
   });
   await page.route("**/__cf/fixtures/gfs/retryable-status/temp-003.png**", async (route) => {
     futureTempHits += 1;
+    if (futureTempHits === 1) {
+      // Hold the first attempt open so the in-flight "loading" chip state is
+      // deterministically observable before the transient failures begin.
+      await firstFutureTempAttemptGate;
+    }
     if (futureTempHits <= 2) {
       await route.fulfill({
         status: 503,
@@ -785,13 +797,25 @@ test("transient prefetch failures stay selectable and recover after direct frame
     });
   });
 
-  await page.goto("/");
+  // Pin the starting frame to 000 via ?hour= — the default pick is
+  // nearest-to-now (which would select 003 here and load it directly before
+  // the error state can be observed).
+  await page.goto("/?hour=2026-02-16T07:00:00Z");
   const panel = page.locator("article").first();
   await panel
     .getByRole("button", { name: /Frames/ })
     .first()
     .click();
   const futureFrameChip = panel.getByRole("button", { name: "003" }).first();
+
+  // P1.11 loading state: the first hour-3 fetch is gated open above, so the
+  // chip must show the in-flight "loading" class (hourChipClass) before the
+  // transient failures flip it to error.
+  await expect.poll(() => futureTempHits, { timeout: 5_000 }).toBeGreaterThanOrEqual(1);
+  await expect
+    .poll(async () => (await futureFrameChip.getAttribute("class")) || "", { timeout: 5_000 })
+    .toContain("bg-sky-500/20");
+  releaseFirstFutureTempAttempt();
 
   await expect.poll(() => futureTempHits, { timeout: 5_000 }).toBeGreaterThanOrEqual(2);
   await expect
@@ -1009,7 +1033,7 @@ test("model switch does not inherit stale error from aborted prior prefetch run"
     });
   });
 
-  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.goto("/");
   const panel = page.locator("article").first();
   await panel
     .getByRole("button", { name: /Frames/ })
@@ -1248,4 +1272,210 @@ test("center marker pressure stays consistent with hover pressure at marker loca
   await expect(mslpLine).toContainText("hPa");
   const hoverPressure = extractLastNumber(await mslpLine.textContent());
   expect(Math.abs(hoverPressure - markerValue)).toBeLessThanOrEqual(1);
+});
+
+test("frame chips stay pending until a prefetch actually starts and load after release", async ({ page }) => {
+  const hours = Array.from({ length: 16 }, (_, index) => index * 3);
+  let releaseAssets;
+  const assetGate = new Promise((resolve) => {
+    releaseAssets = resolve;
+  });
+
+  await page.route("**/__cf/manifests/gfs/latest.json**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        model: "gfs",
+        run: "20260216-0600Z",
+        view: "conus",
+        generatedAt: "2026-02-16T06:10:00Z",
+        manifestKey: "manifests/gfs/chips-lifecycle.json",
+        frameCount: hours.length,
+      }),
+    });
+  });
+  await page.route("**/__cf/manifests/gfs/chips-lifecycle.json**", async (route) => {
+    const hourStatus = {};
+    for (const hour of hours) {
+      hourStatus[hour] = "loaded";
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: 4,
+        model: "gfs",
+        run: "20260216-0600Z",
+        view: "conus",
+        generatedAt: "2026-02-16T06:10:00Z",
+        referenceTime: "2026-02-16T06:00:00Z",
+        openDataModel: "noaa-gfs-pgrb2-0p25",
+        hourStatus,
+        frames: hours.map((hour) =>
+          baseManifestFrame({
+            hour,
+            validHourKey: new Date(Date.UTC(2026, 1, 16, 6 + hour)).toISOString().replace(/\.\d{3}Z$/, "Z"),
+            layers: {
+              temperature: {
+                key: `fixtures/gfs/chips-lifecycle/temp-${String(hour).padStart(3, "0")}.png`,
+                bytes: ONE_BY_ONE_BYTES.length,
+                contentType: "image/png",
+              },
+            },
+            synopticVectorKey: null,
+            hoverGridKey: null,
+            hoverGridSchemaVersion: null,
+          }),
+        ),
+      }),
+    });
+  });
+  await page.route("**/__cf/fixtures/gfs/chips-lifecycle/**", async (route) => {
+    await assetGate;
+    await route.fulfill({
+      status: 200,
+      contentType: "image/png",
+      headers: { "cache-control": "no-store" },
+      body: ONE_BY_ONE_BYTES,
+    });
+  });
+
+  await page.goto("/");
+  const panel = page.locator("article").first();
+  await panel
+    .getByRole("button", { name: /Frames/ })
+    .first()
+    .click();
+  const nearChip = panel.getByRole("button", { name: "000" }).first();
+  const farChip = panel.getByRole("button", { name: "045" }).first();
+
+  // Prefetch concurrency is 12 (frame-prefetch DEFAULT_CONCURRENCY): hours 000-033
+  // start fetching immediately; 036-045 are queued and must NOT claim "loading".
+  await expect
+    .poll(async () => (await nearChip.getAttribute("class")) || "", { timeout: 5_000 })
+    .toContain("bg-sky-500/20");
+  const farClass = (await farChip.getAttribute("class")) || "";
+  expect(farClass).not.toContain("bg-sky-500/20");
+  expect(farClass).not.toContain("bg-cyan-500/20");
+  expect(farClass).not.toContain("bg-rose-500/20");
+  await expect(panel.getByRole("button", { name: /Frames 0\/16/ })).toBeVisible();
+
+  releaseAssets();
+  await expect(panel.getByRole("button", { name: /Frames 16\/16/ })).toBeVisible({ timeout: 15_000 });
+});
+
+test("mixed cached/uncached hour stays loading while the uncached layer is in flight", async ({ page }) => {
+  let releaseTemp;
+  const tempGate = new Promise((resolve) => {
+    releaseTemp = resolve;
+  });
+
+  await page.route("**/__cf/manifests/gfs/latest.json**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        model: "gfs",
+        run: "20260216-0600Z",
+        view: "conus",
+        generatedAt: "2026-02-16T06:10:00Z",
+        manifestKey: "manifests/gfs/chips-mixed.json",
+        frameCount: 1,
+      }),
+    });
+  });
+  await page.route("**/__cf/manifests/gfs/chips-mixed.json**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: 4,
+        model: "gfs",
+        run: "20260216-0600Z",
+        view: "conus",
+        generatedAt: "2026-02-16T06:10:00Z",
+        referenceTime: "2026-02-16T06:00:00Z",
+        openDataModel: "noaa-gfs-pgrb2-0p25",
+        hourStatus: { 0: "loaded" },
+        frames: [
+          baseManifestFrame({
+            validHourKey: "2026-02-16T06:00:00Z",
+            layers: {
+              temperature: {
+                key: "fixtures/gfs/chips-mixed/temp-000.png",
+                bytes: ONE_BY_ONE_BYTES.length,
+                contentType: "image/png",
+              },
+            },
+            synopticVectorKey: "fixtures/gfs/chips-mixed/synoptic-vector.json",
+            synopticVectorBytes: {
+              simple: 2,
+              detailed: 2,
+            },
+            hoverGridKey: null,
+            hoverGridSchemaVersion: null,
+          }),
+        ],
+      }),
+    });
+  });
+  await page.route("**/__cf/fixtures/gfs/chips-mixed/synoptic-vector.json**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        styleVersion: "v4-operational-contrast",
+        isobars: { lines: [], labels: [] },
+        thickness: { lines: [], labels: [] },
+        centers: { highs: [], lows: [] },
+      }),
+    });
+  });
+  await page.route("**/__cf/fixtures/gfs/chips-mixed/temp-000.png**", async (route) => {
+    await tempGate;
+    await route.fulfill({
+      status: 200,
+      contentType: "image/png",
+      headers: { "cache-control": "no-store" },
+      body: ONE_BY_ONE_BYTES,
+    });
+  });
+
+  await page.goto("/");
+  const panel = page.locator("article").first();
+  await panel
+    .getByRole("button", { name: /Frames/ })
+    .first()
+    .click();
+  const frameChip = panel.getByRole("button", { name: "000" }).first();
+  await expect(frameChip).toBeVisible();
+
+  // Phase 1: temperature off -> plan is synoptic-only, the vector loads and is cached
+  // (the chip turning cyan proves the vector cache key is in the loaded-key set).
+  await panel.getByRole("button", { name: /Parameters/ }).click();
+  const temperatureCheckbox = panel.getByRole("checkbox", { name: /Temp/ }).first();
+  await setCheckboxState(page, temperatureCheckbox, false);
+  await expect
+    .poll(async () => (await frameChip.getAttribute("class")) || "", { timeout: 10_000 })
+    .toContain("bg-cyan-500/20");
+
+  // Phase 2: re-enable temperature (fetch gated). The hour now mixes a cached status
+  // task (synoptic vector) with an uncached one (temperature). Each status task may
+  // count once: the cached vector must not be double-counted (configure seed + pump
+  // fast path), which emitted a premature "loaded" that cache-wins degraded to
+  // "pending" while the temperature fetch was genuinely in flight.
+  await setCheckboxState(page, temperatureCheckbox, true);
+  await expect
+    .poll(async () => (await frameChip.getAttribute("class")) || "", { timeout: 5_000 })
+    .toContain("bg-sky-500/20");
+  const inFlightClass = (await frameChip.getAttribute("class")) || "";
+  expect(inFlightClass).not.toContain("bg-cyan-500/20");
+  expect(inFlightClass).not.toContain("bg-rose-500/20");
+
+  releaseTemp();
+  await expect
+    .poll(async () => (await frameChip.getAttribute("class")) || "", { timeout: 10_000 })
+    .toContain("bg-cyan-500/20");
+  await expect(panel.getByRole("button", { name: /Frames 1\/1/ })).toBeVisible();
 });

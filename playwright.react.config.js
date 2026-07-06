@@ -15,7 +15,7 @@ module.exports = defineConfig({
     command:
       "node scripts/prepare-react-fixture-cache.js test-results/react-cache && MODELVIEW_CACHE_ROOT=test-results/react-cache npm run local:dev -- --host 127.0.0.1 --port 5173",
     port: 5173,
-    reuseExistingServer: true,
+    reuseExistingServer: !process.env.CI,
     timeout: 180_000,
   },
   reporter: [["list"]],

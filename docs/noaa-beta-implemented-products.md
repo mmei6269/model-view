@@ -95,5 +95,5 @@ This document holds implemented NOAA beta renderer details that used to bloat `p
 ## Palette And Rendering Behavior
 
 - Precipitation and reflectivity are true stepped lookups.
-- Reflectivity + precip type keeps the opacity-aware RGBA ramp from the generated public palette; below-filter bins remain transparent.
+- Reflectivity + precip type keeps the opacity-aware RGBA ramp from the source legend extraction; below-filter bins remain transparent.
 - Palette hard-break pass added duplicate-value stops for important category breaks without making every continuous palette stepped: surface temp 32F; 850/700 mb temp 0C; 500 mb temp -20C; dew point 50/60/70/80F; visibility 1/3/6/10 mi; snowfall/snow-depth 1, 6, 12, 24, and 36 inches.

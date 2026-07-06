@@ -38,7 +38,7 @@ const {
   waitForCachedGrid,
   writeCachedFloatGrid,
 } = require("./cache-io");
-const { buildNoaaGribUrl } = require("./model-config");
+const { NOAA_BETA_MODEL_CONFIG, buildNoaaGribUrl } = require("./model-config");
 const { RUN_MAX_ACCUMULATION_SOURCES } = require("./selection");
 const { sleep } = require("../local-artifact-options");
 
@@ -686,19 +686,24 @@ function buildPrecipSourceForecastHours(modelKey, targetHour) {
     return [];
   }
   const normalizedModel = String(modelKey || "").toLowerCase();
-  const hours = [];
-  if (normalizedModel === "gfs") {
-    const hourlyLimit = Math.min(target, 120);
-    for (let hour = 0; hour <= hourlyLimit; hour += 1) {
-      hours.push(hour);
-    }
-    for (let hour = 123; hour <= target; hour += 3) {
+  const cadence = NOAA_BETA_MODEL_CONFIG[normalizedModel]?.forecastHourCadence;
+  if (!Array.isArray(cadence) || cadence.length === 0) {
+    const hours = [];
+    for (let hour = 0; hour <= target; hour += 1) {
       hours.push(hour);
     }
     return hours;
   }
-  for (let hour = 0; hour <= target; hour += 1) {
-    hours.push(hour);
+  // Candidate hours must follow the model's publication cadence: NAM only
+  // publishes 3-hourly awphys files past f36, so off-cadence candidates 404.
+  const hours = [0];
+  let hour = 0;
+  for (const segment of cadence) {
+    const limit = Math.min(target, segment.maxHour);
+    while (hour + segment.stepHours <= limit) {
+      hour += segment.stepHours;
+      hours.push(hour);
+    }
   }
   return hours;
 }

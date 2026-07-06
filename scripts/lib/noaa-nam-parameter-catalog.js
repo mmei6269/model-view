@@ -17,6 +17,49 @@ const SEVERE_KINEMATICS_GROUP = "Severe: Kinematics";
 const WINTER_GROUP = "Winter / Snow & Ice";
 const UPPER_AIR_GROUP = "Upper Air: Height / Wind / Temp";
 const UPPER_AIR_DIAGNOSTIC_GROUP = "Upper Air: Omega / Vorticity";
+
+// Render-panel taxonomy: the 9 catalog groups collapse to 7 owner build/compute categories.
+// Severe thermo+kinematics merge; the two upper-air groups merge. WIND_GROUP is an alias of
+// SURFACE_GROUP so it needs no separate entry.
+const RENDER_CATEGORY_IDS = Object.freeze(["surface", "precip", "radar", "cloud", "severe", "winter", "upperAir"]);
+const GROUP_TO_CATEGORY = Object.freeze({
+  [SURFACE_GROUP]: "surface",
+  [PRECIP_GROUP]: "precip",
+  [RADAR_GROUP]: "radar",
+  [CLOUD_GROUP]: "cloud",
+  [SEVERE_THERMO_GROUP]: "severe",
+  [SEVERE_KINEMATICS_GROUP]: "severe",
+  [WINTER_GROUP]: "winter",
+  [UPPER_AIR_GROUP]: "upperAir",
+  [UPPER_AIR_DIAGNOSTIC_GROUP]: "upperAir",
+});
+
+// costTier gates the two tiered families (severe, winter). It is an AUTHORED owner-decided set
+// (spec §1.2/§1.3, owner decision 1) — NOT a pure heuristic — so product calls like "keep
+// Kuchera" are explicit one-line entries. "full" marks the six products the "simple" tier omits:
+// the three ML/Cobb winter SLR models and the three parcel-integration severe products (effective
+// SCP/STP + DCAPE). Everything else — including snowKuchera, which has a deep profile a bare
+// heuristic would flag as full — is "simple".
+//
+// Documented default rationale for any FUTURE product (not applied automatically): a product is a
+// full-tier candidate if it needs a downloaded artifact, reads a deep (>6-level) pressure profile,
+// or does sparse effective-layer / DCAPE parcel work. New heavy products should be added to
+// FULL_TIER_KEYS deliberately (the "exactly the six authored keys are full tier" test tripwires
+// any drift), keeping the owner in control of the compute-cost cut.
+const FULL_TIER_KEYS = Object.freeze(
+  new Set([
+    "snowRfConus",
+    "snowWesternLinear",
+    "snowCobb",
+    "effectiveLayerSupercellCompositeParameter",
+    "effectiveLayerSignificantTornadoParameter",
+    "dcape",
+  ]),
+);
+
+function deriveCostTier(entry) {
+  return FULL_TIER_KEYS.has(entry.key) ? "full" : "simple";
+}
 const REFLECTIVITY_LEGEND_TICKS = [10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70];
 const REFLECTIVITY_THRESHOLD_NOTE = "Gate selectable: >=10/15/20 dBZ";
 const REFLECTIVITY_PRECIP_TYPE_THRESHOLD_NOTE =
@@ -1325,6 +1368,8 @@ function getNoaaNamParameterMetadata() {
       label: entry.label,
       unit: entry.unit,
       group: entry.group,
+      category: entry.category,
+      costTier: entry.costTier,
       thresholdNote: entry.thresholdNote || scale.thresholdNote || null,
       legendTicks: [...(scale.legendTicks || [])],
       legendTickPositions: buildLegendTickPositions(scale),
@@ -2156,6 +2201,8 @@ function clampInt(value, min, max) {
 function freezeEntry(entry) {
   return Object.freeze({
     ...entry,
+    category: GROUP_TO_CATEGORY[entry.group] || "surface",
+    costTier: deriveCostTier(entry),
     selector: entry.selector ? Object.freeze({ ...entry.selector }) : undefined,
     directSelector: entry.directSelector ? Object.freeze({ ...entry.directSelector }) : undefined,
     uSelector: entry.uSelector ? Object.freeze({ ...entry.uSelector }) : undefined,
@@ -2189,6 +2236,8 @@ module.exports = {
   KUCHERA_PROFILE_LEVELS,
   COBB_PROFILE_LEVELS,
   SUPPORT_SELECTORS,
+  GROUP_TO_CATEGORY,
+  RENDER_CATEGORY_IDS,
   getNoaaNamParameterMetadata,
   getNoaaNamParameterOrder,
 };

@@ -1,6 +1,7 @@
 import type { PointSoundingIndices, PointSoundingLevel, PointSoundingPayload } from "../types";
 import { useEffect, useState, type FormEvent, type ReactElement } from "react";
-import { formatValidUtcLabel } from "../core/time";
+import { humanizeArtifactError } from "../core/humanize-error";
+import { formatValidLabel } from "../core/time";
 import { formatCoordinate } from "./map-panel/format-utils";
 
 interface SoundingDrawerProps {
@@ -11,6 +12,13 @@ interface SoundingDrawerProps {
   point: { lat: number; lon: number } | null;
   forecastHour: number | null;
   validLabel: string;
+  timeZone: string;
+  followTimeline: boolean;
+  onToggleFollowTimeline: () => void;
+  staleNotice: string | null;
+  onRefresh: () => void;
+  recenterEnabled: boolean;
+  onRecenter: (lat: number, lon: number) => void;
   onRequestPoint: (lat: number, lon: number) => void;
   onClose: () => void;
 }
@@ -66,6 +74,13 @@ export default function SoundingDrawer({
   point,
   forecastHour,
   validLabel: frameValidLabel,
+  timeZone,
+  followTimeline,
+  onToggleFollowTimeline,
+  staleNotice,
+  onRefresh,
+  recenterEnabled,
+  onRecenter,
   onRequestPoint,
   onClose,
 }: SoundingDrawerProps) {
@@ -74,7 +89,7 @@ export default function SoundingDrawer({
   }
   const levelCount = sounding?.levels?.length || 0;
   const title = sounding ? `${sounding.modelLabel || sounding.model} Point Sounding` : "Point Sounding";
-  const validLabel = sounding?.validTime ? formatValidUtcLabel(sounding.validTime) : frameValidLabel;
+  const validLabel = sounding?.validTime ? formatValidLabel(sounding.validTime, timeZone) : frameValidLabel;
   const displayForecastHour = sounding?.forecastHour ?? forecastHour ?? 0;
   const requestLat = Number.isFinite(sounding?.lat) ? Number(sounding?.lat) : Number(point?.lat);
   const requestLon = Number.isFinite(sounding?.lon) ? Number(sounding?.lon) : Number(point?.lon);
@@ -95,8 +110,19 @@ export default function SoundingDrawer({
             loading={loading}
             forecastHour={displayForecastHour}
             validLabel={validLabel}
+            recenterEnabled={recenterEnabled}
+            onRecenter={onRecenter}
             onRequestPoint={onRequestPoint}
           />
+          <label className="mt-1.5 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] text-slate-300">
+            <input
+              type="checkbox"
+              checked={followTimeline}
+              onChange={onToggleFollowTimeline}
+              className="h-3.5 w-3.5 accent-cyan-400"
+            />
+            Follow timeline
+          </label>
           {sounding?.sampleLat && sounding?.sampleLon ? (
             <p className="m-0 mt-1 font-mono text-[10px] text-slate-500">
               sampled {formatCoordinate(sounding.sampleLat, "N", "S")} {formatCoordinate(sounding.sampleLon, "E", "W")}
@@ -113,14 +139,42 @@ export default function SoundingDrawer({
         </button>
       </header>
 
+      {staleNotice ? (
+        <div
+          data-testid="sounding-stale-notice"
+          className="flex items-center justify-between gap-3 border-b border-amber-300/25 bg-amber-950/45 px-4 py-2 text-[11px] leading-4 text-amber-100"
+        >
+          <span className="min-w-0">{staleNotice}</span>
+          <span className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="h-6 rounded border border-amber-300/40 bg-amber-400/15 px-2 text-[10px] font-semibold text-amber-100 hover:bg-amber-400/30 active:scale-95"
+            >
+              Refresh
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="h-6 rounded border border-white/10 bg-white/5 px-2 text-[10px] font-semibold text-slate-200 hover:bg-white/10 active:scale-95"
+            >
+              Clear
+            </button>
+          </span>
+        </div>
+      ) : null}
+
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
         {loading ? (
           <div className="grid h-full min-h-[420px] place-items-center text-sm text-slate-300">
             Building point profile...
           </div>
         ) : error ? (
-          <div className="rounded-lg border border-rose-400/25 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
-            {error}
+          <div
+            data-testid="sounding-error"
+            className="rounded-lg border border-rose-400/25 bg-rose-950/40 px-3 py-2 text-sm text-rose-100"
+          >
+            {humanizeArtifactError(error)}
           </div>
         ) : sounding && levelCount > 0 ? (
           <div className="grid min-h-0 gap-3 xl:grid-cols-[660px_minmax(360px,1fr)]">
@@ -158,6 +212,8 @@ function PointCoordinateForm({
   loading,
   forecastHour,
   validLabel,
+  recenterEnabled,
+  onRecenter,
   onRequestPoint,
 }: {
   lat: number;
@@ -165,6 +221,8 @@ function PointCoordinateForm({
   loading: boolean;
   forecastHour?: number;
   validLabel: string;
+  recenterEnabled: boolean;
+  onRecenter: (lat: number, lon: number) => void;
   onRequestPoint: (lat: number, lon: number) => void;
 }) {
   const hasPoint = Number.isFinite(lat) && Number.isFinite(lon);
@@ -231,8 +289,23 @@ function PointCoordinateForm({
       >
         Go
       </button>
+      {recenterEnabled ? (
+        <button
+          type="button"
+          aria-label="Recenter map on sounding point"
+          title="Recenter map on sounding point"
+          className="h-6 rounded border border-white/10 bg-white/5 px-2 text-[10px] font-semibold text-slate-200 hover:bg-white/10"
+          onClick={() => {
+            const parsedLat = parseCoordinateInput(latText, "lat");
+            const parsedLon = parseCoordinateInput(lonText, "lon");
+            onRecenter(Number.isFinite(parsedLat) ? parsedLat : lat, Number.isFinite(parsedLon) ? parsedLon : lon);
+          }}
+        >
+          Recenter
+        </button>
+      ) : null}
       <span className="text-slate-600">|</span>
-      <span>F{String(forecastHour ?? 0).padStart(3, "0")}</span>
+      <span data-testid="sounding-frame-label">F{String(forecastHour ?? 0).padStart(3, "0")}</span>
       <span className="text-slate-600">|</span>
       <span>{validLabel}</span>
       {inputError ? <span className="basis-full text-[10px] text-rose-300">{inputError}</span> : null}
@@ -1271,6 +1344,11 @@ function LevelTable({ levels }: { levels: PointSoundingLevel[] }) {
 
 function WindBarb({ x, y, level }: { x: number; y: number; level: PointSoundingLevel }) {
   const speed = Math.max(0, Number(level.wspd) || 0);
+  if (speed === 0) {
+    // Station-plot convention: calm renders as an open circle, not a staff
+    // implying a direction.
+    return <circle cx={x} cy={y} r={4} fill="none" stroke="#e2e8f0" strokeWidth="1.7" />;
+  }
   const direction = Number(level.wdir) || 0;
   const flags = Math.floor(speed / 50);
   let remainder = speed - flags * 50;
@@ -1412,7 +1490,8 @@ function windBarbLevels(levels: PointSoundingLevel[]): Array<{ level: PointSound
         Number(level.heightAglM) > topFixedAglM &&
         Number.isFinite(level.press) &&
         Number.isFinite(level.wspd) &&
-        Number.isFinite(level.wdir),
+        // Calm levels carry a null direction but still render (as calm circles).
+        (Number.isFinite(level.wdir) || Number(level.wspd) === 0),
     )
     .map((level) => ({ level, y: yForPressure(Number(level.press)) }))
     .filter((entry) => Number.isFinite(entry.y));
@@ -1607,6 +1686,11 @@ function meteorologicalFromWindComponentsKt(
   if (!Number.isFinite(u) || !Number.isFinite(v)) {
     return { wdir: Number.NaN, wspd: Number.NaN, uKt: Number.NaN, vKt: Number.NaN };
   }
+  if (Math.hypot(u, v) === 0) {
+    // Calm wind has no defined direction (mirrors windComponentsToMeteorological
+    // in scripts/lib/noaa-beta/point-sounding.js).
+    return { wdir: null, wspd: 0, uKt: 0, vKt: 0 };
+  }
   const direction = (Math.atan2(-u, -v) * 180) / Math.PI;
   return {
     wdir: (direction + 360) % 360,
@@ -1715,6 +1799,11 @@ function formatNumber(value: number | null | undefined, suffix: string, digits: 
 function formatWind(directionDeg: number | null | undefined, speedKt: number | null | undefined): string {
   if (!Number.isFinite(directionDeg) && !Number.isFinite(speedKt)) {
     return "--";
+  }
+  // Strict zero only: Number(null) === 0, so null/undefined speeds must not
+  // read as calm.
+  if (speedKt === 0) {
+    return "Calm";
   }
   const direction = Number.isFinite(directionDeg) ? String(Math.round(Number(directionDeg))).padStart(3, "0") : "---";
   const speed = Number.isFinite(speedKt) ? Math.round(Number(speedKt)) : "--";

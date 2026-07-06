@@ -335,6 +335,12 @@ function renderScalarGridStep({
   });
 }
 
+// Step-bucket selection clamps below-range values into bucket 0: the binary
+// search defaults selected=0 and the uniform fast path floors negatives to 0
+// (same in the affine/function/wind-step variants). Safe only while every
+// step palette pairs an alpha-0 first stop and/or a minVisible/visibleRange
+// min at or above thresholds[0]; tests-node/raster-step-scale.test.js pins
+// that invariant for all catalog/core step lookups.
 function renderScalarGridStepRaw({ rgba, values, cellCount, colorLookup, visible }) {
   const thresholds = colorLookup.thresholds;
   const colors = colorLookup.colors;

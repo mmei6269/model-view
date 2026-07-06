@@ -217,6 +217,8 @@ async function renderNoaaNamAwphysFrame({
   rangeFetchLimiter = null,
   decodeConcurrency = 1,
   hoverGridFormat = latestMetadata?.hoverGridFormat || "binary",
+  renderMode,
+  renderSelection = null,
 }) {
   return renderNoaaGribFrame({
     modelKey,
@@ -236,7 +238,19 @@ async function renderNoaaNamAwphysFrame({
     rangeFetchLimiter,
     decodeConcurrency,
     hoverGridFormat,
+    renderMode,
+    renderSelection,
   });
+}
+
+function catalogCategorySet(catalog) {
+  const set = new Set();
+  for (const entry of Array.isArray(catalog) ? catalog : []) {
+    if (entry && entry.category) {
+      set.add(entry.category);
+    }
+  }
+  return set;
 }
 
 async function renderNoaaGribFrame({
@@ -258,6 +272,7 @@ async function renderNoaaGribFrame({
   decodeConcurrency = 1,
   hoverGridFormat = latestMetadata?.hoverGridFormat || "binary",
   renderMode = "all",
+  renderSelection = null,
 }) {
   const renderProfile = createNoaaRenderProfile();
   const decodeSession = createFrameDecodeSession(renderProfile);
@@ -299,7 +314,8 @@ async function renderNoaaGribFrame({
     cycle,
     rawCacheDir,
   });
-  const selectedCatalog = filterCatalogForRenderMode(NOAA_NAM_PARAMETER_CATALOG, renderMode);
+  const selectedCatalog = filterCatalogForRenderMode(NOAA_NAM_PARAMETER_CATALOG, renderMode, renderSelection);
+  const selectedCategories = catalogCategorySet(selectedCatalog);
   let stageStartedAt = performance.now();
   const indexText = await readOrFetchNoaaIdxTextCached(`${gribUrl}.idx`, indexCacheContext, hour, renderProfile);
   recordProfileStage(renderProfile, "indexMs", stageStartedAt);
@@ -506,62 +522,70 @@ async function renderNoaaGribFrame({
         decodeSession,
       });
     } else if (renderMode === "base") {
-      const snowSelection = selectSnowfallDerivedParameterRecords(records, {
-        modelKey: resolvedModelKey,
-        targetHour: hour,
-      });
-      const [freezingRain] = await Promise.all([
-        buildFreezingRainAccumulationGrids({
+      // Freezing-rain + snow-delta inputs are winter-category compute. When the
+      // render selection excludes winter, skip them so no winter bytes are
+      // fetched/decoded; with no selection selectedCategories always holds
+      // "winter" here (base mode keeps every non-snowfallDerived winter entry:
+      // wetBulbZeroHeight/freezingRainLiquidTotal/snowDepth/snowWaterEq/
+      // framFlatIce/framRadialIce/snowHrrrAsnow), preserving today's behavior.
+      if (selectedCategories.has("winter")) {
+        const snowSelection = selectSnowfallDerivedParameterRecords(records, {
           modelKey: resolvedModelKey,
-          modelConfig,
-          baseUrl: noaaBaseUrl || noaa.baseUrl || modelConfig.baseUrl,
-          date,
-          cycle,
           targetHour: hour,
-          currentRecords: records,
-          latestMetadata,
-          rawCacheDir,
-          tempDir,
-          wgrib2Path,
-          bounds: view.bounds,
-          width,
-          height,
-          rangeFetchConcurrency,
-          rangeFetchLimiter,
-          decodeConcurrency,
-          decoded,
-          selection,
-          profile: renderProfile,
-          decodeSession,
-          profileDecodeUnion: true,
-        }),
-        buildSnowfallDeltaOnlyGrids({
-          modelKey: resolvedModelKey,
-          modelConfig,
-          baseUrl: noaaBaseUrl || noaa.baseUrl || modelConfig.baseUrl,
-          date,
-          cycle,
-          targetHour: hour,
-          currentRecords: records,
-          latestMetadata,
-          rawCacheDir,
-          tempDir,
-          wgrib2Path,
-          bounds: view.bounds,
-          width,
-          height,
-          rangeFetchConcurrency,
-          rangeFetchLimiter,
-          decodeConcurrency,
-          decoded,
-          selection: snowSelection,
-          profile: renderProfile,
-          decodeSession,
-          profileDecodeUnion: true,
-        }),
-      ]);
-      Object.assign(decoded, freezingRain);
-    } else if (renderMode !== "base") {
+        });
+        const [freezingRain] = await Promise.all([
+          buildFreezingRainAccumulationGrids({
+            modelKey: resolvedModelKey,
+            modelConfig,
+            baseUrl: noaaBaseUrl || noaa.baseUrl || modelConfig.baseUrl,
+            date,
+            cycle,
+            targetHour: hour,
+            currentRecords: records,
+            latestMetadata,
+            rawCacheDir,
+            tempDir,
+            wgrib2Path,
+            bounds: view.bounds,
+            width,
+            height,
+            rangeFetchConcurrency,
+            rangeFetchLimiter,
+            decodeConcurrency,
+            decoded,
+            selection,
+            profile: renderProfile,
+            decodeSession,
+            profileDecodeUnion: true,
+          }),
+          buildSnowfallDeltaOnlyGrids({
+            modelKey: resolvedModelKey,
+            modelConfig,
+            baseUrl: noaaBaseUrl || noaa.baseUrl || modelConfig.baseUrl,
+            date,
+            cycle,
+            targetHour: hour,
+            currentRecords: records,
+            latestMetadata,
+            rawCacheDir,
+            tempDir,
+            wgrib2Path,
+            bounds: view.bounds,
+            width,
+            height,
+            rangeFetchConcurrency,
+            rangeFetchLimiter,
+            decodeConcurrency,
+            decoded,
+            selection: snowSelection,
+            profile: renderProfile,
+            decodeSession,
+            profileDecodeUnion: true,
+          }),
+        ]);
+        Object.assign(decoded, freezingRain);
+      }
+    } else if (selectedCategories.has("winter")) {
       Object.assign(
         decoded,
         await buildWinterDerivedInputGrids({
@@ -614,6 +638,7 @@ async function renderNoaaGribFrame({
               decoded,
               selection,
               framePlan,
+              bounds: view.bounds,
               modelKey: resolvedModelKey,
               width,
               height,
@@ -1845,6 +1870,7 @@ module.exports = {
   buildNoaaGribUrl,
   buildNoaaNamAwphysUrl,
   ensureWgrib2Available,
+  filterCatalogForRenderMode,
   getNoaaGribModelConfig,
   getNoaaGribRendererSignature,
   getNoaaNamParameterMetadata,
@@ -1889,6 +1915,7 @@ module.exports = {
   _testComposePrecipAccumulationGrid: composePrecipAccumulationGrid,
   _testActiveGridVisitIndicesGreaterThan: activeGridVisitIndicesGreaterThan,
   _testBuildSnowfallInGrids: buildSnowfallInGrids,
+  _testBuildSnowRenderedArtifacts: buildSnowRenderedArtifacts,
   _testSnowfallDerivedGridKey: snowfallDerivedGridKey,
   _testProfileDecodeKey: profileDecodeKey,
   _testProfileSelector: profileSelector,
@@ -1904,6 +1931,7 @@ module.exports = {
   _testBuildPrecipRateTypeLookups: buildPrecipRateTypeLookups,
   _testBuildDerivedParameterGrids: buildDerivedParameterGrids,
   _testFilterCatalogForRenderMode: filterCatalogForRenderMode,
+  _testCatalogCategorySet: catalogCategorySet,
   _testComposeRunMaxGrid: composeRunMaxGrid,
   _testEffectiveLayerCellActive: isEffectiveLayerCellActive,
   _testBoltonThetaE: boltonThetaE,

@@ -10,6 +10,13 @@ package-lock.json
 next/public/geo/
 scripts/geo-source/
 
+# Generated/vendored JSON + vendor docs (machine-produced; not hand-formatted)
+shared/noaa-beta-planned-color-maps.json
+tools/noaa-beta/
+
 # Local/editor metadata
 .claude/
 .DS_Store
+
+# Design/plan docs with byte-exact quoted code anchors
+docs/superpowers/

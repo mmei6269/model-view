@@ -4,10 +4,12 @@
 
 const path = require("path");
 const { spawn } = require("child_process");
+const { loadDotEnv } = require("./lib/env-config");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 
 async function main() {
+  loadDotEnv(path.join(ROOT_DIR, ".env"));
   const viteArgs = process.argv.slice(2);
   const dataPort = Number(process.env.MODELVIEW_DATA_PORT || 5174);
   const dataHost = String(process.env.MODELVIEW_DATA_HOST || "127.0.0.1");

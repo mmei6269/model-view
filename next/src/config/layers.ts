@@ -1,6 +1,7 @@
 import sharedConfig from "../../../shared/modelview-config.json";
 import type { LayerDefinition, LayerKey, ModelManifest, ParameterMetadata, PrecipTypeLegendRow } from "../types";
 import { scaleToGradient, TEMP_F_SCALE, WIND_MPH_SCALE } from "./colorMaps";
+import { groupToRenderCategory } from "./renderCategories";
 import { SYNOPTIC_STYLE } from "./synopticStyle";
 
 interface SharedLayerConfig {
@@ -44,6 +45,13 @@ const FALLBACK_ORDER: LayerKey[] = [
   "reflectivity",
   "synoptic",
 ];
+
+// Membership derives from the shared config order so configured layers (e.g. the
+// snow suite) stay in LAYER_STACK_ORDER instead of being silently filtered out.
+const KNOWN_LAYER_KEYS = new Set<string>([
+  ...((sharedConfig.layerOrder as string[] | undefined) || []),
+  ...FALLBACK_ORDER,
+]);
 
 const RAW_LAYERS = (sharedConfig.layers || {}) as Record<string, SharedLayerConfig>;
 const DYNAMIC_LAYER_PANE = "wx-dynamic-pane";
@@ -263,7 +271,7 @@ function buildManifestParameterOption(
     label: getParameterOptionLabel(key, entry, fallback),
     group: getParameterOptionGroup(entry, fallback),
     unit: getParameterOptionUnit(entry, fallback),
-    available: hasParameterOptionLayer(manifest, key, entry),
+    available: hasParameterOptionLayer(manifest, key, entry, fallback),
     ...getParameterOptionMethodDetails(entry),
   };
 }
@@ -291,8 +299,57 @@ function hasParameterOptionLayer(
   manifest: ModelManifest | null | undefined,
   key: LayerKey,
   entry: ParameterMetadata | undefined,
+  fallback: LayerDefinition | undefined,
 ): boolean {
-  return Boolean(hasManifestLayer(manifest, key) && hasMinimumForecastHour(manifest, entry?.minForecastHour));
+  return Boolean(
+    isParameterSelectionEnabled(manifest, entry, fallback) &&
+    hasManifestLayer(manifest, key) &&
+    hasMinimumForecastHour(manifest, entry?.minForecastHour),
+  );
+}
+
+// Selective builds (manifest.renderSelection present) still write the base
+// "floor" layers (temperature, wind, precip, reflectivity) as empty
+// transparent-PNG placeholders even when their category was deselected, so
+// hasManifestLayer alone cannot distinguish INTENTIONALLY-OMITTED from
+// "no echoes anywhere" (spec §2.4). Mirror the server's selectionAllows gate:
+// a parameter is available only when its category is enabled AND — for
+// full-tier products — the category was built at the "full" tier. When the
+// stamp is ABSENT (full/default build) this is a strict no-op.
+function isParameterSelectionEnabled(
+  manifest: ModelManifest | null | undefined,
+  entry: ParameterMetadata | undefined,
+  fallback: LayerDefinition | undefined,
+): boolean {
+  const categories = manifest?.renderSelection?.categories;
+  if (!categories || typeof categories !== "object") {
+    return true;
+  }
+  // Deselected parameters get their metadata filtered from the manifest, so
+  // fall back to the option's group to classify placeholder-only keys.
+  const category = entry?.category ?? groupToRenderCategory(entry?.group ?? fallback?.group);
+  if (!category) {
+    return true;
+  }
+  const state = readRenderSelectionCategoryState(categories[category]);
+  if (!state.enabled) {
+    return false;
+  }
+  return entry?.costTier !== "full" || state.tier === "full";
+}
+
+// Mirrors the server's normalizeRenderSelection defaults (scripts/lib/
+// noaa-beta/selection.js): a missing or malformed entry reads as enabled at
+// full tier; bare booleans are the compact wire form for non-tiered categories.
+function readRenderSelectionCategoryState(raw: unknown): { enabled: boolean; tier: "simple" | "full" } {
+  if (raw === false) {
+    return { enabled: false, tier: "full" };
+  }
+  if (raw && typeof raw === "object") {
+    const state = raw as { enabled?: unknown; tier?: unknown };
+    return { enabled: state.enabled !== false, tier: state.tier === "simple" ? "simple" : "full" };
+  }
+  return { enabled: true, tier: "full" };
 }
 
 function getParameterOptionMethodDetails(
@@ -637,18 +694,5 @@ function sanitizeOrder(input?: string[]): LayerKey[] {
 }
 
 function isLayerKey(value: string): value is LayerKey {
-  return (
-    value === "temperature" ||
-    value === "reflectivityComposite" ||
-    value === "reflectivity1km" ||
-    value === "reflectivity" ||
-    value === "wind" ||
-    value === "precip" ||
-    value === "precip3h" ||
-    value === "precip6h" ||
-    value === "precip12h" ||
-    value === "precip24h" ||
-    value === "precipTotal" ||
-    value === "synoptic"
-  );
+  return KNOWN_LAYER_KEYS.has(value);
 }

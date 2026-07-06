@@ -67,11 +67,15 @@ Typical local keys are:
 - `MODELVIEW_DATA_HOST`
 - `MODELVIEW_DATA_PORT`
 - `MODELVIEW_CACHE_ROOT`
+- `MODELVIEW_CACHE_BUDGET_GB` (optional total cache ceiling in GB for `noaa:update`/`cache:prune`)
 - `MODELVIEW_ARTIFACT_PREFIX`
 - `MODELVIEW_ARTIFACT_BASE_URL`
 - `MODELVIEW_REFLECTIVITY_GATES`
+- `WGRIB2` (absolute path to wgrib2 when it is not on `PATH`)
+- `MODELVIEW_PNG_DEFLATE_BACKEND` (`libdeflate` default; set `zlib` to force the node zlib path)
+- `MODELVIEW_NOAA_BETA_CACHE_ROOT` (deprecated alias of `MODELVIEW_CACHE_ROOT`; logs a warning)
 
-`MODELVIEW_CACHE_ROOT` defaults to `output/noaa-beta-cache`.
+`MODELVIEW_CACHE_ROOT` defaults to `output/noaa-beta-cache`. See `.env.example` for the full annotated key list, including the `MODELVIEW_NOAA_*` build knobs.
 
 ## 4. Build And Run
 

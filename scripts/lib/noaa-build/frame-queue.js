@@ -25,6 +25,8 @@ async function buildLatestStatesWithGlobalFrameQueue(runtime, models, viewKey, o
     Math.max(1, Math.min(frameConcurrency, Math.ceil(frameConcurrency / 2))),
   );
   const forceFrames = parseBooleanOption(options.forceFrames ?? options.force, false);
+  // Selective render scope; null keeps today's render-everything behavior.
+  const renderSelection = options.renderSelection || null;
   const persistManifestEachFrame = parseBooleanOption(options.persistManifestEachFrame, false);
   const failFast = parseBooleanOption(options.failFast, false);
   const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
@@ -54,13 +56,18 @@ async function buildLatestStatesWithGlobalFrameQueue(runtime, models, viewKey, o
 
   await runWithConcurrency(models, Math.min(models.length, 4), async (modelKey, index) => {
     const state = await runtime.ensureLatestState(modelKey, viewKey, { forceRefresh: true });
-    const targetFrames = state.manifest.frames.filter(Boolean);
+    // Target only this build's planned hours; union-merged frames from earlier
+    // builds of the same run stay in the manifest without re-rendering.
+    const targetFrames = state.manifest.frames.filter(
+      (frame) => frame && state.framePlanByHour.has(Number(frame.hour)),
+    );
     const entry = {
       index,
       modelKey,
       viewKey: state.viewKey,
       state,
       targetFrames,
+      // Counts only this build's planned frames, not the full union-merged manifest.
       totalFrames: targetFrames.length,
       built: 0,
       reused: 0,
@@ -106,6 +113,7 @@ async function buildLatestStatesWithGlobalFrameQueue(runtime, models, viewKey, o
       processGlobalFrameTask(runtime, task.entry, task.frame, {
         retryAttempt: 0,
         forceFrames,
+        renderSelection,
         persistManifestEachFrame,
         persistQueue,
         snowPersistQueue,
@@ -187,6 +195,7 @@ async function buildLatestStatesWithGlobalFrameQueue(runtime, models, viewKey, o
         processGlobalFrameTask(runtime, task.entry, task.frame, {
           retryAttempt,
           forceFrames,
+          renderSelection,
           persistManifestEachFrame,
           persistQueue,
           snowPersistQueue,
@@ -279,6 +288,7 @@ async function processGlobalFrameTask(runtime, entry, frame, options = {}) {
     return true;
   }
   const forceFrames = parseBooleanOption(options.forceFrames ?? options.force, false);
+  const renderSelection = options.renderSelection || null;
   const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
   const prefetchFailure = state.primaryOmPrefetchFailures?.get(hour);
   if (prefetchFailure && (forceFrames || !(await runtime.isFrameCompleteForState(state, frame)))) {
@@ -341,6 +351,7 @@ async function processGlobalFrameTask(runtime, entry, frame, options = {}) {
         forceFrames,
         persistManifestEachFrame: options.persistManifestEachFrame,
         renderMode,
+        renderSelection,
         normalize: false,
       });
       if (deltaOnlyFrame) {
@@ -374,6 +385,7 @@ async function processGlobalFrameTask(runtime, entry, frame, options = {}) {
         forceFrames,
         persistManifestEachFrame: options.persistManifestEachFrame,
         renderMode,
+        renderSelection,
         normalize: !partialFrame,
       });
       await options.persistQueue.enqueue(async () => {
@@ -448,6 +460,7 @@ async function processGlobalFrameTask(runtime, entry, frame, options = {}) {
           forceFrames,
           persistManifestEachFrame: options.persistManifestEachFrame,
           renderMode,
+          renderSelection,
           normalize: false,
         });
         await options.snowPersistQueue.enqueue(async () => {
@@ -495,6 +508,7 @@ async function processGlobalFrameTask(runtime, entry, frame, options = {}) {
           forceFrames,
           persistManifestEachFrame: options.persistManifestEachFrame,
           renderMode,
+          renderSelection,
           normalize: false,
         });
         renderedFrame = await runtime.persistRenderedFrameForState(state, frame, rendered, {
@@ -507,6 +521,7 @@ async function processGlobalFrameTask(runtime, entry, frame, options = {}) {
           forceFrames,
           persistManifestEachFrame: options.persistManifestEachFrame,
           renderMode,
+          renderSelection,
           normalize: renderPart === "all",
           supplementalHoverGridName: renderPart === "snow" ? "snow" : null,
         });

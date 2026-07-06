@@ -1,7 +1,11 @@
 import type { ReactNode, RefObject } from "react";
 import DisplayMenu from "./DisplayMenu";
+import RenderMenu, { type RenderJobEntry } from "./RenderMenu";
 import { VIEW_CONFIG, VIEW_KEYS } from "../config/constants";
 import type { MapDisplaySettings } from "../config/display";
+import type { RenderSelection } from "../config/render";
+import type { AvailableRunsState } from "../hooks/useAvailableRuns";
+import { TIMEZONE_OPTIONS } from "../config/timezone";
 import type { ReflectivityGateDbz, SynopticDetailMode, ViewKey } from "../types";
 
 interface AppHeaderProps {
@@ -9,6 +13,8 @@ interface AppHeaderProps {
   display: MapDisplaySettings;
   displayMenuOpen: boolean;
   headerRef: RefObject<HTMLElement | null>;
+  helpOpen: boolean;
+  onToggleHelp: () => void;
   linkViewports: boolean;
   reflectivityGate: ReflectivityGateDbz;
   settingsOpen: boolean;
@@ -17,18 +23,30 @@ interface AppHeaderProps {
   showThickness: boolean;
   summaryText: string;
   synopticDetailMode: SynopticDetailMode;
+  timeZone: string;
   viewKey: ViewKey;
   onAddPanel: () => void;
   onChangeDisplay: (display: MapDisplaySettings) => void;
   onChangeDisplayMenuOpen: (open: boolean) => void;
   onChangeReflectivityGate: (gate: ReflectivityGateDbz) => void;
   onChangeSynopticDetailMode: (mode: SynopticDetailMode) => void;
+  onChangeTimeZone: (value: string) => void;
   onChangeView: (viewKey: ViewKey) => void;
   onToggleCenters: () => void;
   onToggleIsobars: () => void;
   onToggleLinkViewports: () => void;
   onToggleSettings: () => void;
   onToggleThickness: () => void;
+  renderSelection: RenderSelection;
+  renderMenuOpen: boolean;
+  renderJobs: RenderJobEntry[];
+  canSubmitRender: boolean;
+  renderAvailableRuns: AvailableRunsState;
+  onChangeRenderSelection: (selection: RenderSelection) => void;
+  onChangeRenderMenuOpen: (open: boolean) => void;
+  onResetRenderSelection: () => void;
+  onSubmitRender: () => void;
+  onPrefetchSoundings: () => void;
 }
 
 export default function AppHeader({
@@ -36,6 +54,8 @@ export default function AppHeader({
   display,
   displayMenuOpen,
   headerRef,
+  helpOpen,
+  onToggleHelp,
   linkViewports,
   reflectivityGate,
   settingsOpen,
@@ -44,19 +64,32 @@ export default function AppHeader({
   showThickness,
   summaryText,
   synopticDetailMode,
+  timeZone,
   viewKey,
   onAddPanel,
   onChangeDisplay,
   onChangeDisplayMenuOpen,
   onChangeReflectivityGate,
   onChangeSynopticDetailMode,
+  onChangeTimeZone,
   onChangeView,
   onToggleCenters,
   onToggleIsobars,
   onToggleLinkViewports,
   onToggleSettings,
   onToggleThickness,
+  renderSelection,
+  renderMenuOpen,
+  renderJobs,
+  canSubmitRender,
+  renderAvailableRuns,
+  onChangeRenderSelection,
+  onChangeRenderMenuOpen,
+  onResetRenderSelection,
+  onSubmitRender,
+  onPrefetchSoundings,
 }: AppHeaderProps) {
+  const isCustomTimeZone = !TIMEZONE_OPTIONS.some((option) => option.value === timeZone);
   return (
     <header ref={headerRef} className="z-40 col-start-1 row-start-1 glass-panel px-4 py-2">
       <div className="flex items-center justify-between gap-4">
@@ -72,6 +105,7 @@ export default function AppHeader({
             type="button"
             onClick={onAddPanel}
             disabled={!canAddPanel}
+            title={canAddPanel ? undefined : "Maximum 2 maps"}
             className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20 active:scale-95 disabled:opacity-40"
           >
             Add Map
@@ -96,6 +130,18 @@ export default function AppHeader({
             onOpenChange={onChangeDisplayMenuOpen}
             onChange={onChangeDisplay}
           />
+          <RenderMenu
+            selection={renderSelection}
+            open={renderMenuOpen}
+            onOpenChange={onChangeRenderMenuOpen}
+            onChange={onChangeRenderSelection}
+            onReset={onResetRenderSelection}
+            onSubmit={onSubmitRender}
+            onPrefetchSoundings={onPrefetchSoundings}
+            jobs={renderJobs}
+            canSubmit={canSubmitRender}
+            availableRuns={renderAvailableRuns}
+          />
           <button
             type="button"
             onClick={onToggleSettings}
@@ -107,66 +153,108 @@ export default function AppHeader({
           >
             Settings
           </button>
+          <button
+            type="button"
+            aria-label="Help"
+            aria-haspopup="dialog"
+            aria-expanded={helpOpen}
+            title="Help & shortcuts"
+            onClick={onToggleHelp}
+            className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold active:scale-95 ${
+              helpOpen
+                ? "border-cyan-400/30 bg-cyan-500/20 text-cyan-300"
+                : "border-white/[0.06] bg-white/[0.04] text-slate-400 hover:bg-white/[0.08]"
+            }`}
+          >
+            ?
+          </button>
         </div>
       </div>
 
       <div
-        className={`overflow-hidden transition-all duration-300 ease-out ${
-          settingsOpen ? "mt-2 max-h-24 opacity-100" : "max-h-0 opacity-0"
+        className={`grid transition-all duration-300 ease-out ${
+          settingsOpen ? "mt-2 grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
         }`}
       >
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-white/[0.06] pt-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[10px] font-medium uppercase tracking-widest text-slate-400">Map</span>
-            <TogglePill active={linkViewports} onClick={onToggleLinkViewports}>
-              Link Viewports
-            </TogglePill>
-          </div>
-          <div className="hidden h-5 w-px bg-white/[0.06] sm:block" />
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[10px] font-medium uppercase tracking-widest text-slate-400">Overlays</span>
-            <TogglePill active={showIsobars} onClick={onToggleIsobars}>
-              Isobars
-            </TogglePill>
-            <TogglePill active={showThickness} onClick={onToggleThickness}>
-              Thickness
-            </TogglePill>
-            <TogglePill active={showCenters} onClick={onToggleCenters}>
-              Centers
-            </TogglePill>
-            <label className="flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.04] px-2.5 py-1.5 text-xs">
-              <span className="text-slate-400">Isobar Detail</span>
-              <select
-                value={synopticDetailMode}
-                onChange={(event) => onChangeSynopticDetailMode(event.target.value as SynopticDetailMode)}
-                className="bg-transparent text-xs outline-none"
-              >
-                <option value="simple" className="bg-slate-900">
-                  Simple
-                </option>
-                <option value="detailed" className="bg-slate-900">
-                  Detailed
-                </option>
-              </select>
-            </label>
-            <label className="flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.04] px-2.5 py-1.5 text-xs">
-              <span className="text-slate-400">Refl Gate</span>
-              <select
-                value={String(reflectivityGate)}
-                onChange={(event) => onChangeReflectivityGate(Number(event.target.value) as ReflectivityGateDbz)}
-                className="bg-transparent text-xs outline-none"
-              >
-                <option value="10" className="bg-slate-900">
-                  &ge; 10 dBZ
-                </option>
-                <option value="15" className="bg-slate-900">
-                  &ge; 15 dBZ
-                </option>
-                <option value="20" className="bg-slate-900">
-                  &ge; 20 dBZ
-                </option>
-              </select>
-            </label>
+        {/* overflow-hidden zeroes the grid item's min-height so the 0fr row can fully collapse */}
+        <div className="overflow-hidden">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-white/[0.06] pt-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-medium uppercase tracking-widest text-slate-400">Map</span>
+              <TogglePill active={linkViewports} onClick={onToggleLinkViewports}>
+                Link Viewports
+              </TogglePill>
+            </div>
+            <div className="hidden h-5 w-px bg-white/[0.06] sm:block" />
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-medium uppercase tracking-widest text-slate-400">Overlays</span>
+              <TogglePill active={showIsobars} onClick={onToggleIsobars}>
+                Isobars
+              </TogglePill>
+              <TogglePill active={showThickness} onClick={onToggleThickness}>
+                Thickness
+              </TogglePill>
+              <TogglePill active={showCenters} onClick={onToggleCenters}>
+                Centers
+              </TogglePill>
+              <label className="flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.04] px-2.5 py-1.5 text-xs">
+                <span className="text-slate-400">Isobar Detail</span>
+                <select
+                  value={synopticDetailMode}
+                  onChange={(event) => onChangeSynopticDetailMode(event.target.value as SynopticDetailMode)}
+                  className="bg-transparent text-xs outline-none"
+                >
+                  <option value="simple" className="bg-slate-900">
+                    Simple
+                  </option>
+                  <option value="detailed" className="bg-slate-900">
+                    Detailed
+                  </option>
+                </select>
+              </label>
+              <label className="flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.04] px-2.5 py-1.5 text-xs">
+                <span className="text-slate-400">Refl Gate</span>
+                <select
+                  value={String(reflectivityGate)}
+                  onChange={(event) => onChangeReflectivityGate(Number(event.target.value) as ReflectivityGateDbz)}
+                  className="bg-transparent text-xs outline-none"
+                >
+                  <option value="10" className="bg-slate-900">
+                    &ge; 10 dBZ
+                  </option>
+                  <option value="15" className="bg-slate-900">
+                    &ge; 15 dBZ
+                  </option>
+                  <option value="20" className="bg-slate-900">
+                    &ge; 20 dBZ
+                  </option>
+                </select>
+              </label>
+            </div>
+            <div className="hidden h-5 w-px bg-white/[0.06] sm:block" />
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-medium uppercase tracking-widest text-slate-400">Time</span>
+              <label className="flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.04] px-2.5 py-1.5 text-xs">
+                <span className="text-slate-400">Zone</span>
+                <select
+                  value={timeZone}
+                  onChange={(event) => onChangeTimeZone(event.target.value)}
+                  className="bg-transparent text-xs outline-none"
+                  aria-label="Time zone"
+                >
+                  {TIMEZONE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value} className="bg-slate-900">
+                      {option.label}
+                    </option>
+                  ))}
+                  {isCustomTimeZone ? (
+                    <option value={timeZone} className="bg-slate-900">
+                      {timeZone}
+                    </option>
+                  ) : null}
+                </select>
+              </label>
+            </div>
           </div>
         </div>
       </div>
@@ -178,6 +266,7 @@ function TogglePill({ active, onClick, children }: { active: boolean; onClick: (
   return (
     <button
       type="button"
+      aria-pressed={active}
       onClick={onClick}
       className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium active:scale-95 ${
         active

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Map as LeafletMapType } from "leaflet";
 import { createViewportSyncController } from "../core/viewport-sync";
 
-export function useViewportSync(panelCount: number) {
-  const [linkViewports, setLinkViewports] = useState(true);
+export function useViewportSync(panelCount: number, initialLinkViewports = true) {
+  const [linkViewports, setLinkViewports] = useState(initialLinkViewports);
   const [layoutVersion, setLayoutVersion] = useState(0);
   const syncControllerRef = useRef(createViewportSyncController());
 

@@ -1530,6 +1530,11 @@ function windComponentsToMeteorological(uMps, vMps) {
     return { wdir: Number.NaN, wspd: Number.NaN, uKt: Number.NaN, vKt: Number.NaN };
   }
   const speedKt = Math.hypot(u, v) * MPS_TO_KT;
+  if (speedKt === 0) {
+    // Calm wind has no defined meteorological direction; atan2(-0, -0) would
+    // otherwise report 180 degrees.
+    return { wdir: Number.NaN, wspd: 0, uKt: 0, vKt: 0 };
+  }
   const direction = (Math.atan2(-u, -v) * 180) / Math.PI;
   return {
     wdir: (direction + 360) % 360,

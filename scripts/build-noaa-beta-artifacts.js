@@ -44,6 +44,8 @@ const {
   resolveNoaaParameterSetFromIdxTexts,
   selectNoaaParameterProbeHours,
 } = require("./lib/noaa-build/run-resolution");
+const { loadDotEnv, resolveCacheRootEnv } = require("./lib/env-config");
+const { parseRenderSelectionFromArgs } = require("./lib/noaa-build/render-selection-args");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 const DEFAULT_CACHE_ROOT = path.join(ROOT_DIR, "output/noaa-beta-cache");
@@ -58,6 +60,18 @@ async function main() {
   const viewKey = String(args.view || DEFAULT_VIEW_KEY).trim() || DEFAULT_VIEW_KEY;
   if (!VIEW_CONFIG[viewKey]) {
     throw new Error(`Unsupported view '${viewKey}'. Supported: ${Object.keys(VIEW_CONFIG).join(", ")}`);
+  }
+  // Selective render scope (design §1.4). null ⇒ all categories/full tier (today's byte-identical output).
+  const renderSelection = parseRenderSelectionFromArgs(args, {
+    models,
+    view: viewKey,
+    run: args.run || "latest",
+  });
+  if (renderSelection) {
+    const enabledCategories = Object.entries(renderSelection.categories)
+      .filter(([, value]) => (typeof value === "object" ? value.enabled : value))
+      .map(([id, value]) => (typeof value === "object" ? `${id}:${value.tier}` : id));
+    console.log(`[noaa-beta] render selection categories=${enabledCategories.join(",") || "(none)"}`);
   }
 
   const fullRun = isFullRunRequest(args);
@@ -80,9 +94,7 @@ async function main() {
     retryDelayMs,
     retryFrameConcurrency,
   } = resolveParallelism({ args, resources, models });
-  const cacheRoot = path.resolve(
-    String(args["cache-root"] || process.env.MODELVIEW_NOAA_BETA_CACHE_ROOT || DEFAULT_CACHE_ROOT),
-  );
+  const cacheRoot = path.resolve(String(args["cache-root"] || resolveCacheRootEnv() || DEFAULT_CACHE_ROOT));
   const artifactPrefix = String(
     args["artifact-prefix"] || process.env.MODELVIEW_ARTIFACT_PREFIX || DEFAULT_ARTIFACT_PREFIX,
   ).trim();
@@ -193,7 +205,10 @@ async function main() {
       hoursByModel[modelKey] = hours;
     }
     const parameterSet = await resolveNoaaParameterSetForRun({ modelKey, noaaBaseUrl, run, hours });
-    latestMetadataByModel.set(modelKey, buildNoaaModelMetadata({ modelKey, run, hours, noaaBaseUrl, ...parameterSet }));
+    latestMetadataByModel.set(
+      modelKey,
+      buildNoaaModelMetadata({ modelKey, run, hours, noaaBaseUrl, ...parameterSet, renderSelection }),
+    );
   });
   const fullParameterOrder = getNoaaNamParameterOrder();
   for (const modelKey of models) {
@@ -253,6 +268,7 @@ async function main() {
         console.log(`[noaa-beta] ${modelKey}/${viewKey} run=${latestMetadata.runId} start`);
       }
       results = await buildLatestStatesWithGlobalFrameQueue(runtime, models, viewKey, {
+        renderSelection,
         frameConcurrency: globalFrameConcurrency,
         frameRetries,
         retryDelayMs,
@@ -279,6 +295,7 @@ async function main() {
         const latestMetadata = latestMetadataByModel.get(modelKey);
         console.log(`[noaa-beta] ${modelKey}/${viewKey} run=${latestMetadata.runId} start`);
         const [summary] = await buildLatestStatesWithGlobalFrameQueue(runtime, [modelKey], viewKey, {
+          renderSelection,
           frameConcurrency,
           frameRetries,
           retryDelayMs,
@@ -614,6 +631,8 @@ function formatRenderProfile(profile) {
     );
   }
   appendHitMissCounter(parts, "regridBin", profile.regridBinCacheHits, profile.regridBinCacheMisses);
+  appendPositiveCounter(parts, "regridBinWriteFailures", profile.regridBinCacheWriteFailures);
+  appendPositiveCounter(parts, "bulkDecodeFallbacks", profile.bulkDecodeFallbacks);
   appendHitMissCounter(parts, "runMaxCache", profile.runMaxGridCacheHits, profile.runMaxGridCacheMisses);
   appendHitMissCounter(parts, "runMaxSrcCache", profile.runMaxSourceCacheHits, profile.runMaxSourceCacheMisses);
   appendPositiveCounter(parts, "recordGridHits", profile.decodedRecordGridHits);
@@ -769,31 +788,6 @@ function parseArgs(argv) {
   return args;
 }
 
-function loadDotEnv(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return;
-  }
-  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-    const eq = line.indexOf("=");
-    if (eq <= 0) {
-      continue;
-    }
-    const key = line.slice(0, eq).trim();
-    let value = line.slice(eq + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (!(key in process.env)) {
-      process.env[key] = value;
-    }
-  }
-}
-
 if (require.main === module) {
   main().catch((error) => {
     console.error(error && error.stack ? error.stack : error);
@@ -810,6 +804,7 @@ module.exports = {
   _testRunGlobalFrameTaskQueue: runGlobalFrameTaskQueue,
   _testCanStartFrameTaskWithDependencies: canStartFrameTaskWithDependencies,
   _testMarkFrameTaskDependencyComplete: markFrameTaskDependencyComplete,
+  parseArgs,
   parseHours,
   parseReflectivityGates,
   referenceTimeFromRun,

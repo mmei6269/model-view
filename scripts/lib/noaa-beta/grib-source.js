@@ -65,6 +65,14 @@ const NOAA_INDEX_CONTENT_LENGTH_CACHE_MAX_ENTRIES = 256;
 
 const NOAA_INDEX_RECORD_CACHE_MAX_ENTRIES = 96;
 
+// NOAA publishes a cycle's files progressively (up to ~4 h for GFS), so idx text
+// and content lengths under the newest cycle can still change upstream. In-process
+// entries for such cycles expire on a short TTL; completed cycles are immutable
+// and stay pinned (the durable on-disk idx cache is unaffected either way).
+const NOAA_RECENT_CYCLE_PIN_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+const NOAA_RECENT_CYCLE_CACHE_TTL_MS = 60 * 1000;
+
 const SELECTED_GRIB_CACHE_DIRNAME = "selected-grib-v2";
 
 const SELECTED_GRIB_CACHE_METADATA_VERSION = 2;
@@ -227,7 +235,9 @@ async function getNoaaRecordsForHour(context, hour) {
   });
   const idxUrl = `${gribUrl}.idx`;
   const sessionKey = `${idxUrl}|unrepaired`;
-  let promise = context.decodeSession?.parsedRecords?.get(sessionKey) || NOAA_INDEX_RECORD_CACHE.get(idxUrl);
+  let promise =
+    context.decodeSession?.parsedRecords?.get(sessionKey) ||
+    liveNoaaIndexCacheEntry(NOAA_INDEX_RECORD_CACHE, idxUrl)?.promise;
   if (!promise) {
     promise = readOrFetchNoaaIdxTextCached(idxUrl, context, targetHour)
       .then((text) => parseNoaaIdx(text, null))
@@ -236,7 +246,7 @@ async function getNoaaRecordsForHour(context, hour) {
         context.decodeSession?.parsedRecords?.delete(sessionKey);
         throw error;
       });
-    NOAA_INDEX_RECORD_CACHE.set(idxUrl, promise);
+    setNoaaIndexCacheEntry(NOAA_INDEX_RECORD_CACHE, idxUrl, promise, context);
     trimMapToMaxEntries(NOAA_INDEX_RECORD_CACHE, NOAA_INDEX_RECORD_CACHE_MAX_ENTRIES);
     context.decodeSession?.parsedRecords?.set(sessionKey, promise);
   }
@@ -245,18 +255,51 @@ async function getNoaaRecordsForHour(context, hour) {
   return records;
 }
 
+function noaaCycleStartMs(date, cycle) {
+  const match = /^(\d{4})(\d{2})(\d{2})$/.exec(String(date || ""));
+  const cycleHour = Number(cycle);
+  if (!match || !Number.isInteger(cycleHour) || cycleHour < 0 || cycleHour > 23) {
+    return Number.NaN;
+  }
+  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), cycleHour);
+}
+
+function noaaIndexCacheExpiresAtMs(context, nowMs = Date.now()) {
+  const cycleStartMs = noaaCycleStartMs(context?.date, context?.cycle);
+  if (!Number.isFinite(cycleStartMs) || nowMs - cycleStartMs >= NOAA_RECENT_CYCLE_PIN_WINDOW_MS) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return nowMs + NOAA_RECENT_CYCLE_CACHE_TTL_MS;
+}
+
+function liveNoaaIndexCacheEntry(cache, key, nowMs = Date.now()) {
+  const entry = cache.get(key);
+  if (!entry) {
+    return null;
+  }
+  if (nowMs >= entry.expiresAtMs) {
+    cache.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function setNoaaIndexCacheEntry(cache, key, promise, context) {
+  cache.set(key, { promise, expiresAtMs: noaaIndexCacheExpiresAtMs(context) });
+}
+
 async function readOrFetchNoaaIdxTextCached(idxUrl, context, hour, profile = null) {
   const key = String(idxUrl || "");
-  let promise = NOAA_INDEX_TEXT_CACHE.get(key);
-  if (promise) {
+  const live = liveNoaaIndexCacheEntry(NOAA_INDEX_TEXT_CACHE, key);
+  if (live) {
     incrementProfileCounter(profile, "indexCacheHits");
-    return promise;
+    return live.promise;
   }
-  promise = readOrFetchNoaaIdxText(idxUrl, context, hour, profile).catch((error) => {
+  const promise = readOrFetchNoaaIdxText(idxUrl, context, hour, profile).catch((error) => {
     NOAA_INDEX_TEXT_CACHE.delete(key);
     throw error;
   });
-  NOAA_INDEX_TEXT_CACHE.set(key, promise);
+  setNoaaIndexCacheEntry(NOAA_INDEX_TEXT_CACHE, key, promise, context);
   trimMapToMaxEntries(NOAA_INDEX_TEXT_CACHE, NOAA_INDEX_TEXT_CACHE_MAX_ENTRIES);
   return promise;
 }
@@ -330,16 +373,16 @@ async function waitForCachedNoaaIdxText(cachePath, lockPath) {
 
 async function readOrFetchNoaaContentLengthCached(gribUrl, context, hour, profile = null) {
   const key = String(gribUrl || "");
-  let promise = NOAA_INDEX_CONTENT_LENGTH_CACHE.get(key);
-  if (promise) {
+  const live = liveNoaaIndexCacheEntry(NOAA_INDEX_CONTENT_LENGTH_CACHE, key);
+  if (live) {
     incrementProfileCounter(profile, "contentLengthCacheHits");
-    return promise;
+    return live.promise;
   }
-  promise = readOrFetchNoaaContentLength(gribUrl, context, hour, profile).catch((error) => {
+  const promise = readOrFetchNoaaContentLength(gribUrl, context, hour, profile).catch((error) => {
     NOAA_INDEX_CONTENT_LENGTH_CACHE.delete(key);
     throw error;
   });
-  NOAA_INDEX_CONTENT_LENGTH_CACHE.set(key, promise);
+  setNoaaIndexCacheEntry(NOAA_INDEX_CONTENT_LENGTH_CACHE, key, promise, context);
   trimMapToMaxEntries(NOAA_INDEX_CONTENT_LENGTH_CACHE, NOAA_INDEX_CONTENT_LENGTH_CACHE_MAX_ENTRIES);
   return promise;
 }
@@ -534,7 +577,6 @@ async function materializeSelectedGribUncached({ descriptor, rangeFetchConcurren
       rangeFetchConcurrency,
       rangeFetchLimiter,
       profile,
-      atomic: false,
     });
     return tempPath;
   }
@@ -703,7 +745,6 @@ async function writeCachedSelectedGrib({ descriptor, rangeFetchConcurrency, rang
     rangeFetchConcurrency,
     rangeFetchLimiter,
     profile,
-    atomic: false,
   });
   const metadata = {
     version: SELECTED_GRIB_CACHE_METADATA_VERSION,
@@ -765,7 +806,7 @@ async function writeSelectedGribRangeFile({
   recordProfileStage(profile, "rangeFetchMs", stageStartedAt);
   const hashStartedAt = performance.now();
   const sha256 = await hashFileSha256(targetPath);
-  recordProfileStage(profile, "rangeConcatMs", hashStartedAt);
+  recordProfileStage(profile, "selectedGribHashMs", hashStartedAt);
   if (profile) {
     profile.selectedBytes = cursor;
   }
@@ -900,6 +941,11 @@ async function decodeSelectedRecordsToGrids({
       if (process.env.MODELVIEW_NOAA_STRICT_BULK_DECODE === "1") {
         throw error;
       }
+      // The legacy per-record path is several times slower; surface every silent downgrade.
+      incrementProfileCounter(profile, "bulkDecodeFallbacks");
+      console.warn(
+        `[noaa-beta] bulk decode failed for ${gribPath}; falling back to legacy per-record decode: ${String(error?.message || error)}`,
+      );
       return decodeSelectedRecordsLegacy({
         gribPath,
         selectedPlan,
@@ -1198,7 +1244,7 @@ async function readRegriddedBinCache(cacheContext) {
   }
 }
 
-async function writeRegriddedBinCache(cacheContext, { binSourcePath, inventoryText, binBytes }) {
+async function writeRegriddedBinCache(cacheContext, { binSourcePath, inventoryText, binBytes, profile = null }) {
   const tmp = `${cacheContext.binPath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   try {
     try {
@@ -1212,7 +1258,12 @@ async function writeRegriddedBinCache(cacheContext, { binSourcePath, inventoryTe
     );
     await fs.promises.rename(tmp, cacheContext.binPath);
     await fs.promises.rename(`${tmp}.json`, cacheContext.metadataPath);
-  } catch {
+  } catch (error) {
+    // A failed persist silently forces wgrib2 regrid+export on every warm rebuild.
+    incrementProfileCounter(profile, "regridBinCacheWriteFailures");
+    console.warn(
+      `[noaa-beta] regridded-bin cache write failed for ${cacheContext.binPath}: ${String(error?.message || error)}`,
+    );
     await fs.promises.rm(tmp, { force: true }).catch(() => {});
     await fs.promises.rm(`${tmp}.json`, { force: true }).catch(() => {});
   }
@@ -1377,6 +1428,7 @@ async function decodeSelectedRecordsBulk({
       binSourcePath: binPath,
       inventoryText,
       binBytes: binSize,
+      profile,
     }).catch(() => {});
   }
   return decoded;
@@ -1862,6 +1914,8 @@ function finalizeNoaaRenderProfile(profile) {
     selectedGribPromiseHits: Number(profile.selectedGribPromiseHits) || 0,
     regridBinCacheHits: Number(profile.regridBinCacheHits) || 0,
     regridBinCacheMisses: Number(profile.regridBinCacheMisses) || 0,
+    regridBinCacheWriteFailures: Number(profile.regridBinCacheWriteFailures) || 0,
+    bulkDecodeFallbacks: Number(profile.bulkDecodeFallbacks) || 0,
     selectedPlanCacheHits: Number(profile.selectedPlanCacheHits) || 0,
     decodedGridPromiseHits: Number(profile.decodedGridPromiseHits) || 0,
     decodedRecordGridHits: Number(profile.decodedRecordGridHits) || 0,
@@ -1990,6 +2044,8 @@ module.exports = {
   NOAA_INDEX_RECORD_CACHE_MAX_ENTRIES,
   NOAA_INDEX_TEXT_CACHE,
   NOAA_INDEX_TEXT_CACHE_MAX_ENTRIES,
+  NOAA_RECENT_CYCLE_CACHE_TTL_MS,
+  NOAA_RECENT_CYCLE_PIN_WINDOW_MS,
   PRECIP_TYPE_DECODE_KEYS,
   PRECIP_TYPE_REGRID_PATTERN,
   REGRIDDED_BIN_CACHE_VERSION,
@@ -2029,8 +2085,10 @@ module.exports = {
   isRetryableRangeFetchError,
   materializeSelectedGrib,
   materializeSelectedGribUncached,
+  noaaCycleStartMs,
   noaaIdxCachePath,
   noaaIdxMetadataCachePath,
+  noaaIndexCacheExpiresAtMs,
   parseNoaaIdx,
   parseWgribSimpleInventory,
   profileGridRegistryKey,

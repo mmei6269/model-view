@@ -10,6 +10,7 @@ import {
   resolveSynopticVectorRequestUrl,
   resolveWeatherVectorRequestUrl,
 } from "./artifact-client";
+import { subscribeLayerImageObjectUrlEvictions } from "./image-prefetch-cache";
 
 interface PrefetchTask {
   kind: "layer" | "vector" | "weather-vector" | "hover";
@@ -49,6 +50,20 @@ export function markFramePrefetchCacheKeyLoaded(cacheKey: string): void {
   GLOBAL_LOADED_CACHE_KEYS.add(key);
   scheduleGlobalLoadedCacheNotify();
 }
+
+export function markFramePrefetchCacheKeyEvicted(cacheKey: string): void {
+  const key = String(cacheKey || "");
+  if (!key || !GLOBAL_LOADED_CACHE_KEYS.delete(key)) {
+    return;
+  }
+  scheduleGlobalLoadedCacheNotify();
+}
+
+// Layer cache keys are `layer|${requestUrl}` (see buildLayerCacheKey), so an object-URL
+// eviction maps 1:1 onto the loaded-key set.
+subscribeLayerImageObjectUrlEvictions((requestUrl) => {
+  markFramePrefetchCacheKeyEvicted(`layer|${requestUrl}`);
+});
 
 export function subscribeFramePrefetchCacheChanges(listener: () => void): () => void {
   GLOBAL_LOADED_CACHE_LISTENERS.add(listener);
@@ -118,6 +133,7 @@ export class FramePrefetchEngine {
   private inFlightByUrl = new Map<string, Promise<void>>();
   private requiredByHour = new Map<number, number>();
   private successByHour = new Map<number, number>();
+  private seededTaskKeys = new Set<string>();
   private failedHours = new Set<number>();
   private globalAbort: AbortController | null = null;
   private onStatus?: (hour: number, status: PrefetchState) => void;
@@ -134,6 +150,7 @@ export class FramePrefetchEngine {
     this.queue = [];
     this.requiredByHour.clear();
     this.successByHour.clear();
+    this.seededTaskKeys.clear();
     this.failedHours.clear();
 
     this.onStatus = plan.onStatus;
@@ -149,7 +166,9 @@ export class FramePrefetchEngine {
     );
     this.queue = tasks;
     this.requiredByHour = countTasksByHour(tasks);
-    this.successByHour = seedSuccessByHour(tasks);
+    const seeded = seedSuccessByHour(tasks);
+    this.successByHour = seeded.successByHour;
+    this.seededTaskKeys = seeded.seededTaskKeys;
 
     for (const [hour, required] of this.requiredByHour.entries()) {
       if (required <= 0) {
@@ -159,8 +178,6 @@ export class FramePrefetchEngine {
       const successful = this.successByHour.get(hour) || 0;
       if (successful >= required) {
         this.emitStatus(hour, "loaded");
-      } else {
-        this.emitStatus(hour, "loading");
       }
     }
     this.pump();
@@ -172,6 +189,7 @@ export class FramePrefetchEngine {
     this.queue = [];
     this.requiredByHour.clear();
     this.successByHour.clear();
+    this.seededTaskKeys.clear();
     this.failedHours.clear();
     this.onStatus = undefined;
     this.inFlightByUrl.clear();
@@ -199,12 +217,14 @@ export class FramePrefetchEngine {
       }
       const existingRequest = this.inFlightByUrl.get(url);
       if (existingRequest) {
+        this.noteTaskFetchStarted(task);
         this.attachTaskToRequest(task, existingRequest);
         continue;
       }
       const request = this.createTaskRequest(task);
       this.inFlight += 1;
       this.inFlightByUrl.set(url, request);
+      this.noteTaskFetchStarted(task);
       this.attachTaskToRequest(task, request);
       void request.finally(() => {
         this.inFlight = Math.max(0, this.inFlight - 1);
@@ -212,6 +232,15 @@ export class FramePrefetchEngine {
         this.pump();
       });
     }
+  }
+
+  // "loading" is only emitted once a fetch is actually in flight for the hour;
+  // queued tasks leave the hour in its prior (pending) state.
+  private noteTaskFetchStarted(task: PrefetchTask): void {
+    if (!task.affectsStatus || task.revision !== this.planRevision || this.failedHours.has(task.frame.hour)) {
+      return;
+    }
+    this.emitStatus(task.frame.hour, "loading");
   }
 
   private createTaskRequest(task: PrefetchTask): Promise<void> {
@@ -264,6 +293,12 @@ export class FramePrefetchEngine {
     if (outcome === "error") {
       this.failedHours.add(hour);
       this.emitStatus(hour, "error");
+      return;
+    }
+    if (this.seededTaskKeys.has(task.taskKey)) {
+      // The configure-time seed already counted this task; counting it again on the
+      // pump()'s cached fast path would double-count the hour and emit "loaded"
+      // while sibling tasks are still in flight.
       return;
     }
     const prev = this.successByHour.get(hour) || 0;
@@ -395,8 +430,15 @@ function countTasksByHour(tasks: PrefetchTask[]): Map<number, number> {
   return counts;
 }
 
-function seedSuccessByHour(tasks: PrefetchTask[]): Map<number, number> {
-  const counts = new Map<number, number>();
+// Seeded tasks are counted here exactly once; markTaskComplete skips their later
+// completions (cached fast path, or a refetch after eviction) so an hour's success
+// count holds at most one success per distinct status task.
+function seedSuccessByHour(tasks: PrefetchTask[]): {
+  successByHour: Map<number, number>;
+  seededTaskKeys: Set<string>;
+} {
+  const successByHour = new Map<number, number>();
+  const seededTaskKeys = new Set<string>();
   for (const task of tasks) {
     if (!task.affectsStatus) {
       continue;
@@ -404,9 +446,10 @@ function seedSuccessByHour(tasks: PrefetchTask[]): Map<number, number> {
     if (!GLOBAL_LOADED_CACHE_KEYS.has(task.cacheKey)) {
       continue;
     }
-    counts.set(task.frame.hour, (counts.get(task.frame.hour) || 0) + 1);
+    successByHour.set(task.frame.hour, (successByHour.get(task.frame.hour) || 0) + 1);
+    seededTaskKeys.add(task.taskKey);
   }
-  return counts;
+  return { successByHour, seededTaskKeys };
 }
 
 function buildLayerTaskKey(frame: FrameRecord, layer: LayerKey, reflectivityGate: ReflectivityGateDbz): string {

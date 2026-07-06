@@ -1,3 +1,5 @@
+import type { RenderCategoryId } from "./config/renderCategories";
+
 export type ModelKey = "gfs" | "nam" | "nam3km" | "hrrr";
 export type ViewKey = "conus" | "na";
 export type LayerKey = string;
@@ -26,6 +28,7 @@ export interface ModelDefinition {
   label: string;
   maxHour: number;
   frameStepHours?: number;
+  cycleHours?: number[];
 }
 
 export interface LayerDefinition {
@@ -86,6 +89,11 @@ export interface ParameterMetadata {
   label: string;
   unit?: string | null;
   group?: string | null;
+  // Stamped by the server catalog (getNoaaNamParameterMetadata, Phase A1):
+  // the render-panel category this product belongs to and whether the
+  // "simple" compute tier drops it ("full") or keeps it ("simple").
+  category?: RenderCategoryId | null;
+  costTier?: "simple" | "full" | null;
   thresholdNote?: string | null;
   sourceNote?: string | null;
   legendTicks?: number[];
@@ -444,6 +452,21 @@ export interface FrameRecord {
   layers: Record<string, FrameLayerRef | undefined>;
 }
 
+export interface ManifestRenderCategoryState {
+  enabled: boolean;
+  tier: "simple" | "full";
+}
+
+// Stamped ONLY by selective builds (scripts/lib/modelview-runtime.js
+// buildManifestTemplate): every one of the 7 category ids is recorded in the
+// normalized {enabled, tier} form, plus a builtAt ISO timestamp. Full/default
+// builds omit the key entirely. Booleans are tolerated as the compact wire
+// form the render action accepts for non-tiered categories.
+export interface ManifestRenderSelection {
+  categories: Partial<Record<RenderCategoryId, ManifestRenderCategoryState | boolean>>;
+  builtAt?: string;
+}
+
 export interface ModelManifest {
   schemaVersion?: number;
   model: ModelKey;
@@ -456,6 +479,7 @@ export interface ModelManifest {
   parameters?: Record<string, ParameterMetadata>;
   parameterOrder?: string[];
   source?: string;
+  renderSelection?: ManifestRenderSelection | null;
   frames: FrameRecord[];
 }
 

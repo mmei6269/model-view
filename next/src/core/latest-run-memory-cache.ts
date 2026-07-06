@@ -1,4 +1,3 @@
-import { LAYER_STACK_ORDER } from "../config/layers";
 import { MODEL_KEYS } from "../config/constants";
 import type {
   FrameRecord,
@@ -21,18 +20,25 @@ import {
   resolveSynopticVectorRequestUrl,
 } from "./artifact-client";
 import { markFramePrefetchCacheKeyLoaded } from "./frame-prefetch";
+import { subscribeLayerImageObjectUrlEvictions } from "./image-prefetch-cache";
 
 interface LatestRunWarmupPlan {
   modelKey: ModelKey;
   viewKey: ViewKey;
   manifest: ModelManifest;
   anchorHour: number;
+  activeLayers: Iterable<LayerKey>;
+  reflectivityGate: ReflectivityGateDbz;
+  synopticDetailMode: SynopticDetailMode;
 }
 
 interface LatestViewWarmupPlan {
   viewKey: ViewKey;
   anchorValidTimeIso?: string | null;
   forceRefresh?: boolean;
+  activeLayers: Iterable<LayerKey>;
+  reflectivityGate: ReflectivityGateDbz;
+  synopticDetailMode: SynopticDetailMode;
 }
 
 type MemoryWarmupTaskKind = "layer" | "vector" | "hover";
@@ -50,8 +56,6 @@ interface MemoryWarmupTask {
 }
 
 const MEMORY_WARMUP_CONCURRENCY = 24;
-const REFLECTIVITY_GATES: ReflectivityGateDbz[] = [10, 15, 20];
-const SYNOPTIC_DETAIL_MODES: SynopticDetailMode[] = ["simple", "detailed"];
 
 const startedWarmupKeys = new Set<string>();
 const completedTaskKeys = new Set<string>();
@@ -60,16 +64,21 @@ const inFlightByUrl = new Map<string, Promise<void>>();
 const queue: MemoryWarmupTask[] = [];
 let inFlight = 0;
 
+subscribeLayerImageObjectUrlEvictions((requestUrl) => {
+  completedTaskKeys.delete(`layer|${requestUrl}`);
+});
+
 export function startLatestRunMemoryWarmup(plan: LatestRunWarmupPlan): void {
   if (!isMemoryWarmupEnabled()) {
     return;
   }
-  const warmupKey = buildWarmupKey(plan);
+  const activeLayers = new Set<LayerKey>(plan.activeLayers);
+  const warmupKey = buildWarmupKey(plan, activeLayers);
   if (!warmupKey || startedWarmupKeys.has(warmupKey)) {
     return;
   }
   startedWarmupKeys.add(warmupKey);
-  const tasks = buildWarmupTasks(plan);
+  const tasks = buildWarmupTasks(plan, activeLayers);
   for (const task of tasks) {
     if (completedTaskKeys.has(task.cacheKey) || queuedTaskKeys.has(task.taskKey)) {
       continue;
@@ -100,6 +109,9 @@ export async function warmLatestViewMemoryCache(plan: LatestViewWarmupPlan): Pro
           viewKey: plan.viewKey,
           manifest,
           anchorHour,
+          activeLayers: plan.activeLayers,
+          reflectivityGate: plan.reflectivityGate,
+          synopticDetailMode: plan.synopticDetailMode,
         });
       } catch {
         // Some local builds may only have a subset of models available. Keep warming
@@ -162,37 +174,35 @@ function attachTaskToRequest(task: MemoryWarmupTask, request: Promise<void>): vo
     });
 }
 
-function buildWarmupTasks(plan: LatestRunWarmupPlan): MemoryWarmupTask[] {
+function buildWarmupTasks(plan: LatestRunWarmupPlan, activeLayers: ReadonlySet<LayerKey>): MemoryWarmupTask[] {
   const frames = [...(plan.manifest.frames || [])].sort((left, right) => left.hour - right.hour);
   const tasks: MemoryWarmupTask[] = [];
   for (const frame of frames) {
     const priority = Math.abs(frame.hour - plan.anchorHour);
 
-    for (const layer of LAYER_STACK_ORDER) {
+    for (const layer of activeLayers) {
       if (isReflectivityLayer(layer)) {
-        for (const gate of REFLECTIVITY_GATES) {
-          appendLayerTask(tasks, frame, layer, priority, gate);
-        }
+        appendLayerTask(tasks, frame, layer, priority, plan.reflectivityGate);
         continue;
       }
       appendLayerTask(tasks, frame, layer, priority);
     }
 
-    for (const mode of SYNOPTIC_DETAIL_MODES) {
+    if (activeLayers.has("synoptic")) {
+      const mode = plan.synopticDetailMode;
       const vectorKey = String(resolveSynopticVectorKey(frame, mode) || "").trim();
       const vectorUrl = String(resolveSynopticVectorRequestUrl(frame, mode) || "").trim();
-      if (!vectorKey || !vectorUrl) {
-        continue;
+      if (vectorKey && vectorUrl) {
+        tasks.push({
+          kind: "vector",
+          frame,
+          synopticDetailMode: mode,
+          urlKey: `vector:${vectorUrl}`,
+          taskKey: `vector|${frame.hour}|${mode}|${vectorUrl}`,
+          cacheKey: `vector|${vectorUrl}`,
+          priority,
+        });
       }
-      tasks.push({
-        kind: "vector",
-        frame,
-        synopticDetailMode: mode,
-        urlKey: `vector:${vectorUrl}`,
-        taskKey: `vector|${frame.hour}|${mode}|${vectorUrl}`,
-        cacheKey: `vector|${vectorUrl}`,
-        priority,
-      });
     }
 
     const hoverKey = resolveHoverGridRequestUrls(frame).join("|");
@@ -268,9 +278,10 @@ function taskKindRank(kind: MemoryWarmupTaskKind): number {
   return 2;
 }
 
-function buildWarmupKey(plan: LatestRunWarmupPlan): string {
+function buildWarmupKey(plan: LatestRunWarmupPlan, activeLayers: ReadonlySet<LayerKey>): string {
   const run = String(plan.manifest.run || "").trim();
-  if (!run || !plan.manifest.frames?.length) {
+  const layersKey = Array.from(activeLayers).sort().join(",");
+  if (!run || !plan.manifest.frames?.length || !layersKey) {
     return "";
   }
   return [
@@ -279,7 +290,10 @@ function buildWarmupKey(plan: LatestRunWarmupPlan): string {
     run,
     plan.manifest.generatedAt || "",
     String(plan.manifest.frames.length),
-    "all-artifacts-v1",
+    layersKey,
+    `g${plan.reflectivityGate}`,
+    plan.synopticDetailMode,
+    "active-layers-v1",
   ].join("|");
 }
 

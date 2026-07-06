@@ -140,6 +140,7 @@ function buildSnowRenderedArtifacts({
   decoded,
   selection,
   framePlan,
+  bounds,
   modelKey,
   width,
   height,
@@ -149,7 +150,7 @@ function buildSnowRenderedArtifacts({
   profile = null,
 }) {
   let stageStartedAt = performance.now();
-  const snowfallIn = buildSnowfallInGrids({ decoded, selection, modelKey, width, height });
+  const snowfallIn = buildSnowfallInGrids({ decoded, selection, bounds, modelKey, width, height });
   const emptyPng = createTransparentPng(width, height, pngCompressionLevel, pngFilterType);
   const layers = {};
   const hoverValueCounts = new Map();

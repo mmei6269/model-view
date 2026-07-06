@@ -1,20 +1,34 @@
 import { useEffect, useMemo } from "react";
 import { warmLatestViewMemoryCache } from "../core/latest-run-memory-cache";
-import type { ManifestUiInfo, PanelState, ValidTimeIso, ViewKey } from "../types";
+import type {
+  LayerKey,
+  ManifestUiInfo,
+  PanelState,
+  ReflectivityGateDbz,
+  SynopticDetailMode,
+  ValidTimeIso,
+  ViewKey,
+} from "../types";
 
 interface LatestViewWarmupOptions {
+  activeLayers: LayerKey[];
   anchorValidTimeIso: ValidTimeIso | null;
   manifestInfoByPanel: Record<string, ManifestUiInfo>;
   panels: PanelState[];
+  reflectivityGate: ReflectivityGateDbz;
   resolvePanelSelectedValidTime: (panelId: string) => ValidTimeIso | null;
+  synopticDetailMode: SynopticDetailMode;
   viewKey: ViewKey;
 }
 
 export function useLatestViewWarmup({
+  activeLayers,
   anchorValidTimeIso,
   manifestInfoByPanel,
   panels,
+  reflectivityGate,
   resolvePanelSelectedValidTime,
+  synopticDetailMode,
   viewKey,
 }: LatestViewWarmupOptions): boolean {
   const ready = useMemo(() => {
@@ -32,7 +46,7 @@ export function useLatestViewWarmup({
   }, [manifestInfoByPanel, panels, resolvePanelSelectedValidTime]);
 
   useEffect(() => {
-    if (!ready) {
+    if (!ready || activeLayers.length === 0) {
       return;
     }
     let cancelled = false;
@@ -41,6 +55,9 @@ export function useLatestViewWarmup({
         viewKey,
         anchorValidTimeIso,
         forceRefresh,
+        activeLayers,
+        reflectivityGate,
+        synopticDetailMode,
       }).catch(() => {
         if (cancelled) {
           return;
@@ -53,7 +70,7 @@ export function useLatestViewWarmup({
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [anchorValidTimeIso, ready, viewKey]);
+  }, [activeLayers, anchorValidTimeIso, ready, reflectivityGate, synopticDetailMode, viewKey]);
 
   return ready;
 }
