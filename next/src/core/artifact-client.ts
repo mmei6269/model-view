@@ -36,6 +36,7 @@ import {
   resolveWeatherVectorRequestUrl,
 } from "./layer-refs";
 import { buildValidTimeAxis, formatRunLabel, normalizeManifest, resolveFrameByValidTime } from "./manifest-utils";
+import { createSharedRequestMap, runSharedRequest } from "./shared-abortable-request";
 
 export {
   buildArtifactUrl,
@@ -83,15 +84,15 @@ interface ManifestFetchOptions {
 const manifestCache = new Map<string, CacheEntry>();
 const runListCache = new Map<string, RunListCacheEntry>();
 const synopticVectorPayloadCache = new Map<string, SynopticVectorPayload>();
-const synopticVectorPayloadInFlight = new Map<string, Promise<SynopticVectorPayload>>();
+const synopticVectorPayloadInFlight = createSharedRequestMap<SynopticVectorPayload>();
 const contourVectorPayloadCache = new Map<string, ContourVectorPayload>();
-const contourVectorPayloadInFlight = new Map<string, Promise<ContourVectorPayload>>();
+const contourVectorPayloadInFlight = createSharedRequestMap<ContourVectorPayload>();
 const weatherVectorPayloadCache = new Map<string, WeatherVectorPayload>();
-const weatherVectorPayloadInFlight = new Map<string, Promise<WeatherVectorPayload>>();
+const weatherVectorPayloadInFlight = createSharedRequestMap<WeatherVectorPayload>();
 const hoverGridPayloadCache = new Map<string, HoverGridPayload>();
-const hoverGridPayloadInFlight = new Map<string, Promise<HoverGridPayload>>();
+const hoverGridPayloadInFlight = createSharedRequestMap<HoverGridPayload>();
 const pointSoundingPayloadCache = new Map<string, PointSoundingPayload>();
-const pointSoundingPayloadInFlight = new Map<string, Promise<PointSoundingPayload>>();
+const pointSoundingPayloadInFlight = createSharedRequestMap<PointSoundingPayload>();
 
 export async function fetchModelManifestWithOptions(
   modelKey: ModelKey,
@@ -134,6 +135,9 @@ export async function fetchModelManifestWithOptions(
       break;
     } catch (error) {
       errors.push(`${baseUrl}: ${String(error instanceof Error ? error.message : error)}`);
+      if (isResourceLevelFailure(error)) {
+        break;
+      }
     }
   }
 
@@ -171,6 +175,9 @@ export async function fetchModelRunsWithOptions(
       return runs;
     } catch (error) {
       errors.push(`${baseUrl}: ${String(error instanceof Error ? error.message : error)}`);
+      if (isResourceLevelFailure(error)) {
+        break;
+      }
     }
   }
 
@@ -226,27 +233,16 @@ export async function fetchSynopticVectorPayload(
   if (cached) {
     return cached;
   }
-  const inFlight = synopticVectorPayloadInFlight.get(key);
-  if (inFlight) {
-    return inFlight;
-  }
-  const request = fetch(url, {
-    cache: "force-cache",
-    signal: options.signal,
-  })
-    .then(async (response) => {
+  return runSharedRequest(synopticVectorPayloadInFlight, key, options.signal, (sharedSignal) =>
+    fetch(url, { cache: "force-cache", signal: sharedSignal }).then(async (response) => {
       if (!response.ok) {
         throw new Error(`Synoptic vector request failed (${response.status}) for ${url}`);
       }
       const payload = (await response.json()) as SynopticVectorPayload;
       cacheParsedPayload(synopticVectorPayloadCache, key, payload);
       return payload;
-    })
-    .finally(() => {
-      synopticVectorPayloadInFlight.delete(key);
-    });
-  synopticVectorPayloadInFlight.set(key, request);
-  return request;
+    }),
+  );
 }
 
 export async function prefetchSynopticVectorPayload(
@@ -269,27 +265,16 @@ export async function fetchContourVectorPayload(
   if (cached) {
     return cached;
   }
-  const inFlight = contourVectorPayloadInFlight.get(url);
-  if (inFlight) {
-    return inFlight;
-  }
-  const request = fetch(url, {
-    cache: "force-cache",
-    signal: options.signal,
-  })
-    .then(async (response) => {
+  return runSharedRequest(contourVectorPayloadInFlight, url, options.signal, (sharedSignal) =>
+    fetch(url, { cache: "force-cache", signal: sharedSignal }).then(async (response) => {
       if (!response.ok) {
         throw new Error(`Contour vector request failed (${response.status}) for ${url}`);
       }
       const payload = (await response.json()) as ContourVectorPayload;
       cacheParsedPayload(contourVectorPayloadCache, url, payload);
       return payload;
-    })
-    .finally(() => {
-      contourVectorPayloadInFlight.delete(url);
-    });
-  contourVectorPayloadInFlight.set(url, request);
-  return request;
+    }),
+  );
 }
 
 export async function fetchWeatherVectorPayload(
@@ -305,27 +290,16 @@ export async function fetchWeatherVectorPayload(
   if (cached) {
     return cached;
   }
-  const inFlight = weatherVectorPayloadInFlight.get(url);
-  if (inFlight) {
-    return inFlight;
-  }
-  const request = fetch(url, {
-    cache: "force-cache",
-    signal: options.signal,
-  })
-    .then(async (response) => {
+  return runSharedRequest(weatherVectorPayloadInFlight, url, options.signal, (sharedSignal) =>
+    fetch(url, { cache: "force-cache", signal: sharedSignal }).then(async (response) => {
       if (!response.ok) {
         throw new Error(`Weather vector request failed (${response.status}) for ${url}`);
       }
       const payload = (await response.json()) as WeatherVectorPayload;
       cacheParsedPayload(weatherVectorPayloadCache, url, payload);
       return payload;
-    })
-    .finally(() => {
-      weatherVectorPayloadInFlight.delete(url);
-    });
-  weatherVectorPayloadInFlight.set(url, request);
-  return request;
+    }),
+  );
 }
 
 export async function prefetchWeatherVectorPayload(
@@ -349,21 +323,17 @@ export async function fetchHoverGridPayload(
   if (cached) {
     return cached;
   }
-  const inFlight = hoverGridPayloadInFlight.get(key);
-  if (inFlight) {
-    return inFlight;
-  }
-  const request = Promise.all(urls.map((url) => fetchSingleHoverGridPayload(url, options)))
-    .then((payloads) => {
-      const mergedPayload = mergeHoverGridPayloadObjects(payloads);
-      cacheParsedPayload(hoverGridPayloadCache, key, mergedPayload);
-      return mergedPayload;
-    })
-    .finally(() => {
-      hoverGridPayloadInFlight.delete(key);
-    });
-  hoverGridPayloadInFlight.set(key, request);
-  return request;
+  // The merged fetch is itself one consumer of each per-URL fetch, so a
+  // caller abort propagates inward only when every merged consumer is gone.
+  return runSharedRequest(hoverGridPayloadInFlight, key, options.signal, (sharedSignal) =>
+    Promise.all(urls.map((url) => fetchSingleHoverGridPayload(url, { ...options, signal: sharedSignal }))).then(
+      (payloads) => {
+        const mergedPayload = mergeHoverGridPayloadObjects(payloads);
+        cacheParsedPayload(hoverGridPayloadCache, key, mergedPayload);
+        return mergedPayload;
+      },
+    ),
+  );
 }
 
 export async function prefetchHoverGridPayload(
@@ -378,15 +348,8 @@ async function fetchSingleHoverGridPayload(url: string, options: PrefetchOptions
   if (cached) {
     return cached;
   }
-  const inFlight = hoverGridPayloadInFlight.get(url);
-  if (inFlight) {
-    return inFlight;
-  }
-  const request = fetch(url, {
-    cache: "force-cache",
-    signal: options.signal,
-  })
-    .then(async (response) => {
+  return runSharedRequest(hoverGridPayloadInFlight, url, options.signal, (sharedSignal) =>
+    fetch(url, { cache: "force-cache", signal: sharedSignal }).then(async (response) => {
       if (!response.ok) {
         throw new Error(`Hover grid request failed (${response.status}) for ${url}`);
       }
@@ -395,12 +358,8 @@ async function fetchSingleHoverGridPayload(url: string, options: PrefetchOptions
         : normalizeHoverGridPayload((await response.json()) as HoverGridPayload);
       cacheParsedPayload(hoverGridPayloadCache, url, parsedPayload);
       return parsedPayload;
-    })
-    .finally(() => {
-      hoverGridPayloadInFlight.delete(url);
-    });
-  hoverGridPayloadInFlight.set(url, request);
-  return request;
+    }),
+  );
 }
 
 function mergeHoverGridPayloadObjects(payloads: HoverGridPayload[]): HoverGridPayload {
@@ -458,12 +417,8 @@ export async function fetchPointSoundingPayload({
   if (cached) {
     return cached;
   }
-  const inFlight = pointSoundingPayloadInFlight.get(cacheKey);
-  if (inFlight) {
-    return inFlight;
-  }
-  const request = fetch(url, { cache: "no-store", signal })
-    .then(async (response) => {
+  return runSharedRequest(pointSoundingPayloadInFlight, cacheKey, signal, (sharedSignal) =>
+    fetch(url, { cache: "no-store", signal: sharedSignal }).then(async (response) => {
       if (!response.ok) {
         let reason: string;
         try {
@@ -477,12 +432,8 @@ export async function fetchPointSoundingPayload({
       const payload = (await response.json()) as PointSoundingPayload;
       cacheParsedPayload(pointSoundingPayloadCache, cacheKey, payload);
       return payload;
-    })
-    .finally(() => {
-      pointSoundingPayloadInFlight.delete(cacheKey);
-    });
-  pointSoundingPayloadInFlight.set(cacheKey, request);
-  return request;
+    }),
+  );
 }
 
 function cacheParsedPayload<T>(cache: Map<string, T>, key: string, payload: T): void {
@@ -499,6 +450,26 @@ function cacheParsedPayload<T>(cache: Map<string, T>, key: string, payload: T): 
   }
 }
 
+class HttpStatusError extends Error {
+  readonly status: number;
+
+  constructor(status: number, url: string) {
+    super(`Request failed (${status}): ${url}`);
+    this.status = status;
+  }
+}
+
+// Origin failover exists for origin-level outages: the fetch itself failing
+// (network/CORS/connection refused) or the origin erroring server-side (5xx,
+// which is also what the vite /__cf proxy returns when its target is down). A
+// 4xx means the origin is reachable and definitively lacks the resource — the
+// same request would 404 anywhere — so failing over is wrong. Worse, a success
+// on a fallback origin repoints the resolved artifact base (and with it every
+// subsequent action POST) away from the same-origin dev proxy.
+function isResourceLevelFailure(error: unknown): boolean {
+  return error instanceof HttpStatusError && error.status < 500;
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   let response: Response;
   try {
@@ -508,7 +479,7 @@ async function fetchJson<T>(url: string): Promise<T> {
     throw new Error(`Network request failed for ${url} (${reason})`, { cause: error });
   }
   if (!response.ok) {
-    throw new Error(`Request failed (${response.status}): ${url}`);
+    throw new HttpStatusError(response.status, url);
   }
   return (await response.json()) as T;
 }

@@ -1,49 +1,67 @@
-import { useCallback, useState } from "react";
-import { DEFAULT_PANEL_MODEL, MODEL_KEYS } from "../config/constants";
+import { useCallback, useEffect, useState } from "react";
+import { MODEL_KEYS } from "../config/constants";
+import {
+  DEFAULT_PANEL_LAYERS,
+  loadStoredPanelCollection,
+  storePanelCollection,
+  type StoredPanelCollection,
+} from "../config/panels";
 import type { LayerKey, ModelKey, PanelState } from "../types";
-
-const DEFAULT_PANEL_LAYERS: LayerKey[] = ["temperature"];
 
 function buildPanel(id: number, modelKey: ModelKey): PanelState {
   return { id: `panel-${id}`, modelKey, layers: [...DEFAULT_PANEL_LAYERS] };
 }
 
+type PanelCollectionState = StoredPanelCollection;
+
 export function usePanelCollection() {
-  const [panels, setPanels] = useState<PanelState[]>([buildPanel(1, DEFAULT_PANEL_MODEL)]);
-  const [panelCounter, setPanelCounter] = useState(1);
+  // Panels and the id counter live in one state object so addPanel's updater
+  // stays pure (no setState calls inside another updater). Hydrated from the
+  // persisted collection (model + layers only; runId is never restored).
+  const [state, setState] = useState<PanelCollectionState>(loadStoredPanelCollection);
+
+  useEffect(() => {
+    storePanelCollection(state);
+  }, [state]);
 
   const addPanel = useCallback((): void => {
-    setPanels((prev) => {
-      if (prev.length >= 2) {
+    setState((prev) => {
+      if (prev.panels.length >= 2) {
         return prev;
       }
-      const nextIndex = panelCounter + 1;
+      const nextIndex = prev.counter + 1;
       const modelKey = MODEL_KEYS[nextIndex % MODEL_KEYS.length];
-      setPanelCounter(nextIndex);
-      return [...prev, buildPanel(nextIndex, modelKey)];
+      return { counter: nextIndex, panels: [...prev.panels, buildPanel(nextIndex, modelKey)] };
     });
-  }, [panelCounter]);
+  }, []);
 
   const removePanel = useCallback((panelId: string): void => {
-    setPanels((prev) => {
-      if (prev.length <= 1) {
+    setState((prev) => {
+      if (prev.panels.length <= 1) {
         return prev;
       }
-      return prev.filter((panel) => panel.id !== panelId);
+      return { ...prev, panels: prev.panels.filter((panel) => panel.id !== panelId) };
     });
   }, []);
 
   const updatePanelModel = useCallback((panelId: string, modelKey: ModelKey): void => {
-    setPanels((prev) => prev.map((panel) => (panel.id === panelId ? { ...panel, modelKey, runId: null } : panel)));
+    setState((prev) => ({
+      ...prev,
+      panels: prev.panels.map((panel) => (panel.id === panelId ? { ...panel, modelKey, runId: null } : panel)),
+    }));
   }, []);
 
   const updatePanelRun = useCallback((panelId: string, runId: string | null): void => {
-    setPanels((prev) => prev.map((panel) => (panel.id === panelId ? { ...panel, runId } : panel)));
+    setState((prev) => ({
+      ...prev,
+      panels: prev.panels.map((panel) => (panel.id === panelId ? { ...panel, runId } : panel)),
+    }));
   }, []);
 
   const togglePanelLayer = useCallback((panelId: string, layer: LayerKey): void => {
-    setPanels((prev) =>
-      prev.map((panel) => {
+    setState((prev) => ({
+      ...prev,
+      panels: prev.panels.map((panel) => {
         if (panel.id !== panelId) {
           return panel;
         }
@@ -55,12 +73,12 @@ export function usePanelCollection() {
         }
         return { ...panel, layers: Array.from(next) };
       }),
-    );
+    }));
   }, []);
 
   return {
     addPanel,
-    panels,
+    panels: state.panels,
     removePanel,
     togglePanelLayer,
     updatePanelModel,

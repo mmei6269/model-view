@@ -16,7 +16,16 @@ function mergeManifestWithTemplate(existingManifest, template) {
     return template;
   }
   const existingByHour = new Map((existingManifest.frames || []).map((frame) => [Number(frame.hour), frame]));
-  const frames = template.frames.map((frame) => mergeFrameRecord(existingByHour.get(Number(frame.hour)), frame));
+  const templateHours = new Set(template.frames.map((frame) => Number(frame.hour)));
+  // Union by hour: partial-hours rebuilds must not drop frames already rendered
+  // for this run. Template frames win for rebuilt hours; hours only in the
+  // existing manifest keep their stored records (bytes, supplemental refs).
+  const frames = [
+    ...template.frames.map((frame) => mergeFrameRecord(existingByHour.get(Number(frame.hour)), frame)),
+    ...(existingManifest.frames || []).filter(
+      (frame) => frame && frame.hour != null && !templateHours.has(Number(frame.hour)),
+    ),
+  ].sort((left, right) => Number(left.hour) - Number(right.hour));
   const existingHourStatus =
     existingManifest.hourStatus && typeof existingManifest.hourStatus === "object" ? existingManifest.hourStatus : {};
   const hourStatus = {};

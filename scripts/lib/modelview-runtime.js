@@ -4,6 +4,7 @@ const path = require("path");
 
 const SHARED_CONFIG = require("../../shared/modelview-config.json");
 const SYNOPTIC_STYLE = require("../../shared/synoptic-style-v1.json");
+const { normalizeRenderSelection } = require("./noaa-beta/selection");
 
 const DEFAULT_CACHE_ROOT = path.resolve(__dirname, "../../output/noaa-beta-cache");
 const DEFAULT_ARTIFACT_PREFIX = process.env.MODELVIEW_ARTIFACT_PREFIX || "tiles";
@@ -75,6 +76,7 @@ function buildManifestTemplate({
   parameters = null,
   parameterOrder = null,
   hoverGridFormat = null,
+  renderSelection = null,
 }) {
   const model = MODEL_CONFIG[modelKey];
   const view = VIEW_CONFIG[viewKey];
@@ -111,7 +113,8 @@ function buildManifestTemplate({
   for (const frame of manifestFrames) {
     hourStatus[String(frame.hour)] = "pending";
   }
-  return {
+  const normalizedSelection = normalizeRenderSelection(renderSelection);
+  const manifest = {
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     model: modelKey,
     run: runId,
@@ -125,6 +128,15 @@ function buildManifestTemplate({
     hourStatus,
     frames: manifestFrames,
   };
+  // Additive: only stamp renderSelection for selective builds so a no-flags
+  // default manifest is byte-identical to today (no new key at all).
+  if (normalizedSelection) {
+    manifest.renderSelection = {
+      categories: normalizedSelection.categories,
+      builtAt: new Date().toISOString(),
+    };
+  }
+  return manifest;
 }
 
 function buildManifestFrame({

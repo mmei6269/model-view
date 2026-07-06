@@ -1,12 +1,20 @@
-import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useState } from "react";
+import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MODEL_CONFIG } from "../config/constants";
-import { findNearestValidTime, toEpochMs } from "../core/time";
+import { findNearestValidTime, pickInitialValidTime, toEpochMs } from "../core/time";
 import type { FrameHourStatus, ManifestUiInfo, PanelState, ResolvedFrame, TimelineMode, ValidTimeIso } from "../types";
 
-const PLAYBACK_INTERVAL_MS = 1200;
+const PLAYBACK_BASE_INTERVAL_MS = 1200;
+const PLAYBACK_LAST_FRAME_DWELL_MS = 900;
+// While holding on an undecoded frame, re-check its status this often so
+// playback resumes promptly once the frame lands.
+const PLAYBACK_HOLD_POLL_MS = 250;
+
+export type PlaybackSpeed = 0.5 | 1 | 2;
 
 interface TimelineControllerOptions {
   availableValidTimesByPanel: Record<string, ValidTimeIso[]>;
+  initialTimelineMode?: TimelineMode;
+  initialValidTimeIso?: ValidTimeIso | null;
   manifestInfoByPanel: Record<string, ManifestUiInfo>;
   panels: PanelState[];
   resolvedFrameByPanel: Record<string, ResolvedFrame | null>;
@@ -14,14 +22,18 @@ interface TimelineControllerOptions {
 
 export function useTimelineController({
   availableValidTimesByPanel,
+  initialTimelineMode = "overlap",
+  initialValidTimeIso = null,
   manifestInfoByPanel,
   panels,
   resolvedFrameByPanel,
 }: TimelineControllerOptions) {
   const [sharedSelectedValidTimeIso, setSharedSelectedValidTimeIso] = useState<ValidTimeIso | null>(null);
   const [panelSelectedValidTimes, setPanelSelectedValidTimes] = useState<Record<string, ValidTimeIso | null>>({});
-  const [timelineMode, setTimelineMode] = useState<TimelineMode>("overlap");
+  const [timelineMode, setTimelineMode] = useState<TimelineMode>(initialTimelineMode);
   const [playing, setPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState<PlaybackSpeed>(1);
+  const [skipUnloaded, setSkipUnloaded] = useState(false);
   const { effectiveTimelineTargetPanelId, setTimelineTargetPanelId, timelineTargets } = useTimelineTargetState(panels);
   const { overlapValidTimes, timelineValidTimes } = useTimelineValidTimes({
     availableValidTimesByPanel,
@@ -31,6 +43,7 @@ export function useTimelineController({
   });
 
   useSharedTimelineSelection({
+    initialValidTimeIso,
     overlapValidTimes,
     setSharedSelectedValidTimeIso,
     sharedSelectedValidTimeIso,
@@ -38,16 +51,38 @@ export function useTimelineController({
   });
   usePanelTimelineDefaults({
     availableValidTimesByPanel,
+    initialValidTimeIso,
     panels,
     setPanelSelectedValidTimes,
     timelineMode,
   });
-  useTimelinePlayback({
+  const selectedTimelineValidTimeIso =
+    timelineMode === "panel"
+      ? panelSelectedValidTimes[effectiveTimelineTargetPanelId || ""] || null
+      : sharedSelectedValidTimeIso;
+
+  const timelineStatusByValidTime = useMemo(
+    () =>
+      getTimelineStatusByValidTime({
+        effectiveTimelineTargetPanelId,
+        manifestInfoByPanel,
+        panels,
+        timelineMode,
+        timelineValidTimes,
+      }),
+    [effectiveTimelineTargetPanelId, manifestInfoByPanel, panels, timelineMode, timelineValidTimes],
+  );
+
+  const playbackHolding = useTimelinePlayback({
     effectiveTimelineTargetPanelId,
+    playbackSpeed,
     playing,
+    selectedTimelineValidTimeIso,
     setPanelSelectedValidTimes,
     setSharedSelectedValidTimeIso,
+    skipUnloaded,
     timelineMode,
+    timelineStatusByValidTime,
     timelineValidTimes,
   });
 
@@ -161,26 +196,36 @@ export function useTimelineController({
     return frame ? `F${String(frame.hour).padStart(3, "0")}` : "F---";
   }, [effectiveTimelineTargetPanelId, panels, resolvedFrameByPanel, timelineMode]);
 
-  const timelineStatusByValidTime = useMemo(
-    () =>
-      getTimelineStatusByValidTime({
-        effectiveTimelineTargetPanelId,
-        manifestInfoByPanel,
-        panels,
-        timelineMode,
-        timelineValidTimes,
-      }),
-    [effectiveTimelineTargetPanelId, manifestInfoByPanel, panels, timelineMode, timelineValidTimes],
-  );
-
-  const selectedTimelineValidTimeIso =
-    timelineMode === "panel"
-      ? panelSelectedValidTimes[effectiveTimelineTargetPanelId || ""] || null
-      : sharedSelectedValidTimeIso;
-
   const togglePlaying = useCallback((): void => {
     setPlaying((prev) => !prev);
   }, []);
+
+  const stepFrame = useCallback(
+    (direction: 1 | -1): void => {
+      if (!timelineValidTimes.length) {
+        return;
+      }
+      if (timelineMode === "panel") {
+        const panelId = effectiveTimelineTargetPanelId || panels[0]?.id || null;
+        if (!panelId) {
+          return;
+        }
+        setPanelSelectedValidTimes((prev) => {
+          const next = stepTimelineValue(prev[panelId] || null, timelineValidTimes, direction);
+          if (prev[panelId] === next) {
+            return prev;
+          }
+          return {
+            ...prev,
+            [panelId]: next,
+          };
+        });
+        return;
+      }
+      setSharedSelectedValidTimeIso((prev) => stepTimelineValue(prev, timelineValidTimes, direction));
+    },
+    [effectiveTimelineTargetPanelId, panels, timelineMode, timelineValidTimes],
+  );
 
   return {
     clearPanelSelection,
@@ -191,10 +236,16 @@ export function useTimelineController({
     handleTimelineValidTimeChange,
     latestViewWarmupAnchorValidTimeIso,
     panelSelectedValidTimes,
+    playbackHolding,
+    playbackSpeed,
     playing,
     resolvePanelSelectedValidTime,
     selectedTimelineValidTimeIso,
+    setPlaybackSpeed,
+    setSkipUnloaded,
     setTimelineTargetPanelId,
+    skipUnloaded,
+    stepFrame,
     timelineMode,
     timelineStatusByValidTime,
     timelineTargets,
@@ -272,11 +323,13 @@ function useTimelineValidTimes({
 }
 
 function useSharedTimelineSelection({
+  initialValidTimeIso,
   overlapValidTimes,
   setSharedSelectedValidTimeIso,
   sharedSelectedValidTimeIso,
   timelineMode,
 }: {
+  initialValidTimeIso: ValidTimeIso | null;
   overlapValidTimes: ValidTimeIso[];
   setSharedSelectedValidTimeIso: Dispatch<SetStateAction<ValidTimeIso | null>>;
   sharedSelectedValidTimeIso: ValidTimeIso | null;
@@ -288,7 +341,11 @@ function useSharedTimelineSelection({
     }
 
     if (!overlapValidTimes.length) {
-      setSharedSelectedValidTimeIso(null);
+      // Transient empty window (a model/run switch clears panel data before the
+      // new manifest lands): keep the last real selection instead of nulling it,
+      // so the nearest-to-current-selection mapping below wins when times return.
+      // Nulling here would send a mid-session switch through the no-prior branch
+      // (nearest-to-now) and jump the user to a far-off frame.
       return;
     }
     if (sharedSelectedValidTimeIso && overlapValidTimes.includes(sharedSelectedValidTimeIso)) {
@@ -298,17 +355,19 @@ function useSharedTimelineSelection({
       setSharedSelectedValidTimeIso(findNearestValidTime(sharedSelectedValidTimeIso, overlapValidTimes));
       return;
     }
-    setSharedSelectedValidTimeIso(overlapValidTimes[0]);
-  }, [overlapValidTimes, setSharedSelectedValidTimeIso, sharedSelectedValidTimeIso, timelineMode]);
+    setSharedSelectedValidTimeIso(pickInitialValidTime(initialValidTimeIso, overlapValidTimes));
+  }, [initialValidTimeIso, overlapValidTimes, setSharedSelectedValidTimeIso, sharedSelectedValidTimeIso, timelineMode]);
 }
 
 function usePanelTimelineDefaults({
   availableValidTimesByPanel,
+  initialValidTimeIso,
   panels,
   setPanelSelectedValidTimes,
   timelineMode,
 }: {
   availableValidTimesByPanel: Record<string, ValidTimeIso[]>;
+  initialValidTimeIso: ValidTimeIso | null;
   panels: PanelState[];
   setPanelSelectedValidTimes: Dispatch<SetStateAction<Record<string, ValidTimeIso | null>>>;
   timelineMode: TimelineMode;
@@ -324,56 +383,123 @@ function usePanelTimelineDefaults({
       let changed = false;
       const next = { ...prev };
       for (const panel of panels) {
-        changed = syncPanelDefaultSelection(next, panel, availableValidTimesByPanel[panel.id] || []) || changed;
+        changed =
+          syncPanelDefaultSelection(next, panel, availableValidTimesByPanel[panel.id] || [], initialValidTimeIso) ||
+          changed;
       }
       return changed ? next : prev;
     });
-  }, [availableValidTimesByPanel, panels, setPanelSelectedValidTimes, timelineMode]);
+  }, [availableValidTimesByPanel, initialValidTimeIso, panels, setPanelSelectedValidTimes, timelineMode]);
 }
 
 function useTimelinePlayback({
   effectiveTimelineTargetPanelId,
+  playbackSpeed,
   playing,
+  selectedTimelineValidTimeIso,
   setPanelSelectedValidTimes,
   setSharedSelectedValidTimeIso,
+  skipUnloaded,
   timelineMode,
+  timelineStatusByValidTime,
   timelineValidTimes,
 }: {
   effectiveTimelineTargetPanelId: string | null;
+  playbackSpeed: PlaybackSpeed;
   playing: boolean;
+  selectedTimelineValidTimeIso: ValidTimeIso | null;
   setPanelSelectedValidTimes: Dispatch<SetStateAction<Record<string, ValidTimeIso | null>>>;
   setSharedSelectedValidTimeIso: Dispatch<SetStateAction<ValidTimeIso | null>>;
+  skipUnloaded: boolean;
   timelineMode: TimelineMode;
+  timelineStatusByValidTime: Partial<Record<ValidTimeIso, FrameHourStatus>>;
   timelineValidTimes: ValidTimeIso[];
-}) {
+}): boolean {
+  const [playbackHolding, setPlaybackHolding] = useState(false);
+  // Tracks the currently displayed frame without restarting the timer loop on
+  // every advance; the loop reads it to decide whether the next delay dwells.
+  const selectedValidTimeRef = useRef<ValidTimeIso | null>(selectedTimelineValidTimeIso);
+  selectedValidTimeRef.current = selectedTimelineValidTimeIso;
+  // Frame statuses change on every prefetch landing; read them through a ref
+  // so the timer loop sees fresh statuses without restarting on each change.
+  const statusByValidTimeRef = useRef(timelineStatusByValidTime);
+  statusByValidTimeRef.current = timelineStatusByValidTime;
+
   useEffect(() => {
     if (!playing || timelineValidTimes.length <= 1) {
+      // Not running (paused, or nothing to animate): clear any hold indicator.
+      setPlaybackHolding(false);
       return;
     }
-    const timer = window.setInterval(() => {
+    if (skipUnloaded) {
+      // Skip mode never holds; clear any indicator left over from a hold that
+      // was in progress when the toggle flipped.
+      setPlaybackHolding(false);
+    }
+    const lastValidTime = timelineValidTimes[timelineValidTimes.length - 1];
+    const delayFor = (displayed: ValidTimeIso | null): number => {
+      const dwell = displayed === lastValidTime ? PLAYBACK_LAST_FRAME_DWELL_MS : 0;
+      return (PLAYBACK_BASE_INTERVAL_MS + dwell) / playbackSpeed;
+    };
+    const applySelection = (next: ValidTimeIso) => {
       if (timelineMode === "panel" && effectiveTimelineTargetPanelId) {
-        setPanelSelectedValidTimes((prev) =>
-          advancePanelSelection(prev, effectiveTimelineTargetPanelId, timelineValidTimes),
-        );
+        setPanelSelectedValidTimes((prev) => withPanelSelection(prev, effectiveTimelineTargetPanelId, next));
+      } else {
+        setSharedSelectedValidTimeIso(next);
+      }
+    };
+    let timer = 0;
+    let heldForDecode = false;
+    const tick = () => {
+      // Read the displayed frame from the ref (fresh even after scrubbing or
+      // stepping mid-playback) so delays and holds track what is on screen.
+      const current = selectedValidTimeRef.current;
+      const currentStatus = current ? statusByValidTimeRef.current[current] : undefined;
+      if (!skipUnloaded && (currentStatus === "loading" || currentStatus === "pending")) {
+        // Hold in place until the frame decodes instead of advancing past it
+        // while the map still shows the previous frame's stale imagery.
+        // "error"/"unavailable" frames advance normally — they will never
+        // decode, so holding on them would stall playback forever.
+        heldForDecode = true;
+        setPlaybackHolding(true);
+        timer = window.setTimeout(tick, PLAYBACK_HOLD_POLL_MS);
         return;
       }
-      setSharedSelectedValidTimeIso((prev) => advanceTimelineValue(prev, timelineValidTimes));
-    }, PLAYBACK_INTERVAL_MS);
-    return () => window.clearInterval(timer);
+      setPlaybackHolding(false);
+      if (heldForDecode) {
+        // The held frame just decoded; give it a normal on-screen interval
+        // before advancing so the wait actually shows the frame.
+        heldForDecode = false;
+        timer = window.setTimeout(tick, delayFor(current));
+        return;
+      }
+      const next = skipUnloaded
+        ? nextLoadedValidTime(current, timelineValidTimes, statusByValidTimeRef.current).value
+        : advanceTimelineValue(current, timelineValidTimes);
+      applySelection(next);
+      timer = window.setTimeout(tick, delayFor(next));
+    };
+    timer = window.setTimeout(tick, delayFor(selectedValidTimeRef.current));
+    return () => window.clearTimeout(timer);
   }, [
     effectiveTimelineTargetPanelId,
+    playbackSpeed,
     playing,
     setPanelSelectedValidTimes,
     setSharedSelectedValidTimeIso,
+    skipUnloaded,
     timelineMode,
     timelineValidTimes,
   ]);
+
+  return playbackHolding;
 }
 
 function syncPanelDefaultSelection(
   selections: Record<string, ValidTimeIso | null>,
   panel: PanelState,
   available: ValidTimeIso[],
+  initialValidTimeIso: ValidTimeIso | null,
 ): boolean {
   if (!available.length) {
     if (selections[panel.id] !== null) {
@@ -386,16 +512,17 @@ function syncPanelDefaultSelection(
   if (current && available.includes(current)) {
     return false;
   }
-  selections[panel.id] = current ? findNearestValidTime(current, available) : available[0];
+  selections[panel.id] = current
+    ? findNearestValidTime(current, available)
+    : pickInitialValidTime(initialValidTimeIso, available);
   return true;
 }
 
-function advancePanelSelection(
+function withPanelSelection(
   previous: Record<string, ValidTimeIso | null>,
   panelId: string,
-  timelineValidTimes: ValidTimeIso[],
+  next: ValidTimeIso,
 ): Record<string, ValidTimeIso | null> {
-  const next = advanceTimelineValue(previous[panelId] || null, timelineValidTimes);
   if (previous[panelId] === next) {
     return previous;
   }
@@ -405,10 +532,40 @@ function advancePanelSelection(
   };
 }
 
+// Walks from `current` to the next "loaded" frame (wrapping, bounded to one
+// full loop) so skip-unloaded playback never lands on an undecoded frame. If
+// no frame is loaded it falls back to the plain advance result.
+function nextLoadedValidTime(
+  current: ValidTimeIso | null,
+  timelineValidTimes: ValidTimeIso[],
+  statusByValidTime: Partial<Record<ValidTimeIso, FrameHourStatus>>,
+  direction: 1 | -1 = 1,
+): { value: ValidTimeIso; holding: boolean } {
+  let candidate = current;
+  for (let step = 0; step < timelineValidTimes.length; step += 1) {
+    candidate = stepTimelineValue(candidate, timelineValidTimes, direction);
+    if (statusByValidTime[candidate] === "loaded") {
+      return { holding: false, value: candidate };
+    }
+  }
+  return { holding: false, value: advanceTimelineValue(current, timelineValidTimes) };
+}
+
 function advanceTimelineValue(current: ValidTimeIso | null, timelineValidTimes: ValidTimeIso[]): ValidTimeIso {
   const active = current && timelineValidTimes.includes(current) ? current : timelineValidTimes[0];
   const index = timelineValidTimes.indexOf(active);
   return timelineValidTimes[(index + 1) % timelineValidTimes.length];
+}
+
+function stepTimelineValue(
+  current: ValidTimeIso | null,
+  timelineValidTimes: ValidTimeIso[],
+  direction: 1 | -1,
+): ValidTimeIso {
+  const active = current && timelineValidTimes.includes(current) ? current : timelineValidTimes[0];
+  const index = timelineValidTimes.indexOf(active);
+  const length = timelineValidTimes.length;
+  return timelineValidTimes[(index + direction + length) % length];
 }
 
 function getOverlapValidTimes(

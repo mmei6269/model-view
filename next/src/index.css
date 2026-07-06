@@ -11,6 +11,28 @@
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+/* Glass for anchored popovers (Display/Render menus). backdrop-filter forces
+   the element onto its own composited layer, and these popovers anchor at
+   fractional pixel offsets (button-text-width dependent), so any layer
+   re-raster (hover repaint + the global transform transitions) resamples the
+   glyphs → intermittently fuzzy text. Painting the glass on a text-free
+   ::before keeps the text in the normal paint path, which cannot blur.
+   Host element must be positioned, create a stacking context (z-*), and carry
+   `rounded-lg border border-transparent` so geometry matches the drawn ring. */
+@utility glass-popover {
+  &::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    z-index: -1;
+    border-radius: inherit;
+    border: 1px solid rgb(255 255 255 / 0.08);
+    background-color: oklch(12.9% 0.042 264.695 / 90%); /* = bg-slate-950/90 */
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+  }
+}
+
 :root {
   color-scheme: dark;
 }

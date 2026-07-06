@@ -48,6 +48,11 @@ function frame(model, hour) {
         bytes: ONE_BY_ONE_BYTES.length,
         contentType: "image/png",
       },
+      snow10to1: {
+        key: `fixtures/${model}/full-memory-cache/${padded}/snow10to1.png`,
+        bytes: ONE_BY_ONE_BYTES.length,
+        contentType: "image/png",
+      },
       synoptic: {
         key: `fixtures/${model}/full-memory-cache/${padded}/synoptic.png`,
         bytes: ONE_BY_ONE_BYTES.length,
@@ -79,30 +84,7 @@ function frame(model, hour) {
   };
 }
 
-function expectedFixturePaths() {
-  const paths = [];
-  for (const model of MODELS) {
-    for (const hour of [0, 3]) {
-      const padded = String(hour).padStart(3, "0");
-      for (const name of [
-        "temperature.png",
-        "wind.png",
-        "precip.png",
-        "synoptic.png",
-        "reflectivity-15.png",
-        "reflectivity-20.png",
-        "synoptic-simple.json",
-        "synoptic-detailed.json",
-        "hover-grid.json.gz",
-      ]) {
-        paths.push(`/__cf/fixtures/${model}/full-memory-cache/${padded}/${name}`);
-      }
-    }
-  }
-  return paths.sort();
-}
-
-test("latest view memory warmup fetches every model and makes model switching instant", async ({ page }) => {
+async function routeWarmupFixtures(page) {
   const fixtureRequests = new Set();
   const fixtureRequestCounts = new Map();
 
@@ -171,6 +153,29 @@ test("latest view memory warmup fetches every model and makes model switching in
     });
   });
 
+  return { fixtureRequests, fixtureRequestCounts };
+}
+
+function expectedFixturePaths() {
+  // Warmup is scoped to the panels' active layers (temperature + synoptic by default),
+  // the current gate, and the current synoptic detail mode — not the full cross-product.
+  const paths = [];
+  for (const model of MODELS) {
+    for (const hour of [0, 3]) {
+      const padded = String(hour).padStart(3, "0");
+      for (const name of ["temperature.png", "synoptic.png", "synoptic-simple.json", "hover-grid.json.gz"]) {
+        paths.push(`/__cf/fixtures/${model}/full-memory-cache/${padded}/${name}`);
+      }
+    }
+  }
+  return paths.sort();
+}
+
+test("latest view memory warmup covers active layers on every model and makes model switching instant", async ({
+  page,
+}) => {
+  const { fixtureRequests, fixtureRequestCounts } = await routeWarmupFixtures(page);
+
   await page.goto("/");
   await expect(page.locator("article").first().getByText("Ready")).toBeVisible();
 
@@ -184,4 +189,31 @@ test("latest view memory warmup fetches every model and makes model switching in
   await expect(page.getByText("Loaded 2/2")).toBeVisible({ timeout: 1_000 });
   await page.waitForTimeout(300);
   expect(fixtureRequestCounts.get(hrrrTemperaturePath)).toBe(hrrrTemperatureHitsBeforeSwitch);
+});
+
+test("selecting a snow layer warms it across every model", async ({ page }) => {
+  const { fixtureRequests } = await routeWarmupFixtures(page);
+
+  await page.goto("/");
+  const panel = page.locator("article").first();
+  await expect(panel.getByText("Ready")).toBeVisible();
+  await expect.poll(() => Array.from(fixtureRequests).sort(), { timeout: 10_000 }).toEqual(expectedFixturePaths());
+
+  await panel.getByRole("button", { name: /Parameters/ }).click();
+  const snowCheckbox = panel.getByRole("checkbox", { name: /10:1 Snow/ });
+  await snowCheckbox.focus();
+  await page.keyboard.press("Space");
+  await expect(snowCheckbox).toBeChecked();
+
+  const expectedSnowPaths = [];
+  for (const model of MODELS) {
+    for (const hour of [0, 3]) {
+      expectedSnowPaths.push(
+        `/__cf/fixtures/${model}/full-memory-cache/${String(hour).padStart(3, "0")}/snow10to1.png`,
+      );
+    }
+  }
+  await expect
+    .poll(() => expectedSnowPaths.filter((path) => fixtureRequests.has(path)).length, { timeout: 10_000 })
+    .toBe(expectedSnowPaths.length);
 });

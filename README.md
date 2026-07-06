@@ -34,6 +34,8 @@ Use `/Users/micha/Development/model-view/plan.md` as the AI session mental map a
 
 ## Quick Start
 
+Prerequisite: install `wgrib2` and put it on `PATH`, or set `WGRIB2=/absolute/path/to/wgrib2` in `.env` — NOAA artifact builds require it. Builds also fall back to a local `output/noaa-beta-tools/bin/wgrib2` install when present.
+
 ```bash
 npm install
 npm run install:browsers
@@ -49,6 +51,15 @@ Default local runtime behavior:
 - uses NOAA S3 byte-range reads from `.idx` inventories during builds
 - supports `gfs`, `nam`, `nam3km`, and `hrrr`
 - does not render on page request; run a build first when manifests are missing
+
+### Daily Flow
+
+```bash
+npm run noaa:update
+npm run cache:prune
+```
+
+`npm run noaa:update` resolves the latest available run for each model, builds only the missing frames for the full forecast horizon, then prunes stale runs automatically (pass `--no-prune` to skip the prune step). `npm run cache:prune` also runs standalone: it keeps the newest 4 rendered runs per model, keeps only the latest run's raw GRIB inputs, and enforces the optional `MODELVIEW_CACHE_BUDGET_GB` ceiling by deleting the oldest prunable runs first — the newest run per model is never deleted.
 
 Useful local commands:
 

@@ -16,6 +16,7 @@ interface UsePanelChromeDataArgs {
   effectiveHourStatus: Record<number, FrameHourStatus>;
   frame: FrameRecord | null;
   frameByHour: Map<number, FrameRecord>;
+  hasRuns: boolean;
   manifestState: ManifestStateLike;
   plannedHours: number[];
   selectedLayers: Set<LayerKey>;
@@ -27,6 +28,7 @@ export function usePanelChromeData({
   effectiveHourStatus,
   frame,
   frameByHour,
+  hasRuns,
   manifestState,
   plannedHours,
   selectedLayers,
@@ -57,13 +59,22 @@ export function usePanelChromeData({
     return options;
   }, [manifestState.manifest, selectedLayers]);
   const hasAnyLayer = activeLayers.size > 0;
+  // Empty-cache onboarding: the manifest loaded cleanly but holds zero frames
+  // and the run list confirmed there are no runs at all — a fresh checkout, not
+  // a transient failure (loading and error states are handled above/elsewhere).
+  const isEmptyCache =
+    !hasRuns && !manifestState.error && manifestState.manifest !== null && manifestState.manifest.frames.length === 0;
   const emptyMessage = !hasAnyLayer
     ? "No layers selected"
     : manifestState.loading
       ? "Loading manifest..."
-      : !frame
-        ? "Frame unavailable for selected valid time"
-        : null;
+      : manifestState.error && !manifestState.manifest
+        ? "Manifest unavailable"
+        : isEmptyCache
+          ? "No runs built yet — run npm run noaa:update"
+          : !frame
+            ? "Frame unavailable for selected valid time"
+            : null;
   const frameOptions = useMemo<PanelFrameOption[]>(
     () =>
       plannedHours.map((hour) => {

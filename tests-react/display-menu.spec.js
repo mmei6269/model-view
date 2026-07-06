@@ -207,3 +207,88 @@ test("Display auto mode hides custom state borders at high zoom while reference 
     .poll(async () => Number(await page.$eval(statePath, (element) => element.getAttribute("stroke-opacity") || "0")))
     .toBeGreaterThan(0);
 });
+
+async function toggleCheckbox(page, checkbox, checked) {
+  if ((await checkbox.isChecked()) === checked) {
+    return;
+  }
+  await checkbox.focus();
+  await page.keyboard.press("Space");
+  if (checked) {
+    await expect(checkbox).toBeChecked();
+  } else {
+    await expect(checkbox).not.toBeChecked();
+  }
+}
+
+function buildSnowOrderingManifest() {
+  return {
+    schemaVersion: 4,
+    model: "gfs",
+    run: "20260423-1200Z",
+    view: "conus",
+    generatedAt: "2026-04-23T12:10:00Z",
+    referenceTime: "2026-04-23T12:00:00Z",
+    openDataModel: "noaa-gfs-pgrb2-0p25",
+    hourStatus: { 0: "loaded" },
+    parameterOrder: ["temperature", "snow10to1", "reflectivityComposite"],
+    parameters: {
+      snow10to1: {
+        key: "snow10to1",
+        label: "10:1 Snow",
+        unit: "in",
+        group: "Winter / Snow & Ice",
+        legendTicks: [1, 6, 12, 24, 48],
+        legendStops: [
+          [0, [40, 90, 140]],
+          [1, [220, 80, 160]],
+        ],
+      },
+    },
+    frames: [
+      {
+        hour: 0,
+        validHourKey: "2026-04-23T12:00:00Z",
+        bounds: { north: 53, south: 21, west: -129, east: -63 },
+        cols: 1600,
+        rows: 980,
+        layers: {
+          temperature: { key: "", bytes: 120, contentType: "image/png", url: ONE_BY_ONE },
+          snow10to1: { key: "", bytes: 120, contentType: "image/png", url: ONE_BY_ONE },
+          reflectivityComposite: { key: "", bytes: 120, contentType: "image/png", url: ONE_BY_ONE },
+        },
+      },
+    ],
+  };
+}
+
+test("snow layers follow the shared config stack order ahead of radar", async ({ page }) => {
+  await page.route("**/__cf/manifests/gfs/latest.json**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(latestPointer("gfs", "manifests/gfs/snow-order.json")),
+    });
+  });
+  await page.route("**/__cf/manifests/gfs/snow-order.json**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(buildSnowOrderingManifest()),
+    });
+  });
+
+  await page.goto("/");
+  const panel = page.locator("article").first();
+  await expect(panel.getByText("Ready")).toBeVisible();
+
+  await panel.getByRole("button", { name: /Parameters/ }).click();
+  await toggleCheckbox(page, panel.getByRole("checkbox", { name: /10:1 Snow/ }), true);
+  await toggleCheckbox(page, panel.getByRole("checkbox", { name: /Composite Reflectivity/ }), true);
+  await toggleCheckbox(page, panel.getByRole("checkbox", { name: /Temp/ }).first(), false);
+
+  // Legend cards render in getLayerStackOrder order; shared config puts snow before radar.
+  await expect
+    .poll(async () => panel.locator(".z-\\[510\\] span.font-medium").allTextContents(), { timeout: 5_000 })
+    .toEqual(["10:1 Snow (in)", "Composite Reflectivity (dBZ)"]);
+});

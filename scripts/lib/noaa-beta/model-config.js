@@ -18,6 +18,10 @@ const NOAA_BETA_MODEL_CONFIG = Object.freeze({
     baseUrl: NOAA_GFS_BASE_URL,
     productKey: "pgrb2-0p25",
     cycleHours: [0, 6, 12, 18],
+    forecastHourCadence: Object.freeze([
+      Object.freeze({ maxHour: 120, stepHours: 1 }),
+      Object.freeze({ maxHour: 384, stepHours: 3 }),
+    ]),
     buildUrl: ({ baseUrl, date, cycle, hour }) => {
       const normalizedBase = normalizeBaseUrl(baseUrl || NOAA_GFS_BASE_URL);
       return `${normalizedBase}/gfs.${date}/${cycle}/atmos/gfs.t${cycle}z.pgrb2.0p25.f${padHour(hour)}`;
@@ -30,6 +34,10 @@ const NOAA_BETA_MODEL_CONFIG = Object.freeze({
     baseUrl: NOAA_NAM_BASE_URL,
     productKey: "awphys",
     cycleHours: [0, 6, 12, 18],
+    forecastHourCadence: Object.freeze([
+      Object.freeze({ maxHour: 36, stepHours: 1 }),
+      Object.freeze({ maxHour: 84, stepHours: 3 }),
+    ]),
     buildUrl: ({ baseUrl, date, cycle, hour }) => {
       const normalizedBase = normalizeBaseUrl(baseUrl || NOAA_NAM_BASE_URL);
       return `${normalizedBase}/nam.${date}/nam.t${cycle}z.awphys${padTwoDigitHour(hour)}.tm00.grib2`;
@@ -42,6 +50,7 @@ const NOAA_BETA_MODEL_CONFIG = Object.freeze({
     baseUrl: NOAA_NAM_BASE_URL,
     productKey: "conusnest-hires",
     cycleHours: [0, 6, 12, 18],
+    forecastHourCadence: Object.freeze([Object.freeze({ maxHour: 60, stepHours: 1 })]),
     buildUrl: ({ baseUrl, date, cycle, hour }) => {
       const normalizedBase = normalizeBaseUrl(baseUrl || NOAA_NAM_BASE_URL);
       return `${normalizedBase}/nam.${date}/nam.t${cycle}z.conusnest.hiresf${padTwoDigitHour(hour)}.tm00.grib2`;
@@ -54,6 +63,7 @@ const NOAA_BETA_MODEL_CONFIG = Object.freeze({
     baseUrl: NOAA_HRRR_BASE_URL,
     productKey: "wrfprs",
     cycleHours: Array.from({ length: 24 }, (_, hour) => hour),
+    forecastHourCadence: Object.freeze([Object.freeze({ maxHour: 48, stepHours: 1 })]),
     buildUrl: ({ baseUrl, date, cycle, hour }) => {
       const normalizedBase = normalizeBaseUrl(baseUrl || NOAA_HRRR_BASE_URL);
       return `${normalizedBase}/hrrr.${date}/conus/hrrr.t${cycle}z.wrfprsf${padTwoDigitHour(hour)}.grib2`;

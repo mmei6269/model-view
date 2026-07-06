@@ -5,7 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 
 const ROOT = path.resolve(__dirname, "..");
-const DEFAULT_OUTPUT_DIR = path.join(ROOT, "shared");
+const DEFAULT_OUTPUT_DIR = path.join(ROOT, "shared", "public-palettes");
 
 async function main() {
   const outputDir = getOutputDir();

@@ -261,7 +261,9 @@ test("model switch preserves nearest valid time", async ({ page }) => {
     });
   });
 
-  await page.goto("/");
+  // Pin the starting frame via ?hour= — the default pick is nearest-to-now,
+  // and this test is about the switch mapping, not the initial default.
+  await page.goto("/?hour=2026-02-14T02:00:00Z");
   const panel = page.locator("article").first();
   await expect(panel.locator("footer")).toContainText("Valid 2026-02-14 02z");
 

@@ -3,10 +3,14 @@ interface ImagePrefetchOptions {
   signal?: AbortSignal;
 }
 
-const IMAGE_OBJECT_URL_CACHE_LIMIT_BYTES = 32 * 1024 * 1024 * 1024;
+// Budgets are configured in MB; defaults per spec P1.12: 2 GiB object-URL blobs, 4 GiB decoded bitmaps.
+let imageObjectUrlCacheLimitBytes = resolveCacheLimitBytes(
+  import.meta.env.VITE_IMAGE_OBJECT_URL_CACHE_LIMIT_MB,
+  2 * 1024,
+);
 const DECODED_IMAGE_CACHE_LIMIT_BYTES = resolveCacheLimitBytes(
   import.meta.env.VITE_DECODED_IMAGE_CACHE_LIMIT_MB,
-  64 * 1024,
+  4 * 1024,
 );
 
 const layerImageObjectUrlCache = new Map<string, { objectUrl: string; bytes: number }>();
@@ -18,6 +22,22 @@ function resolveCacheLimitBytes(value: unknown, fallbackMb: number): number {
   const mb = Number(value);
   const normalizedMb = Number.isFinite(mb) && mb > 0 ? mb : fallbackMb;
   return Math.round(normalizedMb * 1024 * 1024);
+}
+
+type LayerImageEvictionListener = (requestUrl: string) => void;
+const layerImageEvictionListeners = new Set<LayerImageEvictionListener>();
+
+export function subscribeLayerImageObjectUrlEvictions(listener: LayerImageEvictionListener): () => void {
+  layerImageEvictionListeners.add(listener);
+  return () => {
+    layerImageEvictionListeners.delete(listener);
+  };
+}
+
+function notifyLayerImageObjectUrlEvicted(requestUrl: string): void {
+  for (const listener of layerImageEvictionListeners) {
+    listener(requestUrl);
+  }
 }
 
 export async function preloadImage(url: string, options: ImagePrefetchOptions = {}): Promise<void> {
@@ -70,6 +90,7 @@ export function getCachedLayerImageObjectUrl(requestUrl: string): string | null 
 }
 
 export function clearLayerImageObjectUrlCache(): void {
+  const evictedKeys = Array.from(layerImageObjectUrlCache.keys());
   for (const [, entry] of layerImageObjectUrlCache.entries()) {
     URL.revokeObjectURL(entry.objectUrl);
   }
@@ -77,6 +98,9 @@ export function clearLayerImageObjectUrlCache(): void {
   layerImageObjectUrlCacheBytes = 0;
   decodedLayerImageCache.clear();
   decodedLayerImageCacheBytes = 0;
+  for (const key of evictedKeys) {
+    notifyLayerImageObjectUrlEvicted(key);
+  }
 }
 
 async function fetchImageBlob(url: string, signal?: AbortSignal): Promise<Blob> {
@@ -187,7 +211,7 @@ function cacheLayerImageObjectUrl(requestUrl: string, objectUrl: string, bytes: 
 }
 
 function enforceLayerImageObjectUrlBudget(): void {
-  while (layerImageObjectUrlCacheBytes > IMAGE_OBJECT_URL_CACHE_LIMIT_BYTES && layerImageObjectUrlCache.size > 0) {
+  while (layerImageObjectUrlCacheBytes > imageObjectUrlCacheLimitBytes && layerImageObjectUrlCache.size > 0) {
     const oldestKey = layerImageObjectUrlCache.keys().next().value;
     if (!oldestKey) {
       break;
@@ -200,6 +224,7 @@ function enforceLayerImageObjectUrlBudget(): void {
     layerImageObjectUrlCacheBytes = Math.max(0, layerImageObjectUrlCacheBytes - oldest.bytes);
     URL.revokeObjectURL(oldest.objectUrl);
     evictDecodedLayerImage(oldestKey);
+    notifyLayerImageObjectUrlEvicted(oldestKey);
   }
 }
 
@@ -272,4 +297,34 @@ function isAbortLikeError(error: unknown): boolean {
     (typeof error === "object" && error !== null ? (error as { message?: unknown }).message : error) || "",
   );
   return /abort(ed|error)?/i.test(message);
+}
+
+interface ImagePrefetchCacheDebugHooks {
+  getStats(): {
+    decodedBytes: number;
+    decodedEntries: number;
+    decodedLimitBytes: number;
+    objectUrlBytes: number;
+    objectUrlEntries: number;
+    objectUrlLimitBytes: number;
+  };
+  setObjectUrlLimitBytes(bytes: number): void;
+}
+
+// Dev-only introspection used by the Playwright cache-budget specs.
+if (import.meta.env.DEV && typeof window !== "undefined") {
+  (window as Window & { __wxImagePrefetchCache?: ImagePrefetchCacheDebugHooks }).__wxImagePrefetchCache = {
+    getStats: () => ({
+      decodedBytes: decodedLayerImageCacheBytes,
+      decodedEntries: decodedLayerImageCache.size,
+      decodedLimitBytes: DECODED_IMAGE_CACHE_LIMIT_BYTES,
+      objectUrlBytes: layerImageObjectUrlCacheBytes,
+      objectUrlEntries: layerImageObjectUrlCache.size,
+      objectUrlLimitBytes: imageObjectUrlCacheLimitBytes,
+    }),
+    setObjectUrlLimitBytes: (bytes: number) => {
+      imageObjectUrlCacheLimitBytes = Math.max(0, Math.round(Number(bytes) || 0));
+      enforceLayerImageObjectUrlBudget();
+    },
+  };
 }

@@ -170,12 +170,15 @@ function buildBrowserHourStatus(
       continue;
     }
     const cachedStatus = getCachedFramePrefetchState(frameEntry, activeLayers, reflectivityGate, synopticDetailMode);
-    if (prefetchByHour[hour] === "loaded" || cachedStatus === "loaded") {
+    // Cache state wins over engine history so evicted frames drop back out of "loaded".
+    if (cachedStatus === "loaded") {
       out[hour] = "loaded";
     } else if (prefetchByHour[hour] === "error") {
       out[hour] = "error";
-    } else {
+    } else if (prefetchByHour[hour] === "loading") {
       out[hour] = "loading";
+    } else {
+      out[hour] = "pending";
     }
   }
   return out;

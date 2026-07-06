@@ -3,7 +3,12 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { NOAA_NAM_PARAMETER_CATALOG, SNOW_PROFILE_LEVELS, SUPPORT_SELECTORS } = require("../noaa-nam-parameter-catalog");
+const {
+  NOAA_NAM_PARAMETER_CATALOG,
+  RENDER_CATEGORY_IDS,
+  SNOW_PROFILE_LEVELS,
+  SUPPORT_SELECTORS,
+} = require("../noaa-nam-parameter-catalog");
 const { MPS_TO_MPH } = require("./util");
 const { PROFILE_SURFACE_DECODE_KEYS, profileDecodeKey, standardProfileDecodeKey } = require("./profile-access");
 const {
@@ -131,18 +136,70 @@ const PROFILE_SURFACE_SELECTORS = Object.freeze({
   VGRD: CURRENT_UI_SELECTORS.windV10m,
 });
 
-function filterCatalogForRenderMode(catalog, renderMode) {
+// A nullish selection is the "render everything at full tier" sentinel: the
+// filter must return exactly the pre-selection per-mode list so a no-flags
+// build stays byte-identical to today (spec exactness constraint).
+function normalizeRenderSelection(selection) {
+  if (
+    !selection ||
+    typeof selection !== "object" ||
+    !selection.categories ||
+    typeof selection.categories !== "object"
+  ) {
+    return null;
+  }
+  const categories = {};
+  for (const id of RENDER_CATEGORY_IDS) {
+    const raw = selection.categories[id];
+    if (raw === true) {
+      categories[id] = { enabled: true, tier: "full" };
+    } else if (raw === false) {
+      categories[id] = { enabled: false, tier: "full" };
+    } else if (raw == null) {
+      categories[id] = { enabled: true, tier: "full" };
+    } else if (typeof raw === "object") {
+      const tier = raw.tier === "simple" ? "simple" : "full";
+      categories[id] = { enabled: raw.enabled !== false, tier };
+    } else {
+      categories[id] = { enabled: true, tier: "full" };
+    }
+  }
+  return { categories };
+}
+
+function selectionAllows(selection, entry) {
+  const normalized = selection && selection.categories ? normalizeRenderSelection(selection) : null;
+  if (!normalized) {
+    return true;
+  }
+  const category = normalized.categories[entry?.category];
+  if (!category || !category.enabled) {
+    return false;
+  }
+  if (entry?.costTier === "simple") {
+    return true;
+  }
+  return category.tier === "full";
+}
+
+function filterCatalogForRenderMode(catalog, renderMode, selection) {
   const list = Array.isArray(catalog) ? catalog : NOAA_NAM_PARAMETER_CATALOG;
+  let modeList;
   if (renderMode === "base") {
-    return list.filter((entry) => entry.kind !== "snowfallDerived");
+    modeList = list.filter((entry) => entry.kind !== "snowfallDerived");
+  } else if (renderMode === "runmax-prefix") {
+    modeList = list.filter((entry) => Boolean(RUN_MAX_ACCUMULATION_SOURCES[entry.key]));
+  } else if (renderMode === "snow" || renderMode === "snow-delta" || renderMode === "snow-prefix") {
+    modeList = list.filter((entry) => entry.kind === "snowfallDerived");
+  } else {
+    modeList = list;
   }
-  if (renderMode === "runmax-prefix") {
-    return list.filter((entry) => Boolean(RUN_MAX_ACCUMULATION_SOURCES[entry.key]));
+  const normalizedSelection = normalizeRenderSelection(selection);
+  if (!normalizedSelection) {
+    // Preserve object identity + order of the pre-selection path exactly.
+    return modeList;
   }
-  if (renderMode === "snow" || renderMode === "snow-delta" || renderMode === "snow-prefix") {
-    return list.filter((entry) => entry.kind === "snowfallDerived");
-  }
-  return list;
+  return modeList.filter((entry) => selectionAllows(normalizedSelection, entry));
 }
 
 function selectSnowfallDerivedParameterRecords(records, options = {}) {
@@ -686,10 +743,17 @@ function loadSnowRfModel(kind) {
   if (SNOW_RF_MODEL_CACHE.has(cacheKey)) {
     model = SNOW_RF_MODEL_CACHE.get(cacheKey);
   } else {
+    let loadError = null;
     try {
       model = normalizeSnowRfModel(JSON.parse(fs.readFileSync(artifactPath, "utf8")));
-    } catch {
+    } catch (error) {
+      loadError = error;
       model = null;
+    }
+    if (!model) {
+      // Runs once per artifact path; a null model silently drops snowRfConus grids downstream.
+      const reason = loadError ? `: ${String(loadError?.message || loadError)}` : " (failed validation)";
+      console.warn(`[noaa-beta] snowRfConus model unavailable at ${artifactPath}${reason}`);
     }
     SNOW_RF_MODEL_CACHE.set(cacheKey, model);
   }
@@ -707,10 +771,17 @@ function loadWesternLinearSlrModel() {
   if (SNOW_RF_MODEL_CACHE.has(cacheKey)) {
     model = SNOW_RF_MODEL_CACHE.get(cacheKey);
   } else {
+    let loadError = null;
     try {
       model = normalizeWesternLinearSlrModel(JSON.parse(fs.readFileSync(artifactPath, "utf8")));
-    } catch {
+    } catch (error) {
+      loadError = error;
       model = null;
+    }
+    if (!model) {
+      // Runs once per artifact path; a null model silently drops snowWesternLinear grids downstream.
+      const reason = loadError ? `: ${String(loadError?.message || loadError)}` : " (failed validation)";
+      console.warn(`[noaa-beta] snowWesternLinear model unavailable at ${artifactPath}${reason}`);
     }
     SNOW_RF_MODEL_CACHE.set(cacheKey, model);
   }
@@ -832,6 +903,7 @@ module.exports = {
   loadWesternLinearSlrModel,
   mergeSelectedNoaaRecords,
   normalizeRfTree,
+  normalizeRenderSelection,
   normalizeSelectionModelKey,
   normalizeSnowRfModel,
   normalizeWesternLinearSlrModel,
@@ -843,6 +915,7 @@ module.exports = {
   resolveWesternLinearArtifactPath,
   selectNamAwphysRecords,
   selectNoaaNamParameterRecords,
+  selectionAllows,
   selectPointSoundingRecords,
   selectSnowfallDerivedParameterRecords,
   snowArtifactCacheIdentity,

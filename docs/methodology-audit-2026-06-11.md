@@ -1,8 +1,10 @@
 # model-view Per-Parameter Accuracy Audit
 
+> Superseded where noted: DCAPE v3 references below are historical; v4 is the current methodology (validation log 2026-06-11).
+
 Date: 2026-06-11
 
-Scope: every catalog parameter (79 entries) individually checked for meteorological accuracy against its source selectors, unit conversions, derivation formulas, and display/hover semantics, in the post-module-split renderer with DCAPE v3. Optimization review folded in (rounding-error-tolerant changes allowed; none found beyond the established compute floor).
+Scope: every catalog parameter (79 entries) individually checked for meteorological accuracy against its source selectors, unit conversions, derivation formulas, and display/hover semantics, in the post-module-split renderer with DCAPE v3 (superseded by v4 — see validation log 2026-06-11; v4 is current). Optimization review folded in (rounding-error-tolerant changes allowed; none found beyond the established compute floor).
 
 ## Verified accurate (no change)
 
@@ -11,7 +13,7 @@ Scope: every catalog parameter (79 entries) individually checked for meteorologi
 - Precip family: rolling APCP windows (window resolution tested), PRATE `x3600/25.4` -> in/hr, precip-type priority freezing rain > sleet > snow > rain (operational hazard precedence), reflectivity composite/1 km selectors, categorical reflectivity thresholds (documented design).
 - Severe direct: CAPE/CIN at surface (SB), 90-0 mb (ML), 255-0 mb (MU); HLCY 3000-0/1000-0 m; MXUPHL 5000-2000 m; HAIL (m->in); PWAT (kg/m^2 = mm, identity); HPBL.
 - Upper air: TMP/RH/HGT/UGRD/VGRD/ABSV/VVEL pressure-level selectors; relative vorticity = ABSV - f with f = 2(7.2921e-5)sin(lat) per Mercator row; VVEL sign/unit convention.
-- Derived: Bolton theta-e (eqs. 24/38 form with station pressure); surface LCL (direct MSL->AGL with Bolton fallback); 700-500 lapse (T_low - T_high over geometric depth) and 0-3 km AGL lapse (2 m temperature base); Petterssen 2D kinematic frontogenesis (deformation + divergence terms, scaling 1e5 x 10800 -> C/100km/3hr) with per-Mercator-row finite-difference spacing (dx = 2 R cos(lat) dlon, dy from actual neighbor-row latitudes); fixed-layer STP and 0-3 km proxy SCP (SPC term shapes, gates, and caps); effective-layer SCP/STP (exact SPC normalizations: MUCAPE/1000, ESRH/50, EBWD 10 m/s zero gate and /20 cap for SCP; MLCAPE/1500, ESRH/150, EBWD 12.5 gate with 1.5 cap, LCL and CIN terms for STP); DCAPE v3 (validated 2026-06-10/11, see validation log); Bunkers 7.5 m/s deviation; effective-inflow candidate gates CAPE >= 100, CIN >= -250.
+- Derived: Bolton theta-e (eqs. 24/38 form with station pressure); surface LCL (direct MSL->AGL with Bolton fallback); 700-500 lapse (T_low - T_high over geometric depth) and 0-3 km AGL lapse (2 m temperature base); Petterssen 2D kinematic frontogenesis (deformation + divergence terms, scaling 1e5 x 10800 -> C/100km/3hr) with per-Mercator-row finite-difference spacing (dx = 2 R cos(lat) dlon, dy from actual neighbor-row latitudes); fixed-layer STP and 0-3 km proxy SCP (SPC term shapes, gates, and caps); effective-layer SCP/STP (exact SPC normalizations: MUCAPE/1000, ESRH/50, EBWD 10 m/s zero gate and /20 cap for SCP; MLCAPE/1500, ESRH/150, EBWD 12.5 gate with 1.5 cap, LCL and CIN terms for STP); DCAPE v3 (validated 2026-06-10/11, see validation log; superseded by v4 — see validation log 2026-06-11; v4 is current); Bunkers 7.5 m/s deviation; effective-inflow candidate gates CAPE >= 100, CIN >= -250.
 - Run max: gust and interval-aware MXUPHL run maxima with exact carry-forward semantics.
 - Winter: FRAM matches Sanders & Barjenbruch (2016) exactly (ILR_P = 0.1395 P^-0.541; ILR_Tw cubic -0.0071/-0.1039/-0.3904/+0.5545; ILR_V = 0.0014 V^2 + 0.0027 V + 0.7574; blend weights 0.7/0.29/0.01, 0.73/0.01/0.26 above 12 kt, 0.79/0.2/0.01; radial = 0.394 x flat; regression-domain clamps at 0.02 in/hr and -7 C); Kuchera (12 + 2(-2 - Tmax) warm side, 12 + (-2 - Tmax) cold side, column max including surface, surface-to-500 mb levels); Cobb (omega -> w via density, subsidence layers skipped, sqrt(w) weight with (RH/80)^2 damping below 80%, canonical 11-knot spline tables, 925-300 mb levels); 10:1; HRRR ASNOW (m->in); SNOD (m->in); WEASD state (kg/m^2 -> water in).
 - Hover quantization: every unit's Int16 scale x range covers its physical domain with adequate precision (e.g., temperature 0.05, accumulations 0.01 in, unitless composites 0.1, CAPE 1 J/kg).
@@ -31,7 +33,7 @@ Scope: every catalog parameter (79 entries) individually checked for meteorologi
 
 ## Optimization review
 
-No new rounding-error-tolerant optimizations were found beyond the established floor: remaining hot costs are the SPC parcel pipeline (methodology-bound transcendental volume), zlib at fixed output bytes, and per-pixel loops already at minimal operation counts (see the benchmark history for the 2026-06-10 passes). DCAPE v3's ~+0.9 s/frame is methodology cost, not overhead.
+No new rounding-error-tolerant optimizations were found beyond the established floor: remaining hot costs are the SPC parcel pipeline (methodology-bound transcendental volume), zlib at fixed output bytes, and per-pixel loops already at minimal operation counts (see the benchmark history for the 2026-06-10 passes). DCAPE v3's ~+0.9 s/frame is methodology cost, not overhead (DCAPE v3 superseded by v4 — see validation log 2026-06-11; v4 is current).
 
 ## Validation
 

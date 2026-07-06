@@ -2,10 +2,10 @@ import type { LayerDefinition, ModelDefinition, ModelKey, ViewDefinition, ViewKe
 import { LAYER_STACK_ORDER } from "./layers";
 
 export const MODEL_CONFIG: Record<ModelKey, ModelDefinition> = {
-  gfs: { label: "GFS", maxHour: 384, frameStepHours: 3 },
-  nam: { label: "NAM", maxHour: 84 },
-  nam3km: { label: "NAM 3km", maxHour: 60 },
-  hrrr: { label: "HRRR", maxHour: 48 },
+  gfs: { label: "GFS", maxHour: 384, frameStepHours: 3, cycleHours: [0, 6, 12, 18] },
+  nam: { label: "NAM", maxHour: 84, cycleHours: [0, 6, 12, 18] },
+  nam3km: { label: "NAM 3km", maxHour: 60, cycleHours: [0, 6, 12, 18] },
+  hrrr: { label: "HRRR", maxHour: 48, cycleHours: Array.from({ length: 24 }, (_, hour) => hour) },
 };
 
 export const VIEW_CONFIG: Record<ViewKey, ViewDefinition> = {

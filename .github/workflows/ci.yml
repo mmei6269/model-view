@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npx eslint . --quiet
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Format check
+        run: npm run format:check
+      - name: Node tests
+        run: node --test tests-node/*.test.js
+      - name: Vite build
+        run: npm run build
+    # The React Playwright smoke suite is intentionally NOT run in CI: it needs a
+    # browser download plus the fixture cache, and its real-timing playback tests
+    # (dwell/speed) are fragile on shared runners. It is the local pre-commit gate
+    # via `npm test` (which runs node tests + typecheck + lint + format:check + smoke:react).

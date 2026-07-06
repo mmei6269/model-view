@@ -26,6 +26,15 @@ export default defineConfig(({ mode }) => {
     preview: {
       host: "127.0.0.1",
       port: 4173,
+      proxy: {
+        // Mirror the dev /__cf proxy so `vite preview` (used by `npm run start`)
+        // reaches artifacts same-origin, matching dev behavior.
+        "/__cf": {
+          target: artifactTarget,
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/__cf/, ""),
+        },
+      },
     },
     build: {
       outDir: "../dist-next",
