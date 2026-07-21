@@ -1,6 +1,9 @@
 import type { HoverGridPayload, HoverGridVariable, HoverGridVariableKey } from "../types";
 
 const HOVER_GRID_BINARY_MAGIC = "MVHG";
+// v3 payloads (global int16 delta region) carry their own magic so older
+// decoders reject them instead of reading delta residue as data.
+const HOVER_GRID_BINARY_MAGIC_V3 = "MVH3";
 
 export function normalizeHoverGridPayload(input: HoverGridPayload): HoverGridPayload {
   const rows = Number(input?.rows);
@@ -22,7 +25,8 @@ export function normalizeHoverGridPayload(input: HoverGridPayload): HoverGridPay
 
 export function normalizeBinaryHoverGridPayload(input: ArrayBuffer): HoverGridPayload {
   const bytes = new Uint8Array(input || new ArrayBuffer(0));
-  if (bytes.byteLength < 8 || textFromBytes(bytes.subarray(0, 4)) !== HOVER_GRID_BINARY_MAGIC) {
+  const magic = bytes.byteLength >= 8 ? textFromBytes(bytes.subarray(0, 4)) : "";
+  if (magic !== HOVER_GRID_BINARY_MAGIC && magic !== HOVER_GRID_BINARY_MAGIC_V3) {
     return normalizeHoverGridPayload({ schemaVersion: 1, rows: 0, cols: 0, variables: {} });
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -48,6 +52,29 @@ export function normalizeBinaryHoverGridPayload(input: ArrayBuffer): HoverGridPa
   const expectedLength = Number.isFinite(rows) && Number.isFinite(cols) && rows > 0 && cols > 0 ? rows * cols : 0;
   const variables: HoverGridPayload["variables"] = {};
   const dataStart = headerEnd;
+  if ((Number(header.schemaVersion) || 1) >= 3 && bytes.byteLength > dataStart) {
+    // Schema v3: the Int16 data region is a global wrapping delta stream
+    // (previous value carries across variable boundaries); restore it with
+    // one prefix-sum pass before the per-variable slices below. The server
+    // pads the header so the region stays 2-byte aligned.
+    const regionOffset = bytes.byteOffset + dataStart;
+    const count = (bytes.byteLength - dataStart) >> 1;
+    if (regionOffset % 2 === 0) {
+      const data = new Int16Array(bytes.buffer, regionOffset, count);
+      let previous = 0;
+      for (let index = 0; index < count; index += 1) {
+        previous = ((previous + data[index]) << 16) >> 16;
+        data[index] = previous;
+      }
+    } else {
+      const dataView = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      let previous = 0;
+      for (let index = 0; index < count; index += 1) {
+        previous = ((previous + dataView.getInt16(dataStart + index * 2, true)) << 16) >> 16;
+        dataView.setInt16(dataStart + index * 2, previous, true);
+      }
+    }
+  }
   for (const [key, variable] of Object.entries(header.variables || {})) {
     if (!variable) {
       continue;

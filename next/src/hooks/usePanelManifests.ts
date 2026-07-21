@@ -53,6 +53,11 @@ export function usePanelManifests(panels: PanelState[], viewKey: ViewKey) {
       if (
         existing?.runLabel === info.runLabel &&
         existing?.validLabel === info.validLabel &&
+        // Phase transitions (loading -> error/empty/ready) can occur with
+        // every other field unchanged (a 404'd manifest never produces run
+        // labels or statuses); dropping them would freeze the composite
+        // timeline in its hold-while-loading state.
+        existing?.manifestPhase === info.manifestPhase &&
         existing?.validHourKey === info.validHourKey &&
         existing?.resolvedHour === info.resolvedHour &&
         existing?.loadedFrameCount === info.loadedFrameCount &&

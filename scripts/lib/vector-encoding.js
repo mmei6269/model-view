@@ -2,26 +2,52 @@
 
 const DEFAULT_POLYLINE_PRECISION = 5;
 
+// appendSignedCode shifts with 32-bit bitwise ops, so |scaled| must stay
+// below 2^30; precision 7 already corrupts |lon| > 107.37 on encode.
+const MAX_ENCODE_PRECISION = 6;
+
+// Decode divides by the factor and is not subject to the encoder's scaling
+// overflow, so it honors the wider historical cap: a stored polyline7/8
+// payload must keep decoding with the factor its pointEncoding declares
+// (mirrors next/src/core/vector-encoding.ts).
+const MAX_DECODE_PRECISION = 8;
+
+// Array-of-[lat, lon] entry point: same wire format as the projected path,
+// via an identity projector so there is exactly one encoder loop.
 function encodeLatLonPolyline(points, precision = DEFAULT_POLYLINE_PRECISION) {
+  return encodeProjectedPolyline(points, copyLatLonPoint, precision);
+}
+
+function copyLatLonPoint(point, out) {
+  out[0] = Number(point?.[0]);
+  out[1] = Number(point?.[1]);
+}
+
+// Direct vector encoding (backlog #22): encodes straight from source points
+// through a projection callback that writes [lat, lon] into a reused scratch
+// pair, so no per-point [lat, lon] arrays are materialized.
+function encodeProjectedPolyline(points, projectPoint, precision = DEFAULT_POLYLINE_PRECISION) {
   if (!Array.isArray(points) || points.length === 0) {
     return "";
   }
   const factor = 10 ** clampPrecision(precision);
   let previousLat = 0;
   let previousLon = 0;
-  let out = "";
+  const codes = [];
+  const scratch = [0, 0];
   for (const point of points) {
-    const lat = Math.round(Number(point?.[0]) * factor);
-    const lon = Math.round(Number(point?.[1]) * factor);
+    projectPoint(point, scratch);
+    const lat = Math.round(scratch[0] * factor);
+    const lon = Math.round(scratch[1] * factor);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
       continue;
     }
-    out += encodeSigned(lat - previousLat);
-    out += encodeSigned(lon - previousLon);
+    appendSignedCode(codes, lat - previousLat);
+    appendSignedCode(codes, lon - previousLon);
     previousLat = lat;
     previousLon = lon;
   }
-  return out;
+  return joinCharCodes(codes);
 }
 
 function decodeLatLonPolyline(encoded, precision = DEFAULT_POLYLINE_PRECISION) {
@@ -29,7 +55,7 @@ function decodeLatLonPolyline(encoded, precision = DEFAULT_POLYLINE_PRECISION) {
   if (!text) {
     return [];
   }
-  const factor = 10 ** clampPrecision(precision);
+  const factor = 10 ** clampPrecision(precision, MAX_DECODE_PRECISION);
   const points = [];
   let index = 0;
   let lat = 0;
@@ -60,6 +86,14 @@ function encodeVectorLine(line, points, precision = DEFAULT_POLYLINE_PRECISION) 
   };
 }
 
+function encodeVectorLineProjected(line, points, projectPoint, precision = DEFAULT_POLYLINE_PRECISION) {
+  return {
+    ...line,
+    pointEncoding: `polyline${clampPrecision(precision)}`,
+    encodedPoints: encodeProjectedPolyline(points, projectPoint, precision),
+  };
+}
+
 function decodeVectorLinePoints(line) {
   if (!line || typeof line !== "object") {
     return [];
@@ -75,18 +109,27 @@ function decodeVectorLinePoints(line) {
   return decodeLatLonPolyline(line.encodedPoints, Number(match[1]));
 }
 
-function encodeSigned(value) {
+// Chunked string assembly (backlog #22): the standard polyline signed
+// varint characters, accumulated as char codes in one array and materialized
+// in slices — no per-point intermediate strings or rope nodes.
+function appendSignedCode(codes, value) {
   const rounded = Math.round(value);
   let encoded = rounded << 1;
   if (rounded < 0) {
     encoded = ~encoded;
   }
-  let out = "";
   while (encoded >= 0x20) {
-    out += String.fromCharCode((0x20 | (encoded & 0x1f)) + 63);
+    codes.push((0x20 | (encoded & 0x1f)) + 63);
     encoded >>= 5;
   }
-  out += String.fromCharCode(encoded + 63);
+  codes.push(encoded + 63);
+}
+
+function joinCharCodes(codes) {
+  let out = "";
+  for (let index = 0; index < codes.length; index += 8192) {
+    out += String.fromCharCode.apply(null, codes.slice(index, index + 8192));
+  }
   return out;
 }
 
@@ -110,9 +153,9 @@ function decodeSigned(text, startIndex) {
   };
 }
 
-function clampPrecision(value) {
+function clampPrecision(value, maxPrecision = MAX_ENCODE_PRECISION) {
   const precision = Math.round(Number(value));
-  return Number.isFinite(precision) ? Math.max(0, Math.min(8, precision)) : DEFAULT_POLYLINE_PRECISION;
+  return Number.isFinite(precision) ? Math.max(0, Math.min(maxPrecision, precision)) : DEFAULT_POLYLINE_PRECISION;
 }
 
 module.exports = {
@@ -120,5 +163,7 @@ module.exports = {
   decodeLatLonPolyline,
   decodeVectorLinePoints,
   encodeLatLonPolyline,
+  encodeProjectedPolyline,
   encodeVectorLine,
+  encodeVectorLineProjected,
 };

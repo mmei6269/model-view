@@ -5,6 +5,11 @@ export const PANELS_STORAGE_KEY = "modelview.panels.v1";
 
 export const DEFAULT_PANEL_LAYERS: LayerKey[] = ["temperature"];
 
+// Single source of truth for the panel ceiling (grid layout, Add Map gating,
+// URL roster, and persistence all consult this). Four panels = one map per
+// supported model, the comparison endgame for this viewer.
+export const MAX_PANELS = 4;
+
 export interface StoredPanelCollection {
   panels: PanelState[];
   counter: number;
@@ -41,7 +46,7 @@ export function normalizePanelCollection(candidate: unknown): StoredPanelCollect
     return buildDefaultPanelCollection();
   }
   const raw = candidate as Partial<StoredPanelCollection>;
-  const rawPanels = Array.isArray(raw.panels) ? raw.panels.slice(0, 2) : [];
+  const rawPanels = Array.isArray(raw.panels) ? raw.panels.slice(0, MAX_PANELS) : [];
   const panels: PanelState[] = [];
   let maxId = 0;
   for (let index = 0; index < rawPanels.length; index += 1) {

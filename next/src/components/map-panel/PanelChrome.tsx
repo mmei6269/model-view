@@ -7,8 +7,9 @@ import type {
   RunManifestPointer,
   ValidTimeIso,
 } from "../../types";
+import { getParameterCaveat } from "../../config/parameter-caveats";
 import { computeRunStaleness } from "../../lib/run-staleness";
-import { hourChipClass } from "./format-utils";
+import { formatUnitDisplay, hourChipClass } from "./format-utils";
 
 export interface PanelFrameOption {
   hour: number;
@@ -25,11 +26,14 @@ interface PanelStatus {
 
 interface PanelChromeProps {
   modelKey: ModelKey;
+  // Quarter-height panels (3-4 up) render tighter paddings and controls.
+  compact?: boolean;
   referenceTime: string | null;
   status: PanelStatus;
   loadedCount: number;
   totalHours: number;
   runLabel: string;
+  currentRunId: string | null;
   selectedRunId: string | null;
   runOptions: RunManifestPointer[];
   frameHour: number | null;
@@ -91,11 +95,13 @@ const SLOTTED_PARAMETER_GROUPS = new Set([
 
 export function PanelChrome({
   modelKey,
+  compact = false,
   referenceTime,
   status,
   loadedCount,
   totalHours,
   runLabel,
+  currentRunId,
   selectedRunId,
   runOptions,
   frameHour,
@@ -114,8 +120,12 @@ export function PanelChrome({
   onSelectValidTime,
   onRemove,
 }: PanelChromeProps) {
+  const frameHorizonLabel = formatFrameHorizon(frameOptions);
   const frameLabel = frameHour === null ? "F---" : `F${String(frameHour).padStart(3, "0")}`;
   const selectedRunMissing = selectedRunId && !runOptions.some((run) => run.run === selectedRunId);
+  // Shared control sizing: quarter panels drop one notch so the bar does not
+  // dominate a half-height map.
+  const controlClass = compact ? "h-7 px-2 text-[11px]" : "h-8 px-2.5 text-xs";
 
   return (
     <>
@@ -137,18 +147,31 @@ export function PanelChrome({
           }}
         />
       ) : null}
-      <div className="pointer-events-auto relative z-50 w-fit max-w-full rounded-lg border border-white/[0.08] bg-slate-900/[0.72] px-3 py-2 shadow-lg shadow-slate-950/35 backdrop-blur-xl">
+      <div
+        className={`pointer-events-auto relative z-50 w-fit max-w-full rounded-lg border border-white/[0.08] bg-slate-900/[0.72] shadow-lg shadow-slate-950/35 backdrop-blur-xl ${
+          compact ? "px-2 py-1.5" : "px-3 py-2"
+        }`}
+      >
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
           <div className="flex min-w-0 items-center gap-1.5">
-            <h2 className="text-lg font-semibold leading-none text-slate-50">{MODEL_CONFIG[modelKey].label}</h2>
+            <h2 className={`font-semibold leading-none text-slate-50 ${compact ? "text-sm" : "text-lg"}`}>
+              {MODEL_CONFIG[modelKey].label}
+            </h2>
             <StatusBadge status={status} />
-            <RunAgeChip modelKey={modelKey} referenceTime={referenceTime} />
+            {compact ? null : (
+              <RunAgeChip
+                modelKey={modelKey}
+                referenceTime={referenceTime}
+                currentRunId={currentRunId}
+                runOptions={runOptions}
+              />
+            )}
           </div>
 
           <select
             value={modelKey}
             onChange={(event) => onModelChange(event.target.value as ModelKey)}
-            className="h-8 rounded-lg border border-white/[0.12] bg-slate-950/[0.88] px-2.5 text-xs font-medium text-slate-100 shadow-inner shadow-black/20 outline-none hover:border-white/20 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/20"
+            className={`${controlClass} rounded-lg border border-white/[0.12] bg-slate-950/[0.88] font-medium text-slate-100 shadow-inner shadow-black/20 outline-none hover:border-white/20 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/20`}
             aria-label="Model"
           >
             {MODEL_KEYS.map((key) => (
@@ -161,7 +184,7 @@ export function PanelChrome({
           <select
             value={selectedRunId || ""}
             onChange={(event) => onRunChange(event.target.value || null)}
-            className="h-8 max-w-44 rounded-lg border border-white/[0.12] bg-slate-950/[0.88] px-2.5 text-xs font-medium text-slate-100 shadow-inner shadow-black/20 outline-none hover:border-white/20 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/20"
+            className={`${controlClass} ${compact ? "max-w-36" : "max-w-44"} rounded-lg border border-white/[0.12] bg-slate-950/[0.88] font-medium text-slate-100 shadow-inner shadow-black/20 outline-none hover:border-white/20 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/20`}
             aria-label="Run"
           >
             <option value="" className="bg-slate-950">
@@ -182,7 +205,7 @@ export function PanelChrome({
           <button
             type="button"
             onClick={onToggleParameterMenu}
-            className={`h-8 rounded-lg border px-2.5 text-xs font-semibold active:scale-95 ${
+            className={`${controlClass} rounded-lg border font-semibold active:scale-95 ${
               parameterMenuOpen
                 ? "border-cyan-300/40 bg-cyan-400/20 text-cyan-100"
                 : "border-white/[0.12] bg-white/[0.06] text-slate-200 hover:bg-white/[0.1]"
@@ -195,7 +218,7 @@ export function PanelChrome({
           <button
             type="button"
             onClick={onToggleMenu}
-            className={`h-8 rounded-lg border px-2.5 text-xs font-semibold active:scale-95 ${
+            className={`${controlClass} rounded-lg border font-semibold active:scale-95 ${
               menuOpen
                 ? "border-cyan-300/40 bg-cyan-400/20 text-cyan-100"
                 : "border-white/[0.12] bg-white/[0.06] text-slate-200 hover:bg-white/[0.1]"
@@ -203,25 +226,38 @@ export function PanelChrome({
             aria-expanded={menuOpen}
           >
             Frames {loadedCount}/{totalHours}
+            {frameHorizonLabel ? ` · ${frameHorizonLabel}` : ""}
           </button>
 
           {canRemove ? (
             <button
               type="button"
               onClick={onRemove}
-              className="h-8 rounded-lg border border-rose-400/35 bg-rose-500/10 px-2.5 text-xs font-semibold text-rose-100 hover:bg-rose-500/20 active:scale-95"
+              className={`${controlClass} rounded-lg border border-rose-400/35 bg-rose-500/10 font-semibold text-rose-100 hover:bg-rose-500/20 active:scale-95`}
             >
               Remove
             </button>
           ) : null}
         </div>
 
-        <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] leading-4 text-slate-200/90">
+        <div
+          className={`flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 leading-4 text-slate-200/90 ${
+            compact ? "mt-1 text-[10px]" : "mt-1.5 text-[11px]"
+          }`}
+        >
           <span className="min-w-0 truncate">Run {runLabel}</span>
           <span className="rounded border border-white/[0.08] bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-slate-100">
             {frameLabel}
           </span>
           <span className="min-w-0 truncate">Valid {validLabel}</span>
+          {compact ? (
+            <RunAgeChip
+              modelKey={modelKey}
+              referenceTime={referenceTime}
+              currentRunId={currentRunId}
+              runOptions={runOptions}
+            />
+          ) : null}
         </div>
 
         <div
@@ -255,6 +291,20 @@ export function PanelChrome({
             menuOpen ? "mt-2 max-h-48 opacity-100" : "max-h-0 opacity-0"
           }`}
         >
+          <div
+            className="mb-1 flex flex-wrap gap-x-2 gap-y-0.5 px-0.5 text-[9px] text-slate-400"
+            aria-label="Frame status key"
+          >
+            {(["loaded", "loading", "pending", "error", "unavailable"] as FrameHourStatus[]).map((frameStatus) => (
+              <span key={frameStatus} className="inline-flex items-center gap-1">
+                <span
+                  className={`inline-block h-1.5 w-1.5 rounded-full ${frameStatusDotClass(frameStatus)}`}
+                  aria-hidden="true"
+                />
+                {frameStatusLabel(frameStatus)}
+              </span>
+            ))}
+          </div>
           <div className="grid max-h-40 grid-cols-8 gap-1 overflow-auto rounded-md border border-white/[0.06] bg-slate-950/35 p-1 sm:grid-cols-10 md:grid-cols-12">
             {frameOptions.map((option) => {
               const clickable = option.selectable && Boolean(option.validHourKey);
@@ -268,6 +318,11 @@ export function PanelChrome({
                       onSelectValidTime(option.validHourKey);
                     }
                   }}
+                  aria-label={`Forecast hour ${option.hour}: ${frameStatusLabel(option.status)}${
+                    option.selected ? ", selected" : ""
+                  }`}
+                  title={`F${String(option.hour).padStart(3, "0")} - ${frameStatusLabel(option.status)}`}
+                  data-frame-status={option.status}
                   className={hourChipClass(option.status, option.selected)}
                 >
                   {String(option.hour).padStart(3, "0")}
@@ -279,6 +334,16 @@ export function PanelChrome({
       </div>
     </>
   );
+}
+
+function formatFrameHorizon(frameOptions: PanelFrameOption[]): string {
+  const hours = frameOptions.map((option) => Number(option.hour)).filter(Number.isFinite);
+  if (hours.length === 0) {
+    return "";
+  }
+  const first = Math.min(...hours);
+  const last = Math.max(...hours);
+  return `F${String(first).padStart(3, "0")}-F${String(last).padStart(3, "0")}`;
 }
 
 function groupParameterOptions(options: LayerDefinition[]) {
@@ -353,14 +418,14 @@ const SEVERE_THERMO_ROWS: ParameterGridSlot[][] = [
     { key: "dcape", placeholderLabel: "DCAPE" },
   ],
   [
-    { key: "surfaceBasedLclHeight", placeholderLabel: "Surface LCL" },
+    { key: "surfaceBasedLclHeight", placeholderLabel: "Surface LCL (AGL)" },
     { key: "surfaceThetaE", placeholderLabel: "Surface Theta-e" },
   ],
   [
     { key: "lapseRate700to500", placeholderLabel: "700-500 LR" },
     { key: "lapseRate0to3km", placeholderLabel: "0-3 km LR" },
   ],
-  [{ key: "maxSimulatedHailSize", placeholderLabel: "Max Hail Size" }],
+  [{ key: "maxSimulatedHailSize", placeholderLabel: "Max Model-Simulated Hail" }],
 ];
 
 const SEVERE_KINEMATICS_ROWS: ParameterGridSlot[][] = [
@@ -381,19 +446,19 @@ const SEVERE_KINEMATICS_ROWS: ParameterGridSlot[][] = [
     { key: "effectiveLayerSignificantTornadoParameter", placeholderLabel: "STP Effective" },
   ],
   [
-    { key: "updraftHelicity2to5km1h", placeholderLabel: "2-5 km UH" },
-    { key: "updraftHelicity2to5kmRunMax", placeholderLabel: "UH Run Max" },
+    { key: "updraftHelicity2to5km1h", placeholderLabel: "1-h Max 2-5 km UH" },
+    { key: "updraftHelicity2to5kmRunMax", placeholderLabel: "Run Max of 1-h UH" },
   ],
 ];
 
 const WINTER_ROWS: ParameterGridSlot[][] = [
   [
-    { key: "wetBulbZeroHeight", placeholderLabel: "Wet Bulb Zero" },
+    { key: "wetBulbZeroHeight", placeholderLabel: "Wet-Bulb Zero (MSL)" },
     { key: "freezingRainLiquidTotal", placeholderLabel: "Freezing Rain Liquid" },
   ],
   [
-    { key: "snowDepth", placeholderLabel: "Snow Depth" },
-    { key: "snowWaterEq", placeholderLabel: "Snow Water Eq" },
+    { key: "snowDepth", placeholderLabel: "Snow Depth (State)" },
+    { key: "snowWaterEq", placeholderLabel: "Snow Water Eq (State)" },
   ],
   [
     { key: "snow10to1", placeholderLabel: "10:1 Snow" },
@@ -401,10 +466,10 @@ const WINTER_ROWS: ParameterGridSlot[][] = [
   ],
   [
     { key: "snowCobb", placeholderLabel: "Cobb Snow" },
-    { key: "snowRfConus", placeholderLabel: "RF Snow" },
+    { key: "snowRfConus", placeholderLabel: "CONUS RF Snow" },
   ],
   [
-    { key: "snowWesternLinear", placeholderLabel: "Western Linear Snow" },
+    { key: "snowWesternLinear", placeholderLabel: "Western HRRR Linear Snow" },
     { key: "snowHrrrAsnow", placeholderLabel: "HRRR ASNOW" },
   ],
   [
@@ -570,7 +635,8 @@ function ParameterOptionControl({
   onToggle: (layer: LayerKey) => void;
 }) {
   const disabled = option.available === false && !selected;
-  const tooltip = buildParameterOptionTooltip(option);
+  const caveat = getParameterCaveat(String(option.key));
+  const tooltip = buildParameterOptionTooltip(option, caveat);
   const hasMethodDetails = Boolean(
     option.sourceNote ||
     option.derivation ||
@@ -605,13 +671,30 @@ function ParameterOptionControl({
       >
         {option.label}
       </span>
-      {option.unit ? <span className="shrink-0 text-[10px] text-slate-500">{option.unit}</span> : null}
+      {caveat ? (
+        // Decorative marker: the caveat text itself is announced via the row
+        // tooltip line ("Note: …"), so the glyph stays out of the a11y tree.
+        <span
+          className="shrink-0 cursor-help text-[10px] leading-none text-amber-300/80"
+          title={caveat}
+          aria-hidden="true"
+          data-caveat-key={String(option.key)}
+        >
+          ⓘ
+        </span>
+      ) : null}
+      {option.unit ? (
+        <span className="shrink-0 text-[10px] text-slate-500">{formatUnitDisplay(option.unit)}</span>
+      ) : null}
     </label>
   );
 }
 
-function buildParameterOptionTooltip(option: LayerDefinition): string {
+function buildParameterOptionTooltip(option: LayerDefinition, caveat: string | null = null): string {
   const lines = [option.label];
+  if (caveat) {
+    lines.push(`Note: ${caveat}`);
+  }
   if (option.sourceNote) {
     lines.push(`Source: ${option.sourceNote}`);
   }
@@ -653,7 +736,10 @@ function formatRunId(runId: string): string {
 
 function StatusBadge({ status }: { status: PanelStatus }) {
   return (
-    <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${statusTextClass[status.kind]}`}>
+    <span
+      data-testid="panel-status"
+      className={`inline-flex items-center gap-1.5 text-xs font-medium ${statusTextClass[status.kind]}`}
+    >
       <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDotClass[status.kind]}`} />
       {status.label}
     </span>
@@ -666,8 +752,18 @@ const runAgeChipClass: Record<"fresh" | "aging" | "stale", string> = {
   stale: "border-rose-400/35 bg-rose-500/12 text-rose-100",
 };
 
-function RunAgeChip({ modelKey, referenceTime }: { modelKey: ModelKey; referenceTime: string | null }) {
-  const { ageHours, level, newerLikely } = computeRunStaleness({
+function RunAgeChip({
+  modelKey,
+  referenceTime,
+  currentRunId,
+  runOptions,
+}: {
+  modelKey: ModelKey;
+  referenceTime: string | null;
+  currentRunId: string | null;
+  runOptions: RunManifestPointer[];
+}) {
+  const { ageHours, level } = computeRunStaleness({
     referenceTime,
     cycleHours: MODEL_CONFIG[modelKey].cycleHours,
   });
@@ -675,16 +771,44 @@ function RunAgeChip({ modelKey, referenceTime }: { modelKey: ModelKey; reference
     return null;
   }
   const rounded = ageHours < 1 ? "<1" : String(Math.round(ageHours));
-  const title = newerLikely
-    ? "A newer run is likely available — run npm run noaa:update"
-    : "Run age since reference time";
+  const newerAvailable = hasLaterBuiltRun(currentRunId, runOptions);
+  const title = newerAvailable ? "A newer built run is available in the run picker" : "Run age since reference time";
   return (
     <span
       data-testid="run-age-chip"
       title={title}
       className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${runAgeChipClass[level]}`}
     >
-      {rounded}h old{newerLikely ? " · newer likely" : ""}
+      {rounded}h old{newerAvailable ? " · newer available" : ""}
     </span>
   );
+}
+
+function hasLaterBuiltRun(currentRunId: string | null, runOptions: RunManifestPointer[]): boolean {
+  const currentEpoch = runIdEpoch(currentRunId);
+  return Number.isFinite(currentEpoch) && runOptions.some((run) => runIdEpoch(run.run) > currentEpoch);
+}
+
+function runIdEpoch(runId: string | null): number {
+  const match = String(runId || "").match(/^(\d{4})(\d{2})(\d{2})-(\d{2})00Z$/);
+  if (!match) {
+    return Number.NaN;
+  }
+  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]));
+}
+
+function frameStatusLabel(status: FrameHourStatus): string {
+  if (status === "loaded") return "Ready";
+  if (status === "loading") return "Loading";
+  if (status === "error") return "Error";
+  if (status === "unavailable") return "Unavailable";
+  return "Pending";
+}
+
+function frameStatusDotClass(status: FrameHourStatus): string {
+  if (status === "loaded") return "bg-cyan-300";
+  if (status === "loading") return "bg-sky-300";
+  if (status === "error") return "bg-rose-300";
+  if (status === "unavailable") return "bg-slate-600";
+  return "bg-slate-400";
 }

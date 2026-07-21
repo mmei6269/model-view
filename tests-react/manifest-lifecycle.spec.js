@@ -1,7 +1,7 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 const ONE_BY_ONE =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s0NkgAAAABJRU5ErkJggg==";
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNoaGj4DwAFhAKAfr3l1AAAAABJRU5ErkJggg==";
 
 function frameEntry(hour, validHourKey) {
   return {
@@ -102,13 +102,13 @@ test("switching to a model with a failing manifest surfaces an error instead of 
   await page.goto("/");
   const panel = page.locator("article").first();
   await expect(panel.locator("footer")).toContainText("Valid 2026-02-14 02z");
-  await expect(panel.getByText("Ready").first()).toBeVisible();
+  await expect(panel.getByTestId("panel-status")).toHaveText("Ready");
 
   await panel.locator("select").first().selectOption("hrrr");
 
   // The old GFS manifest must not keep rendering under the HRRR label.
   await expect(panel.getByText("Manifest Error").first()).toBeVisible();
-  await expect(panel.getByText("Ready")).toHaveCount(0);
+  await expect(panel.getByTestId("panel-status")).not.toHaveText("Ready");
   await expect(panel.locator("footer")).toContainText("Valid --");
   await expect(panel.locator("footer")).not.toContainText("2026-02-14 02z");
   await expect(panel.getByTestId("manifest-error")).toBeVisible();
@@ -116,7 +116,7 @@ test("switching to a model with a failing manifest surfaces an error instead of 
   hrrrAvailable = true;
   // Scope to the manifest card: the run-list error card has its own Retry (P3.6).
   await panel.getByTestId("manifest-error").getByRole("button", { name: "Retry" }).click();
-  await expect(panel.getByText("Ready").first()).toBeVisible();
+  await expect(panel.getByTestId("panel-status")).toHaveText("Ready");
   await expect(panel.locator("footer")).toContainText("Valid 2026-02-14 06z");
   await expect(panel.getByTestId("manifest-error")).toHaveCount(0);
 });
@@ -144,12 +144,12 @@ test("initial manifest failure shows an error state with retry instead of a fram
   const panel = page.locator("article").first();
   await expect(panel.getByText("Manifest Error").first()).toBeVisible();
   await expect(panel.getByText("Manifest unavailable").first()).toBeVisible();
-  await expect(panel.getByText("Ready")).toHaveCount(0);
+  await expect(panel.getByTestId("panel-status")).not.toHaveText("Ready");
 
   gfsAvailable = true;
   // Scope to the manifest card: the run-list error card has its own Retry (P3.6).
   await panel.getByTestId("manifest-error").getByRole("button", { name: "Retry" }).click();
-  await expect(panel.getByText("Ready").first()).toBeVisible();
+  await expect(panel.getByTestId("panel-status")).toHaveText("Ready");
   await expect(panel.locator("footer")).toContainText("Valid 2026-02-14 02z");
 });
 

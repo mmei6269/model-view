@@ -1,3 +1,5 @@
+import { createSharedRequestMap, runSharedRequest } from "./shared-abortable-request";
+
 interface ImagePrefetchOptions {
   decode?: boolean;
   signal?: AbortSignal;
@@ -17,6 +19,11 @@ const layerImageObjectUrlCache = new Map<string, { objectUrl: string; bytes: num
 let layerImageObjectUrlCacheBytes = 0;
 const decodedLayerImageCache = new Map<string, { image: HTMLImageElement; bytes: number }>();
 let decodedLayerImageCacheBytes = 0;
+// Prefetch engines, live panel application, and latest-run warmup can all ask
+// for the same image in the same tick. Share both the blob/object-URL work and
+// decode work; each caller retains independent abort semantics.
+const layerImageObjectUrlInFlight = createSharedRequestMap<string>();
+const decodedLayerImageInFlight = createSharedRequestMap<HTMLImageElement>();
 
 function resolveCacheLimitBytes(value: unknown, fallbackMb: number): number {
   const mb = Number(value);
@@ -44,23 +51,25 @@ export async function preloadImage(url: string, options: ImagePrefetchOptions = 
   const cachedObjectUrl = getCachedLayerImageObjectUrl(url);
   if (cachedObjectUrl) {
     if (options.decode) {
-      if (getCachedDecodedLayerImage(url)) {
-        return;
-      }
-      const image = await loadImage(cachedObjectUrl, options.signal, true);
-      cacheDecodedLayerImage(url, image);
+      await ensureDecodedLayerImage(url, cachedObjectUrl, options.signal);
     }
     return;
   }
 
-  if (canCacheLayerImageUrl(url)) {
-    const blob = await fetchImageBlob(url, options.signal);
-    const objectUrl = URL.createObjectURL(blob);
-    cacheLayerImageObjectUrl(url, objectUrl, blob.size);
+  if (isLayerImageObjectUrlCacheable(url)) {
+    const objectUrl = await runSharedRequest(layerImageObjectUrlInFlight, url, options.signal, async (sharedSignal) => {
+      const racedCacheHit = getCachedLayerImageObjectUrl(url);
+      if (racedCacheHit) {
+        return racedCacheHit;
+      }
+      const blob = await fetchImageBlob(url, sharedSignal);
+      const createdObjectUrl = URL.createObjectURL(blob);
+      cacheLayerImageObjectUrl(url, createdObjectUrl, blob.size);
+      return getCachedLayerImageObjectUrl(url) ?? createdObjectUrl;
+    });
     if (options.decode) {
       try {
-        const image = await loadImage(objectUrl, options.signal, true);
-        cacheDecodedLayerImage(url, image);
+        await ensureDecodedLayerImage(url, objectUrl, options.signal);
       } catch (error) {
         if (isAbortLikeError(error)) {
           throw error;
@@ -74,6 +83,34 @@ export async function preloadImage(url: string, options: ImagePrefetchOptions = 
   if (options.decode) {
     cacheDecodedLayerImage(url, image);
   }
+}
+
+async function ensureDecodedLayerImage(url: string, fallbackObjectUrl: string, signal?: AbortSignal): Promise<void> {
+  if (getCachedDecodedLayerImage(url)) {
+    return;
+  }
+  await runSharedRequest(decodedLayerImageInFlight, url, signal, async (sharedSignal) => {
+    const racedDecodeHit = getCachedDecodedLayerImage(url);
+    if (racedDecodeHit) {
+      return racedDecodeHit;
+    }
+    // The object URL can be touched/replaced by cache pressure between the
+    // shared fetch and decode; always resolve the live cache entry.
+    const liveObjectUrl = getCachedLayerImageObjectUrl(url) ?? fallbackObjectUrl;
+    const image = await loadImage(liveObjectUrl, sharedSignal, true);
+    cacheDecodedLayerImage(url, image);
+    return image;
+  });
+}
+
+// Shared residency predicate for raster completion paths (panel prefetch
+// engine + latest-run warmup): a cacheable URL counts as resident only while
+// its object URL is live; non-cacheable URLs (data:/blob:) have no cache
+// entry to be evicted from and are always "resident". Keeping this in one
+// place is what stops the two engines' guards from drifting apart.
+export function isLayerImageUrlResident(requestUrl: string): boolean {
+  const url = String(requestUrl || "");
+  return !url || !isLayerImageObjectUrlCacheable(url) || Boolean(getCachedLayerImageObjectUrl(url));
 }
 
 export function getCachedLayerImageObjectUrl(requestUrl: string): string | null {
@@ -167,7 +204,7 @@ async function loadImage(url: string, signal?: AbortSignal, decode = false): Pro
   return image;
 }
 
-function canCacheLayerImageUrl(url: string): boolean {
+export function isLayerImageObjectUrlCacheable(url: string): boolean {
   if (!url) {
     return false;
   }
@@ -197,12 +234,19 @@ function cacheLayerImageObjectUrl(requestUrl: string, objectUrl: string, bytes: 
   }
   const existing = layerImageObjectUrlCache.get(key);
   if (existing) {
-    layerImageObjectUrlCache.delete(key);
-    layerImageObjectUrlCacheBytes = Math.max(0, layerImageObjectUrlCacheBytes - existing.bytes);
+    // FIRST write wins. An existing entry here means two concurrent
+    // preloads of the same request URL raced (both missed, both fetched,
+    // both minted an object URL for the SAME bytes). The old path revoked
+    // the existing URL in favor of the newcomer — but the existing URL is
+    // the one consumers may already HOLD: the map engine's ImageSource
+    // fetch of it died mid-flight with net::ERR_FILE_NOT_FOUND and the
+    // frame never reported loaded (Task 5.2, offline-boot spec under
+    // parallel contention). Keep the handed-out URL; release the loser.
     if (existing.objectUrl !== objectUrl) {
-      URL.revokeObjectURL(existing.objectUrl);
-      evictDecodedLayerImage(key);
+      URL.revokeObjectURL(objectUrl);
     }
+    touchLayerImageObjectUrlEntry(key, existing);
+    return;
   }
   const normalizedBytes = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
   layerImageObjectUrlCache.set(key, { objectUrl, bytes: normalizedBytes });

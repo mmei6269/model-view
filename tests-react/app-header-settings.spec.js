@@ -1,4 +1,4 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 // Playwright's visibility check treats clipped-but-laid-out elements as visible
 // (they keep a non-empty bounding box), so the collapsed drawer's select still
@@ -54,4 +54,32 @@ test("a stored custom IANA zone renders as a labeled option and stays selected",
   const zoneSelect = await openSettingsDrawer(page);
   await expect(zoneSelect).toHaveValue("Europe/Berlin");
   await expect(zoneSelect.locator("option[value='Europe/Berlin']")).toHaveText("Europe/Berlin");
+});
+
+test("a permalink display zone does not overwrite the stored Local preference", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("modelview.timezone.v1", "local");
+  });
+  await page.goto("/?tz=America%2FNew_York");
+  const zoneSelect = await openSettingsDrawer(page);
+  await expect(zoneSelect).toHaveValue("America/New_York");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("modelview.timezone.v1"))).toBe("local");
+
+  await zoneSelect.selectOption("UTC");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("modelview.timezone.v1"))).toBe("UTC");
+});
+
+test("Local round-trips through the URL as a preference token across reload", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("modelview.timezone.v1", "local");
+  });
+  await page.goto("/");
+  let zoneSelect = await openSettingsDrawer(page);
+  await expect(zoneSelect).toHaveValue("local");
+  await expect.poll(() => page.evaluate(() => new URL(window.location.href).searchParams.get("tz"))).toBe("local");
+
+  await page.reload();
+  zoneSelect = await openSettingsDrawer(page);
+  await expect(zoneSelect).toHaveValue("local");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("modelview.timezone.v1"))).toBe("local");
 });

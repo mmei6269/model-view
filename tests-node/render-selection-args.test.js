@@ -31,6 +31,19 @@ test("an unknown --categories token throws (non-zero exit in main)", () => {
   );
 });
 
+test("an explicitly empty --categories throws instead of allowlisting nothing", () => {
+  // '--categories=' (e.g. an unset shell variable) used to yield an
+  // all-disabled selection — the degenerate floor-placeholders-only build the
+  // render server rejects before spawn.
+  assert.throws(() => parseRenderSelectionFromArgs({ categories: "" }, CONTEXT), /--categories/);
+  assert.throws(() => parseRenderSelectionFromArgs({ categories: " , ," }, CONTEXT), /--categories/);
+  // An absent --categories alongside another selection flag still means "all on".
+  const allOn = parseRenderSelectionFromArgs({ "severe-tier": "simple" }, CONTEXT);
+  assert.equal(allOn.categories.surface, true);
+  assert.equal(allOn.categories.upperAir, true);
+  assert.equal(allOn.categories.severe.enabled, true);
+});
+
 test("an invalid --severe-tier throws", () => {
   assert.throws(
     () => parseRenderSelectionFromArgs({ categories: "severe", "severe-tier": "cheap" }, CONTEXT),
@@ -88,4 +101,52 @@ test("full severe tier keeps the heavy keys", () => {
   const keys = resolveRenderSelectionKeys(selection, NOAA_NAM_PARAMETER_CATALOG);
   assert.equal(keys.includes("dcape"), true);
   assert.equal(keys.includes("effectiveLayerSupercellCompositeParameter"), true);
+});
+
+test("science prototypes reject combinations whose required product cannot be rendered", () => {
+  const camFull = parseRenderSelectionFromArgs(
+    { categories: "severe", "severe-tier": "full", "science-prototypes": "camDcape21Level" },
+    { ...CONTEXT, models: ["hrrr"] },
+  );
+  assert.deepEqual(camFull.sciencePrototypes, ["camDcape21Level"]);
+
+  const stpFull = parseRenderSelectionFromArgs(
+    { categories: "severe", "severe-tier": "full", "science-prototypes": "effectiveStp100mbReduced" },
+    { ...CONTEXT, models: ["gfs"] },
+  );
+  assert.deepEqual(stpFull.sciencePrototypes, ["effectiveStp100mbReduced"]);
+
+  assert.throws(
+    () =>
+      parseRenderSelectionFromArgs(
+        { categories: "severe", "science-prototypes": "camDcape21Level" },
+        { ...CONTEXT, models: ["gfs"] },
+      ),
+    /requires a selected CAM model/i,
+  );
+  assert.throws(
+    () =>
+      parseRenderSelectionFromArgs(
+        { categories: "severe", "severe-tier": "simple", "science-prototypes": "camDcape21Level" },
+        { ...CONTEXT, models: ["hrrr"] },
+      ),
+    /requires the Severe category at full tier/i,
+  );
+  assert.throws(
+    () =>
+      parseRenderSelectionFromArgs(
+        { categories: "surface", "science-prototypes": "effectiveStp100mbReduced" },
+        { ...CONTEXT, models: ["nam3km"] },
+      ),
+    /requires the Severe category at full tier/i,
+  );
+});
+
+test("row-aware center validation stays applicable when catalog categories exclude upper air", () => {
+  const selection = parseRenderSelectionFromArgs(
+    { categories: "surface", "science-prototypes": "rowAwareCenterValidation" },
+    { ...CONTEXT, models: ["gfs"] },
+  );
+  assert.deepEqual(selection.sciencePrototypes, ["rowAwareCenterValidation"]);
+  assert.equal(selection.categories.upperAir, false);
 });

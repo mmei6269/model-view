@@ -1,7 +1,7 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 const ONE_BY_ONE =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s0NkgAAAABJRU5ErkJggg==";
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNoaGj4DwAFhAKAfr3l1AAAAABJRU5ErkJggg==";
 
 function latestPointer(model, manifestKey) {
   return {
@@ -63,27 +63,28 @@ test("panel add/remove/add keeps monotonic ids and model rotation", async ({ pag
 
   await page.goto("/");
   await expect(page.locator("article")).toHaveCount(1);
-  await expect(page.getByLabel("Model").first()).toHaveValue("gfs");
+  await expect(page.getByLabel("Model", { exact: true }).first()).toHaveValue("gfs");
 
   await page.getByRole("button", { name: "Add Map" }).click();
   await expect(page.locator("article")).toHaveCount(2);
-  await expect(page.getByLabel("Model").nth(1)).toHaveValue("nam3km");
-  await expect(page.getByRole("button", { name: "Add Map" })).toBeDisabled();
+  await expect(page.getByLabel("Model", { exact: true }).nth(1)).toHaveValue("nam3km");
+  // The ceiling is now four panels, so two maps leave Add Map enabled.
+  await expect(page.getByRole("button", { name: "Add Map" })).toBeEnabled();
 
   await page.getByRole("button", { name: "Remove" }).last().click();
   await expect(page.locator("article")).toHaveCount(1);
 
   await page.getByRole("button", { name: "Add Map" }).click();
   await expect(page.locator("article")).toHaveCount(2);
-  await expect(page.getByLabel("Model").nth(1)).toHaveValue("hrrr");
+  await expect(page.getByLabel("Model", { exact: true }).nth(1)).toHaveValue("hrrr");
 });
 
 test("panel model + layers persist across reload; runId is not pinned", async ({ page }) => {
   await routeModelFixtures(page, ["gfs", "nam", "nam3km", "hrrr"]);
   await page.goto("/");
-  await expect(page.getByLabel("Model").first()).toHaveValue("gfs");
-  await page.getByLabel("Model").first().selectOption("hrrr");
-  await expect(page.getByLabel("Model").first()).toHaveValue("hrrr");
+  await expect(page.getByLabel("Model", { exact: true }).first()).toHaveValue("gfs");
+  await page.getByLabel("Model", { exact: true }).first().selectOption("hrrr");
+  await expect(page.getByLabel("Model", { exact: true }).first()).toHaveValue("hrrr");
 
   await expect
     .poll(() =>
@@ -103,7 +104,7 @@ test("panel model + layers persist across reload; runId is not pinned", async ({
   expect(hasRunId).toBe(false);
 
   await page.reload();
-  await expect(page.getByLabel("Model").first()).toHaveValue("hrrr");
+  await expect(page.getByLabel("Model", { exact: true }).first()).toHaveValue("hrrr");
 });
 
 test("a stored two-panel collection hydrates on load", async ({ page }) => {
@@ -122,6 +123,42 @@ test("a stored two-panel collection hydrates on load", async ({ page }) => {
   });
   await page.goto("/");
   await expect(page.locator("article")).toHaveCount(2);
-  await expect(page.getByLabel("Model").first()).toHaveValue("nam");
-  await expect(page.getByLabel("Model").nth(1)).toHaveValue("hrrr");
+  await expect(page.getByLabel("Model", { exact: true }).first()).toHaveValue("nam");
+  await expect(page.getByLabel("Model", { exact: true }).nth(1)).toHaveValue("hrrr");
+});
+
+test("Add Map scales to four panels in a 2x2 grid, then disables", async ({ page }) => {
+  await routeModelFixtures(page, ["gfs", "nam", "nam3km", "hrrr"]);
+  await page.goto("/");
+
+  const addMap = page.getByRole("button", { name: "Add Map" });
+  await addMap.click();
+  await addMap.click();
+  await addMap.click();
+
+  await expect(page.getByLabel("Model", { exact: true })).toHaveCount(4);
+  await expect(addMap).toBeDisabled();
+
+  // 2x2 layout: four panels split the viewport in half both ways.
+  const boxes = [];
+  for (const article of await page.locator("main > article").all()) {
+    boxes.push(await article.boundingBox());
+  }
+  expect(boxes).toHaveLength(4);
+  const viewport = page.viewportSize();
+  for (const box of boxes) {
+    expect(box.width).toBeLessThan(viewport.width * 0.6);
+    expect(box.height).toBeLessThan(viewport.height * 0.6);
+  }
+
+  // Track picker lists all four panels in panel timeline mode.
+  await page.getByLabel("Axis").selectOption("panel");
+  await expect(page.getByLabel("Track").locator("option")).toHaveCount(4);
+
+  // Removing one drops back to three; the lone third panel spans the bottom.
+  await page.getByRole("button", { name: "Remove" }).last().click();
+  await expect(page.getByLabel("Model", { exact: true })).toHaveCount(3);
+  await expect(addMap).toBeEnabled();
+  const lastBox = await page.locator("main > article").last().boundingBox();
+  expect(lastBox.width).toBeGreaterThan(viewport.width * 0.9);
 });

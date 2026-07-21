@@ -4,14 +4,19 @@ dist-next/
 output/
 playwright-report/
 test-results/
+tmp/
 package-lock.json
 
 # Large data/source artifacts
 next/public/geo/
 scripts/geo-source/
 
+# Vendored basemap glyphs/sprites (verbatim copies of protomaps/basemaps-assets)
+next/public/basemap/
+
 # Generated/vendored JSON + vendor docs (machine-produced; not hand-formatted)
 shared/noaa-beta-planned-color-maps.json
+tests-node/fixtures/
 tools/noaa-beta/
 
 # Local/editor metadata
@@ -20,3 +25,6 @@ tools/noaa-beta/
 
 # Design/plan docs with byte-exact quoted code anchors
 docs/superpowers/
+
+# AssemblyScript source (decorators are not parseable by prettier) + built wasm
+tools/parcel-kernel/

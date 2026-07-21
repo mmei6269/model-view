@@ -1,7 +1,8 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
+const { routeBasemapFixture } = require("./helpers/basemap-fixture");
 
 const ONE_BY_ONE =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s0NkgAAAABJRU5ErkJggg==";
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNoaGj4DwAFhAKAfr3l1AAAAABJRU5ErkJggg==";
 
 const GFS_RUN = "20260701-0000Z";
 
@@ -145,7 +146,7 @@ test("sounding failure shows a humanized single-line message instead of the raw 
 
   await page.goto(`/?hour=${encodeURIComponent(valids[0])}`);
   await expect(page.getByTestId("frame-label")).toHaveText("F000", { timeout: 15000 });
-  await page.locator(".leaflet-container").first().dblclick();
+  await page.locator('[data-testid="map-canvas-host"]').first().dblclick();
 
   const errorRegion = page.getByTestId("sounding-error");
   await expect(errorRegion).toBeVisible({ timeout: 15000 });
@@ -192,4 +193,125 @@ test("an empty artifact cache surfaces the noaa:update onboarding hint", async (
   // Genuine empty cache: no error cards, just the onboarding hint.
   await expect(panel.getByTestId("run-list-error")).toHaveCount(0);
   await expect(panel.getByTestId("manifest-error")).toHaveCount(0);
+});
+
+// ── MapLibre engine fatal states (Task 5.2) ──────────────────────────────────
+// The engine has no fallback basemap, so failures must be loud, legible, and
+// honest about the fix: a missing/unreachable PMTiles basemap names the
+// one-command fix; repeated GL context loss points at the GPU instead. A
+// transient basemap outage must also UN-stick without a remount once the
+// server recovers (the engine retries on the next camera gesture).
+
+test("basemap outage shows the fetch banner; recovery on the next gesture clears it", async ({ page }) => {
+  // The kill-switch registers AFTER the fixture route so Playwright consults
+  // it first; once healthy it falls back to the fixture handler.
+  let basemapDown = true;
+  let servedAfterRecovery = 0;
+  await routeBasemapFixture(page);
+  await page.route("**/basemap/*.pmtiles", async (route) => {
+    if (basemapDown) {
+      await route.abort("connectionrefused");
+      return;
+    }
+    servedAfterRecovery += 1;
+    await route.fallback();
+  });
+
+  await page.goto("/");
+  const panel = page.locator("article").first();
+  const banner = panel.getByTestId("engine-fatal-error");
+  await expect(banner).toBeVisible({ timeout: 15000 });
+  await expect(banner).toContainText("npm run basemap:fetch");
+  // The banner must PERSIST while the outage lasts: maplibre flips an errored
+  // source to isSourceLoaded=true, and a clear keyed on that synthetic event
+  // vanished the banner milliseconds after it appeared (live drill finding).
+  await page.waitForTimeout(1000);
+  await expect(banner).toBeVisible();
+
+  // Server comes back; the next camera gesture (zoom fires moveend) triggers
+  // the engine's basemap retry and the banner clears with no remount.
+  basemapDown = false;
+  await panel.getByTestId("map-zoom-in").click();
+  await expect(banner).toHaveCount(0, { timeout: 15000 });
+  // Honesty check on the recovery: the retry must have actually RE-FETCHED
+  // the archive (pmtiles pins a failed header fetch as a cached rejection, so
+  // a cleared banner without a network re-fetch would be the synthetic-clear
+  // bug again, not a recovery).
+  expect(servedAfterRecovery).toBeGreaterThan(0);
+});
+
+test("repeated GL context loss shows the GPU-oriented fatal banner, not the basemap hint", async ({ page }) => {
+  // Collected from the start: the whole run — cap included, and the post-cap
+  // Display changes below — must never leak an unhandled error to the page.
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
+  await routeBasemapFixture(page);
+  await page.goto("/");
+  const panel = page.locator("article").first();
+  await expect(panel.getByTestId("panel-status")).toHaveText("Ready", { timeout: 30000 });
+
+  // Force context loss on whatever canvas is live; the engine self-heals
+  // twice (recreate), then the third loss exceeds the budget and goes fatal.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.evaluate(() => {
+      const canvas = document.querySelector("[data-testid=map-canvas-host] canvas");
+      const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+      gl.getExtension("WEBGL_lose_context").loseContext();
+    });
+    // The recreate defers out of the event dispatch (setTimeout 0) and boots
+    // a fresh map; give it a beat before losing the next context.
+    await page.waitForTimeout(400);
+  }
+
+  const banner = panel.getByTestId("engine-fatal-error");
+  await expect(banner).toBeVisible({ timeout: 10000 });
+  await expect(banner).toContainText(/GPU/);
+  await expect(banner).not.toContainText("basemap:fetch");
+
+  // Post-cap, the capped engine disposed its dead map, but the panel stays
+  // mounted under the banner with mapReady true — its display effects keep
+  // driving engine verbs. A user Display change must therefore no-op inside
+  // the gave-up engine (never throw into a live React effect): the banner
+  // persists, and no error escapes to the page. Theme select exercises
+  // setBasemap; the border-mode flip exercises setBasemapBoundaries plus the
+  // reference-overlay cleanup's removeLayer.
+  await page.getByRole("button", { name: "Display", exact: true }).click();
+  await page.getByRole("combobox", { name: "Basemap", exact: true }).selectOption("dark");
+  await page.getByLabel("Borders").selectOption("basemap");
+  await page.waitForTimeout(400);
+  expect(pageErrors).toEqual([]);
+  await expect(banner).toBeVisible();
+});
+
+test("WebGL unavailable at boot shows the webgl-init fatal banner instead of crashing the app", async ({ page }) => {
+  // Task 6.1 (pre-flip hardening): maplibre's Map constructor throws
+  // synchronously ("Failed to initialize WebGL") when the canvas cannot
+  // produce a GL context — a machine with WebGL disabled/blocklisted.
+  // Simulate exactly that by nulling GL context creation before any app code
+  // runs; 2d contexts stay untouched. Without the constructor wrap the throw
+  // escapes the panel's boot effect, React unmounts the tree, and the page
+  // fires an unhandled error — so this asserts both the classed banner AND
+  // zero pageerrors with the chrome still alive.
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
+  await page.addInitScript(() => {
+    const original = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (type, ...rest) {
+      if (type === "webgl" || type === "webgl2" || type === "experimental-webgl") {
+        return null;
+      }
+      return original.call(this, type, ...rest);
+    };
+  });
+
+  await page.goto("/");
+  const panel = page.locator("article").first();
+  const banner = panel.getByTestId("engine-fatal-error");
+  await expect(banner).toBeVisible({ timeout: 15000 });
+  await expect(banner).toContainText(/WebGL could not be initialized/);
+  await expect(banner).not.toContainText("basemap:fetch");
+  // The app survived the boot failure: header chrome still mounted and
+  // interactive, no unhandled errors anywhere in the run.
+  await expect(page.getByRole("button", { name: "Display", exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
 });

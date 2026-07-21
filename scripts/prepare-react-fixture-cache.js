@@ -7,9 +7,12 @@ const path = require("path");
 const zlib = require("zlib");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
-const DEFAULT_CACHE_ROOT = path.join(ROOT_DIR, "test-results/react-cache");
+// The only directory tree this script may ever delete inside: the repo's
+// gitignored test-fixture area. See assertFixtureCacheRoot.
+const FIXTURE_AREA_ROOT = path.join(ROOT_DIR, "test-results");
+const DEFAULT_CACHE_ROOT = path.join(FIXTURE_AREA_ROOT, "react-cache");
 const ONE_BY_ONE_PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s0NkgAAAABJRU5ErkJggg==",
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNoaGj4DwAFhAKAfr3l1AAAAABJRU5ErkJggg==",
   "base64",
 );
 const MODELS = {
@@ -22,8 +25,31 @@ const RUN_ID = "20260423-1200Z";
 const VIEW = "conus";
 const ARTIFACT_PREFIX = "tiles";
 
+// This script recursively deletes <cacheRoot>/artifacts before writing 1x1
+// fixture PNGs, so the target is argv-only ON PURPOSE: every other consumer
+// treats MODELVIEW_CACHE_ROOT as "where the real rendered cache lives", and
+// honoring it here meant a stray exported variable wiped the production
+// artifacts directory when the script ran without an argument. Relative
+// arguments anchor on the repo root (cwd-independent, like the builder).
+function resolveFixtureCacheRoot(argvCacheRoot) {
+  return path.resolve(ROOT_DIR, argvCacheRoot || DEFAULT_CACHE_ROOT);
+}
+
+// Guard: this script only owns fixture caches strictly inside the repo's
+// test-results/ area; refuse to touch (and therefore delete) anything else.
+function assertFixtureCacheRoot(cacheRoot) {
+  const relative = path.relative(FIXTURE_AREA_ROOT, cacheRoot);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(
+      `refusing to prepare fixture cache at '${cacheRoot}': this script recursively deletes <target>/artifacts, ` +
+        `so the target must be a directory under ${FIXTURE_AREA_ROOT}`,
+    );
+  }
+}
+
 async function main() {
-  const cacheRoot = path.resolve(process.argv[2] || process.env.MODELVIEW_CACHE_ROOT || DEFAULT_CACHE_ROOT);
+  const cacheRoot = resolveFixtureCacheRoot(process.argv[2]);
+  assertFixtureCacheRoot(cacheRoot);
   const artifactRoot = path.join(cacheRoot, "artifacts");
   await fs.promises.rm(artifactRoot, { recursive: true, force: true });
   for (const [model, openDataModel] of Object.entries(MODELS)) {
@@ -191,7 +217,16 @@ async function writeBuffer(filePath, body) {
   await fs.promises.writeFile(filePath, body);
 }
 
-main().catch((error) => {
-  console.error(error && error.stack ? error.stack : error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error && error.stack ? error.stack : error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  DEFAULT_CACHE_ROOT,
+  FIXTURE_AREA_ROOT,
+  assertFixtureCacheRoot,
+  resolveFixtureCacheRoot,
+};

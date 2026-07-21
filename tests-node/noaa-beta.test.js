@@ -114,6 +114,7 @@ const {
   selectNoaaNamParameterRecords,
   selectNamAwphysRecords,
   NOAA_NAM_PARAMETER_CATALOG,
+  _testCalculateEffectiveLayerScpValue,
 } = require("../scripts/lib/noaa-beta-renderer");
 const {
   buildNoaaModelMetadata,
@@ -718,15 +719,11 @@ test("NOAA regrid args keep categorical precip-type masks on nearest-neighbor in
     interpolation: "neighbor",
   });
 
-  assert.deepEqual(single.slice(0, 7), [
-    "input.grib2",
-    "-d",
-    "4",
-    "-new_grid_winds",
-    "earth",
-    "-new_grid_interpolation",
-    "neighbor",
-  ]);
+  assert.deepEqual(single.slice(0, 3), ["input.grib2", "-d", "4"]);
+  const singleJoined = single.join(" ");
+  assert.match(singleJoined, /-if :HGT:cloud ceiling: -undefine_val 19900:20100 -fi/);
+  assert.match(singleJoined, /-if :MXUPHL:5000-2000 m above ground: -undefine_val -999 -fi/);
+  assert.match(singleJoined, /-new_grid_winds earth -new_grid_interpolation neighbor/);
 });
 
 test("NOAA snow-liquid decodes can keep precipitation masks fractional", () => {
@@ -839,10 +836,15 @@ test("NOAA NAM expanded catalog selectors and metadata expose app-ready paramete
   assert.equal(metadata.snow10to1.group, "Winter / Snow & Ice");
   assert.equal(metadata.snow10to1.methodVersion, "snow10to1-v1");
   assert.equal(metadata.snowKuchera.methodVersion, "kuchera-surface-to-500mb-profile-v2");
-  assert.equal(metadata.snowCobb.methodVersion, "cobb-waldstreicher-925to300mb-profile-v2");
+  assert.equal(metadata.snowCobb.methodVersion, "cobb-waldstreicher-925to300mb-profile-v3");
+  assert.equal(metadata.snowRfConus.methodVersion, "pletcher-conus-rf-2d35566-domain-v4");
+  assert.equal(metadata.snowWesternLinear.methodVersion, "veals-western-v1c-linear-5304094-domain-v4");
   assert.equal(metadata.snowRfConus.artifactRequired, "snow-rf/conus-rf.json");
   assert.equal(metadata.snowWesternLinear.artifactRequired, "snow-rf/western-linear-v1c.json");
   assert.match(metadata.snowWesternLinear.applicability, /HRRR western elevated terrain/);
+  assert.equal(metadata.cloudCeiling.label, "Cloud Ceiling (AGL)");
+  assert.equal(metadata.cloudCeiling.methodVersion, "cloud-ceiling-model-datum-agl-no-ceiling-v2");
+  assert.match(metadata.cloudCeiling.sourceNote, /HRRR values are already AGL/);
   assert.ok(order.indexOf("temperature") < order.indexOf("dewpoint2m"));
   assert.ok(order.includes("absoluteVorticity500"));
   assert.ok(order.includes("verticalVelocity500"));
@@ -1162,7 +1164,7 @@ test("NOAA derived planned parameters gate on source inputs and expose formula m
   assert.equal(metadata.supercellCompositeParameter.methodVersion, "scp-0to3km-srh-effective-shear-proxy-v1");
   assert.equal(metadata.effectiveLayerSupercellCompositeParameter.label, "SCP (Effective Layer)");
   assert.match(metadata.effectiveLayerSupercellCompositeParameter.sourceNote, /25\/50 mb spacing/);
-  assert.equal(metadata.effectiveLayerSupercellCompositeParameter.methodVersion, "spc-effective-scp-parcel-sparse-v3");
+  assert.equal(metadata.effectiveLayerSupercellCompositeParameter.methodVersion, "spc-effective-scp-parcel-sparse-v4");
   assert.equal(_testEffectiveParcelSourceStepHpa, 25);
   assert.match(metadata.effectiveLayerSupercellCompositeParameter.derivation, /50 mb spacing from 700-300 mb/);
   assert.match(metadata.effectiveLayerSupercellCompositeParameter.derivation, /fixed 0-6 km Bunkers fallback/);
@@ -1232,7 +1234,13 @@ test("NOAA parameter metadata exposes source and method tooltip notes", () => {
   assert.match(metadata.reflectivity1kmPrecipType.sourceNote, /REFD at 1000 m above ground/);
   assert.match(metadata.reflectivity1kmPrecipType.derivation, /instantaneous reflectivity\/type/);
 
-  assert.equal(metadata.height500.methodVersion, "hgt-pressure-contour-simple-v1");
+  assert.match(metadata.temp850.sourceNote, /at or below model terrain are missing/);
+  assert.match(metadata.wind700.sourceNote, /at or below model terrain are missing/);
+
+  assert.equal(metadata.height500.methodVersion, "hgt-pressure-contour-model-smoothed-v2");
+  assert.equal(metadata.height500.thresholdNote, "6 dam minor / 12 dam major contours");
+  assert.match(metadata.height500.derivation, /presentation smoothing/i);
+  assert.match(metadata.height500.derivation, /hover retains the unsmoothed field/i);
   assert.match(metadata.height500.sourceNote, /HGT at 500 mb/);
   assert.match(metadata.height500.sourceNote, /6 dam contour interval/);
 });
@@ -1404,10 +1412,14 @@ test("NOAA SCP and fixed-layer STP use SPC-normalized capped terms", () => {
     ebwdKt: new Float32Array([30 * 1.9438444924406046, 30 * 1.9438444924406046]),
     esrh: new Float32Array([150, 150]),
     mixedLayerLclM: new Float32Array([750, 750]),
+    muCapeJkg: new Float32Array([2000, 2000]),
+    muCinJkg: new Float32Array([-20, -20]),
   };
   const effectiveScp = _testBuildEffectiveLayerScpGrid(
     {
-      mucape: new Float32Array([2000, 2000]),
+      // The direct field is intentionally different: effective SCP must use
+      // the CAPE/CIN pair retained by the internal parcel scan.
+      mucape: new Float32Array([9000, 9000]),
     },
     effectiveDiagnostics,
     2,
@@ -1426,8 +1438,14 @@ test("NOAA SCP and fixed-layer STP use SPC-normalized capped terms", () => {
     2,
   );
   assert.ok(effectiveScpWithCin);
-  assert.ok(Math.abs(effectiveScpWithCin[0] - 6) < 1e-6);
+  assert.ok(Math.abs(effectiveScpWithCin[0] - 3) < 1e-6);
   assert.ok(Math.abs(effectiveScpWithCin[1] - 6) < 1e-6);
+  assert.ok(
+    Math.abs(
+      _testCalculateEffectiveLayerScpValue({ muCapeJkg: 2000, muCinJkg: -100 }, 100, 20 * 1.9438444924406046) - 1.6,
+    ) < 1e-6,
+    "severe-grid effective SCP applies the SPC -40/MUCIN damping term",
+  );
 
   const effectiveStp = _testBuildEffectiveLayerStpGrid(
     {
@@ -1970,7 +1988,7 @@ test("NOAA NAM catalog uses generated public palettes", () => {
   for (const key of surfaceWindKeys) {
     assert.deepEqual(metadata[key].legendStops, COLOR_MAPS.windMph.normalizedRgbaStops, `${key} wind palette`);
     assert.equal(metadata[key].thresholdNote, "<10 mph transparent");
-    assert.deepEqual(metadata[key].legendTicks, [0, 10, 20, 30, 40, 50, 60]);
+    assert.deepEqual(metadata[key].legendTicks, [10, 20, 30, 40, 50, 60]);
   }
   assert.deepEqual(
     metadata.temperature.legendStops,
@@ -2072,7 +2090,7 @@ test("NOAA NAM catalog uses generated public palettes", () => {
   assert.deepEqual(metadata.cloudCover.legendStops, COLOR_MAPS.cloudCoverPct.normalizedRgbaStops);
   assert.deepEqual(metadata.gust.legendStops, COLOR_MAPS.windGustMph.normalizedRgbaStops);
   assert.equal(metadata.gust.thresholdNote, "<15 mph transparent");
-  assert.deepEqual(metadata.gust.legendTicks, [0, 10, 20, 30, 40, 50, 60, 70, 75]);
+  assert.deepEqual(metadata.gust.legendTicks, [20, 30, 40, 50, 60, 70, 75]);
   assert.equal(SCALES.windMph.min, 10);
   assert.equal(SCALES.windMph.max, 60);
   assert.equal(SCALES.windGustMph.min, 15);
@@ -2231,7 +2249,7 @@ test("NOAA derived profile helpers use generic cache keys", () => {
 
   assert.equal(_testProfileDecodeKey("TMP", 850), "profileTmp850");
   assert.deepEqual(_testProfileSelector("UGRD", 700), { param: "UGRD", level: "700 mb" });
-  assert.equal(payload.version, "derived-profile-grid-v1");
+  assert.equal(payload.version, "derived-profile-grid-v2-frame-local-provenance");
   assert.deepEqual(Object.keys(payload.records), ["profileHgt850", "profileTmp850"]);
 });
 
@@ -3268,7 +3286,14 @@ test("NOAA helper parses hours, URLs, run times, and precip accumulation", () =>
   assert.deepEqual(resolveModels("all"), ["gfs", "nam", "nam3km", "hrrr"]);
   assert.deepEqual(buildFullHoursForModel("gfs").slice(0, 5), [0, 3, 6, 9, 12]);
   assert.equal(buildFullHoursForModel("gfs").at(-1), 384);
-  assert.equal(buildFullHoursForModel("nam").at(-1), 84);
+  assert.equal(buildFullHoursForModel("nam").at(-1), 36);
+  assert.deepEqual(buildFullHoursForModel("nam", { officialHorizon: true }).slice(-4), [75, 78, 81, 84]);
+  assert.equal(buildFullHoursForModel("nam", { officialHorizon: true }).includes(37), false);
+  assert.equal(buildFullHoursForModel("nam", { officialHorizon: true }).length, 53);
+  assert.deepEqual(
+    resolveHoursByModel({ args: { full: true, "require-full-horizon": true }, models: ["nam"] }).nam,
+    buildFullHoursForModel("nam", { officialHorizon: true }),
+  );
   assert.deepEqual(resolveHoursByModel({ args: { full: true }, models: ["gfs", "hrrr"] }), {
     gfs: buildFullHoursForModel("gfs"),
     hrrr: buildFullHoursForModel("hrrr"),

@@ -1,4 +1,13 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
+
+// Teardown hardening (flake diagnosed in Task 1.1): under parallel load the
+// app's 5 s manifest poll can hit the broad **/__cf/manifests/** route right
+// as the test ends, and the in-flight handler (route.fetch/route.continue)
+// then races page close and fails teardown. Detach all routes before close
+// and swallow errors from handlers already in flight. Assertions unchanged.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
 
 // Fixture cache (react-cache) ships a recent HRRR run; the chip must render an
 // age label near the panel status and, for a deliberately old referenceTime,

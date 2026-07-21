@@ -8,6 +8,7 @@ const {
   RENDER_CATEGORY_IDS,
   SNOW_PROFILE_LEVELS,
   SUPPORT_SELECTORS,
+  normalizeSciencePrototypeIds,
 } = require("../noaa-nam-parameter-catalog");
 const { MPS_TO_MPH } = require("./util");
 const { PROFILE_SURFACE_DECODE_KEYS, profileDecodeKey, standardProfileDecodeKey } = require("./profile-access");
@@ -48,7 +49,7 @@ const RUN_MAX_ACCUMULATION_SOURCES = Object.freeze({
   }),
   updraftHelicity2to5kmRunMax: Object.freeze({
     sourceKey: "updraftHelicity2to5km1h",
-    selector: Object.freeze({ param: "MXUPHL", level: "5000-2000 m above ground" }),
+    selector: Object.freeze({ param: "MXUPHL", level: "5000-2000 m above ground", statistic: "maximum" }),
     multiplier: 1,
   }),
 });
@@ -63,6 +64,10 @@ const POINT_SOUNDING_DIRECT_SELECTORS = Object.freeze({
   mslp: Object.freeze({ param: "PRMSL", level: "mean sea level" }),
   pblHeight: Object.freeze({ param: "HPBL", level: "surface" }),
   pwat: Object.freeze({ param: "PWAT", levelPattern: /entire atmosphere/i }),
+  // UPP defines its 20,000 m no-ceiling sentinel from total cloud cover.
+  // Point soundings bypass the map regrid, so retain TCDC alongside HGT to
+  // establish the no-ceiling state independently of the sentinel value.
+  cloudCover: Object.freeze({ param: "TCDC", levelPattern: /entire atmosphere/i }),
   cloudCeiling: Object.freeze({ param: "HGT", level: "cloud ceiling" }),
   wetBulbZeroHeight: Object.freeze({ param: "HGT", level: "lowest level of the wet bulb zero" }),
   lclHeight: Object.freeze({ param: "HGT", level: "level of adiabatic condensation from sfc" }),
@@ -75,7 +80,11 @@ const POINT_SOUNDING_DIRECT_SELECTORS = Object.freeze({
   mucapeNam: Object.freeze({ param: "CAPE", level: "180-0 mb above ground" }),
   srh0to1km: Object.freeze({ param: "HLCY", level: "1000-0 m above ground" }),
   srh0to3km: Object.freeze({ param: "HLCY", level: "3000-0 m above ground" }),
-  updraftHelicity2to5km: Object.freeze({ param: "MXUPHL", level: "5000-2000 m above ground" }),
+  updraftHelicity2to5km: Object.freeze({
+    param: "MXUPHL",
+    level: "5000-2000 m above ground",
+    statistic: "maximum",
+  }),
   maxHailSize: Object.freeze({ param: "HAIL", levelPattern: /entire atmosphere/i }),
 });
 
@@ -140,17 +149,17 @@ const PROFILE_SURFACE_SELECTORS = Object.freeze({
 // filter must return exactly the pre-selection per-mode list so a no-flags
 // build stays byte-identical to today (spec exactness constraint).
 function normalizeRenderSelection(selection) {
-  if (
-    !selection ||
-    typeof selection !== "object" ||
-    !selection.categories ||
-    typeof selection.categories !== "object"
-  ) {
+  if (!selection || typeof selection !== "object") {
+    return null;
+  }
+  const sciencePrototypes = normalizeSciencePrototypeIds(selection);
+  const categorySource = selection.categories && typeof selection.categories === "object" ? selection.categories : null;
+  if (!categorySource && sciencePrototypes.length === 0) {
     return null;
   }
   const categories = {};
   for (const id of RENDER_CATEGORY_IDS) {
-    const raw = selection.categories[id];
+    const raw = categorySource?.[id];
     if (raw === true) {
       categories[id] = { enabled: true, tier: "full" };
     } else if (raw === false) {
@@ -164,7 +173,10 @@ function normalizeRenderSelection(selection) {
       categories[id] = { enabled: true, tier: "full" };
     }
   }
-  return { categories };
+  return {
+    categories,
+    ...(sciencePrototypes.length > 0 ? { sciencePrototypes } : {}),
+  };
 }
 
 function selectionAllows(selection, entry) {
@@ -289,6 +301,9 @@ function selectNamAwphysRecords(records) {
   };
 }
 
+// options.renderMode is accepted for interface compatibility: call sites pass
+// it, but the mode acts only through the pre-filtered options.catalog (see
+// filterCatalogForRenderMode), so this function never reads it.
 function selectNoaaNamParameterRecords(records, catalogOrOptions = NOAA_NAM_PARAMETER_CATALOG) {
   const options = Array.isArray(catalogOrOptions) ? { catalog: catalogOrOptions } : catalogOrOptions || {};
   const catalog = Array.isArray(options.catalog) ? options.catalog : NOAA_NAM_PARAMETER_CATALOG;
@@ -320,11 +335,11 @@ function selectNoaaNamParameterRecords(records, catalogOrOptions = NOAA_NAM_PARA
   for (const entry of catalog) {
     const required = Boolean(entry.required);
     if (!isCatalogEntryApplicableToModel(entry, modelKey)) {
-      if (required) {
-        missingRequired.push(entry.key);
-      } else {
-        missingOptionalParameters.push(entry.key);
-      }
+      // "Definitionally not produced for this model" is not "missing
+      // required data": missingRequired hard-fails the build with an error
+      // naming records that were never expected for this model. Inapplicable
+      // entries are simply absent parameters.
+      missingOptionalParameters.push(entry.key);
       continue;
     }
     const staged = { ...selected };
@@ -349,6 +364,10 @@ function selectNoaaNamParameterRecords(records, catalogOrOptions = NOAA_NAM_PARA
       );
       available = Boolean(rateRecord && precipTypeRecords.length > 0 && precipTypeRecords.every(Boolean));
     } else if (entry.kind === "precipAccumulation") {
+      // Deliberately not gated by entry.minForecastHour: these entries declare
+      // minForecastHour 1, and gating them would drop precip/precip3h/.../
+      // precipTotal from F000 availability, changing rendered output beyond
+      // the intended snowfallDirect fix (verified against the live catalog).
       available = records.some((record) => isSurfacePrecipRecord(record));
     } else if (isFreezingRainDerivedAccumulationEntry(entry)) {
       available = includeFreezingRainDerivedAccumulationRecords(entry, records, includeStagedRecord, staged, {
@@ -359,8 +378,11 @@ function selectNoaaNamParameterRecords(records, catalogOrOptions = NOAA_NAM_PARA
     } else if (entry.kind === "snowfallDerived") {
       available = includeSnowfallDerivedRecords(entry, records, includeStagedRecord, staged, { targetHour });
     } else if (entry.kind === "snowfallDirect") {
-      const record = includeStagedRecord(entry.inputKey, entry.selector);
-      available = Boolean(record);
+      // Below minForecastHour the direct accumulation record is a trivially
+      // zero 0-0-hour window; gating here keeps it out of `staged` entirely so
+      // it is neither offered as available nor selected for decode.
+      available =
+        !isBelowMinForecastHour(entry, targetHour) && Boolean(includeStagedRecord(entry.inputKey, entry.selector));
     } else {
       const record = includeStagedRecord(entry.inputKey, entry.selector);
       available = Boolean(record && includeCatalogSourceSelectorRecords(entry, includeStagedRecord, staged));
@@ -425,9 +447,17 @@ function isCatalogEntryApplicableToModel(entry, modelKey) {
   return models.includes(modelKey);
 }
 
-function includeDerivedParameterRecords(entry, records, includeRecord, selected, options = {}) {
+// Shared minimum-forecast-hour gate: an entry declaring minForecastHour is
+// definitionally empty below that hour (e.g. a 0-0-hour accumulation window),
+// so it must not be offered as available there. An entry without a finite
+// minForecastHour is never gated.
+function isBelowMinForecastHour(entry, targetHour) {
   const minForecastHour = Number(entry?.minForecastHour);
-  if (Number.isFinite(options.targetHour) && Number.isFinite(minForecastHour) && options.targetHour < minForecastHour) {
+  return Number.isFinite(targetHour) && Number.isFinite(minForecastHour) && targetHour < minForecastHour;
+}
+
+function includeDerivedParameterRecords(entry, records, includeRecord, selected, options = {}) {
+  if (isBelowMinForecastHour(entry, options.targetHour)) {
     return false;
   }
 
@@ -474,7 +504,7 @@ function includeDerivedParameterRecords(entry, records, includeRecord, selected,
 }
 
 function includeSnowfallDerivedRecords(entry, records, includeRecord, selected, options = {}) {
-  if (Number.isFinite(options.targetHour) && options.targetHour <= 0) {
+  if (isBelowMinForecastHour(entry, options.targetHour)) {
     return false;
   }
   if (entry?.artifactRequired && !isSnowArtifactReady(entry)) {
@@ -536,7 +566,7 @@ function isFreezingRainDerivedAccumulationEntry(entry) {
 }
 
 function includeFreezingRainDerivedAccumulationRecords(entry, records, includeRecord, selected, options = {}) {
-  if (Number.isFinite(options.targetHour) && options.targetHour <= 0) {
+  if (isBelowMinForecastHour(entry, options.targetHour)) {
     return false;
   }
   const directRecord = findSurfaceAccumulatedFreezingRainRecord(records, options.targetHour);

@@ -9,6 +9,7 @@ const { float32ArrayViewFromBuffer } = require("./grid-ops");
 const {
   CATALOG_VERSION,
   SELECTED_GRIB_CACHE_DIRNAME,
+  buildFrameProvenanceCacheSnapshot,
   decodeSelectedRecordsToGrids,
   getNoaaRecordsForHour,
   getSelectedRecordPlan,
@@ -17,38 +18,44 @@ const {
   readOrFetchNoaaContentLengthCached,
   readRegisteredSourceGrid,
   registerSourceGrid,
+  registerTemporalProvenanceDerivation,
   repairNoaaIdxFinalRecordRanges,
+  restoreFrameProvenanceCacheSnapshot,
   selectedGribSharedCacheDir,
   selectedPrecipRecordIdentity,
 } = require("./grib-source");
 const { findRecord, isSurfacePrecipRecord, parseAccumulationWindow } = require("./records");
 const {
-  GRID_CACHE_LOCK_POLL_MS,
-  GRID_CACHE_LOCK_TIMEOUT_MS,
   cacheMetadataWithPayload,
   directCacheMetadataPayloadMatches,
   mapWithConcurrency,
   padHour,
-  pathExists,
+  probeCachedGridSidecar,
   readCachedFloatGrid,
+  readCachedRefGridsBySourceKey,
   recordProfileStage,
   releaseGridCacheLock,
   sanitizePathToken,
   tryAcquireGridCacheLock,
   waitForCachedGrid,
+  waitForCachedRefGrids,
   writeCachedFloatGrid,
 } = require("./cache-io");
 const { NOAA_BETA_MODEL_CONFIG, buildNoaaGribUrl } = require("./model-config");
 const { RUN_MAX_ACCUMULATION_SOURCES } = require("./selection");
-const { sleep } = require("../local-artifact-options");
+const {
+  buildBoundedForecastHourRosterIdentity,
+  resolveForecastHourRosterIdentity,
+  resolveForecastHourSamplingTierFromMetadata,
+} = require("./forecast-hour-roster");
 
 const RUN_MAX_GRID_PROMISE_CACHE = new Map();
 
 const RUN_MAX_SOURCE_GRID_PROMISE_CACHE = new Map();
 
-const PRECIP_ACCUM_GRID_CACHE_VERSION = "precip-accum-grid-v2";
+const PRECIP_ACCUM_GRID_CACHE_VERSION = "precip-accum-grid-v5-forecast-hour-roster";
 
-const RUN_MAX_GRID_CACHE_VERSION = "run-max-grid-v1";
+const RUN_MAX_GRID_CACHE_VERSION = "run-max-grid-v6-target-bounded-provenance";
 
 async function buildPrecipAccumulationGrids({
   modelKey,
@@ -94,6 +101,8 @@ async function buildPrecipAccumulationGrids({
     rangeFetchLimiter,
     decodeConcurrency,
     availableHours,
+    forecastHourRosterIdentity: resolveForecastHourRosterIdentity(latestMetadata, { modelKey }),
+    forecastHourSamplingTier: resolveForecastHourSamplingTierFromMetadata(latestMetadata, { modelKey }),
     availableHourSet: new Set(availableHours),
     recordsByHour: new Map([[Number(targetHour), currentRecords || []]]),
     intervalsByHour: new Map(),
@@ -122,6 +131,12 @@ async function buildPrecipAccumulationGrids({
     }
     plans[entry.key] = plan;
     sourceRefs.push(...plan.terms);
+    registerTemporalProvenanceDerivation(decodeSession, {
+      family: "precipitation-accumulation",
+      outputKey: entry.key,
+      targetHour,
+      terms: plan.terms,
+    });
   }
   recordProfileStage(profile, "precipAccumPlanMs", stageStartedAt);
   if (Object.keys(plans).length === 0) {
@@ -194,6 +209,8 @@ async function buildRunMaxAccumulationGrids({
     rangeFetchLimiter,
     decodeConcurrency,
     availableHours: resolveAvailableForecastHours(latestMetadata, target, modelKey),
+    forecastHourRosterIdentity: resolveForecastHourRosterIdentity(latestMetadata, { modelKey }),
+    forecastHourSamplingTier: resolveForecastHourSamplingTierFromMetadata(latestMetadata, { modelKey }),
     recordsByHour: new Map([[target, currentRecords || []]]),
     sourceGridCacheDir: rawCacheDir ? path.join(rawCacheDir, "run-max-source-grids") : null,
     sourceGribCacheDir: selectedGribSharedCacheDir(rawCacheDir),
@@ -256,6 +273,8 @@ async function buildRunMaxPrefixOnlyGrids({
     rangeFetchLimiter,
     decodeConcurrency,
     availableHours: resolveAvailableForecastHours(latestMetadata, target, modelKey),
+    forecastHourRosterIdentity: resolveForecastHourRosterIdentity(latestMetadata, { modelKey }),
+    forecastHourSamplingTier: resolveForecastHourSamplingTierFromMetadata(latestMetadata, { modelKey }),
     recordsByHour: new Map([[target, currentRecords || []]]),
     sourceGridCacheDir: rawCacheDir ? path.join(rawCacheDir, "run-max-source-grids") : null,
     sourceGribCacheDir: selectedGribSharedCacheDir(rawCacheDir),
@@ -309,16 +328,32 @@ async function readOrComputeCachedRunMaxGrid({ key, source, hour, context, compu
     return null;
   }
   const targetRecord = await findRunMaxSourceRecord(source, target, context);
+  registerTemporalProvenanceDerivation(context.decodeSession, {
+    family: "run-maximum",
+    outputKey: key,
+    // Each cached prefix records its own endpoint so recursive cold builds and
+    // restored warm-prefix sidecars expose the same temporal chain.
+    targetHour: target,
+    terms: targetRecord
+      ? [
+          {
+            hour: target,
+            sourceKey: source.sourceKey,
+            record: targetRecord,
+          },
+        ]
+      : [],
+  });
   const payload = runMaxCumulativeGridPayload({ key, source, hour: target, record: targetRecord, context });
   const cachePath = runMaxGridCachePath(context.cumulativeGridCacheDir, payload, context);
-  const cacheKey = cachePath || crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-  const existing = RUN_MAX_GRID_PROMISE_CACHE.get(cacheKey);
+  const cacheKey = cachePath || null;
+  const existing = cacheKey ? RUN_MAX_GRID_PROMISE_CACHE.get(cacheKey) : null;
   if (existing) {
-    return existing;
+    return restoreRunMaxProvenanceAfterSharedPromise(existing, cachePath, payload, context);
   }
   const promise = (async () => {
     const cellCount = Math.round(Number(context.width) * Number(context.height));
-    const cached = await readCachedFloatGrid(cachePath, payload, cellCount);
+    const cached = await readCachedFloatGrid(cachePath, payload, cellCount, provenanceCacheReadOptions(context));
     if (cached) {
       incrementProfileCounter(context.profile, "runMaxGridCacheHits");
       return cached;
@@ -327,7 +362,16 @@ async function readOrComputeCachedRunMaxGrid({ key, source, hour, context, compu
       incrementProfileCounter(context.profile, "runMaxGridCacheMisses");
       const grid = await compute({ target, targetRecord, cellCount });
       if (grid) {
-        await writeCachedFloatGrid(cachePath, payload, grid);
+        await writeCachedFloatGrid(
+          cachePath,
+          payload,
+          grid,
+          provenanceCacheMetadata(context, {
+            family: "run-maximum",
+            outputKey: key,
+            maxTargetHour: target,
+          }),
+        );
       }
       return grid;
     };
@@ -342,7 +386,9 @@ async function readOrComputeCachedRunMaxGrid({ key, source, hour, context, compu
         payload,
         lockPath,
         context,
-        read: (targetPath, expectedPayload) => readCachedFloatGrid(targetPath, expectedPayload, cellCount),
+        read: (targetPath, expectedPayload) =>
+          readCachedFloatGrid(targetPath, expectedPayload, cellCount, provenanceCacheReadOptions(context)),
+        probe: probeCachedGridSidecar,
         timeoutCounter: "runMaxGridLockTimeouts",
       });
       if (waited) {
@@ -352,7 +398,12 @@ async function readOrComputeCachedRunMaxGrid({ key, source, hour, context, compu
       return build();
     }
     try {
-      const cachedAfterLock = await readCachedFloatGrid(cachePath, payload, cellCount);
+      const cachedAfterLock = await readCachedFloatGrid(
+        cachePath,
+        payload,
+        cellCount,
+        provenanceCacheReadOptions(context),
+      );
       if (cachedAfterLock) {
         incrementProfileCounter(context.profile, "runMaxGridCacheHits");
         return cachedAfterLock;
@@ -362,9 +413,19 @@ async function readOrComputeCachedRunMaxGrid({ key, source, hour, context, compu
       await releaseGridCacheLock(lockPath, lockHandle);
     }
   })().finally(() => {
-    RUN_MAX_GRID_PROMISE_CACHE.delete(cacheKey);
+    if (cacheKey) {
+      RUN_MAX_GRID_PROMISE_CACHE.delete(cacheKey);
+    }
   });
-  RUN_MAX_GRID_PROMISE_CACHE.set(cacheKey, promise);
+  promise.provenanceSnapshot = () =>
+    buildFrameProvenanceCacheSnapshot(context?.decodeSession, {
+      family: "run-maximum",
+      outputKey: key,
+      maxTargetHour: target,
+    });
+  if (cacheKey) {
+    RUN_MAX_GRID_PROMISE_CACHE.set(cacheKey, promise);
+  }
   return promise;
 }
 
@@ -377,7 +438,7 @@ async function readCachedRunMaxGridForHour({ key, source, hour, context, countHi
   const payload = runMaxCumulativeGridPayload({ key, source, hour: target, record: targetRecord, context });
   const cachePath = runMaxGridCachePath(context.cumulativeGridCacheDir, payload, context);
   const cellCount = Math.round(Number(context.width) * Number(context.height));
-  const cached = await readCachedFloatGrid(cachePath, payload, cellCount);
+  const cached = await readCachedFloatGrid(cachePath, payload, cellCount, provenanceCacheReadOptions(context));
   if (cached && countHit) {
     incrementProfileCounter(context.profile, "runMaxGridCacheHits");
   }
@@ -411,13 +472,13 @@ async function readOrDecodeRunMaxSourceGrid({ key, source, hour, record, context
   }
   const payload = runMaxSourceGridPayload({ key, source, hour: target, record, context });
   const cachePath = runMaxGridCachePath(context.sourceGridCacheDir, payload, context);
-  const cacheKey = cachePath || crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-  const existing = RUN_MAX_SOURCE_GRID_PROMISE_CACHE.get(cacheKey);
+  const cacheKey = cachePath || null;
+  const existing = cacheKey ? RUN_MAX_SOURCE_GRID_PROMISE_CACHE.get(cacheKey) : null;
   if (existing) {
-    return existing;
+    return restoreRunMaxProvenanceAfterSharedPromise(existing, cachePath, payload, context);
   }
   const promise = (async () => {
-    const cached = await readCachedFloatGrid(cachePath, payload, cellCount);
+    const cached = await readCachedFloatGrid(cachePath, payload, cellCount, provenanceCacheReadOptions(context));
     if (cached) {
       incrementProfileCounter(context.profile, "runMaxSourceCacheHits");
       return cached;
@@ -426,7 +487,15 @@ async function readOrDecodeRunMaxSourceGrid({ key, source, hour, record, context
       incrementProfileCounter(context.profile, "runMaxSourceCacheMisses");
       const grid = await decodeRunMaxSourceGridForHour({ source, hour: target, record, context });
       if (grid) {
-        await writeCachedFloatGrid(cachePath, payload, grid);
+        await writeCachedFloatGrid(
+          cachePath,
+          payload,
+          grid,
+          provenanceCacheMetadata(context, {
+            terms: [{ hour: target, sourceKey: source.sourceKey, record }],
+            includeDerivations: false,
+          }),
+        );
       }
       return grid;
     };
@@ -441,7 +510,9 @@ async function readOrDecodeRunMaxSourceGrid({ key, source, hour, record, context
         payload,
         lockPath,
         context,
-        read: (targetPath, expectedPayload) => readCachedFloatGrid(targetPath, expectedPayload, cellCount),
+        read: (targetPath, expectedPayload) =>
+          readCachedFloatGrid(targetPath, expectedPayload, cellCount, provenanceCacheReadOptions(context)),
+        probe: probeCachedGridSidecar,
         timeoutCounter: "runMaxSourceLockTimeouts",
       });
       if (waited) {
@@ -451,7 +522,12 @@ async function readOrDecodeRunMaxSourceGrid({ key, source, hour, record, context
       return build();
     }
     try {
-      const cachedAfterLock = await readCachedFloatGrid(cachePath, payload, cellCount);
+      const cachedAfterLock = await readCachedFloatGrid(
+        cachePath,
+        payload,
+        cellCount,
+        provenanceCacheReadOptions(context),
+      );
       if (cachedAfterLock) {
         incrementProfileCounter(context.profile, "runMaxSourceCacheHits");
         return cachedAfterLock;
@@ -461,10 +537,31 @@ async function readOrDecodeRunMaxSourceGrid({ key, source, hour, record, context
       await releaseGridCacheLock(lockPath, lockHandle);
     }
   })().finally(() => {
-    RUN_MAX_SOURCE_GRID_PROMISE_CACHE.delete(cacheKey);
+    if (cacheKey) {
+      RUN_MAX_SOURCE_GRID_PROMISE_CACHE.delete(cacheKey);
+    }
   });
-  RUN_MAX_SOURCE_GRID_PROMISE_CACHE.set(cacheKey, promise);
+  promise.provenanceSnapshot = () =>
+    buildFrameProvenanceCacheSnapshot(context?.decodeSession, {
+      terms: [{ hour: target, sourceKey: source.sourceKey, record }],
+      includeDerivations: false,
+    });
+  if (cacheKey) {
+    RUN_MAX_SOURCE_GRID_PROMISE_CACHE.set(cacheKey, promise);
+  }
   return promise;
+}
+
+async function restoreRunMaxProvenanceAfterSharedPromise(promise, cachePath, payload, context) {
+  const grid = await promise;
+  if (cachePath) {
+    const cellCount = Math.round(Number(context.width) * Number(context.height));
+    const cached = await readCachedFloatGrid(cachePath, payload, cellCount, provenanceCacheReadOptions(context));
+    if (!cached && typeof promise?.provenanceSnapshot === "function") {
+      restoreFrameProvenanceCacheSnapshot(context?.decodeSession, promise.provenanceSnapshot());
+    }
+  }
+  return grid;
 }
 
 async function decodeRunMaxSourceGridForHour({ source, hour, record, context }) {
@@ -624,6 +721,7 @@ function runMaxCumulativeGridPayload({ key, source, hour, record, context }) {
     productKey: context.modelConfig?.productKey || "",
     date: context.date,
     cycle: context.cycle,
+    forecastHourRosterIdentity: buildBoundedForecastHourRosterIdentity(context, hour),
     hour: Math.round(Number(hour)),
     width: context.width,
     height: context.height,
@@ -643,6 +741,7 @@ function runMaxSourceGridPayload({ key, source, hour, record, context }) {
     productKey: context.modelConfig?.productKey || "",
     date: context.date,
     cycle: context.cycle,
+    forecastHourRosterIdentity: buildBoundedForecastHourRosterIdentity(context, hour),
     hour: Math.round(Number(hour)),
     width: context.width,
     height: context.height,
@@ -665,12 +764,30 @@ function runMaxGridCachePath(cacheDir, payload, context) {
   );
 }
 
+function provenanceCacheReadOptions(context) {
+  return {
+    onMetadata: (metadata) => restoreFrameProvenanceCacheSnapshot(context?.decodeSession, metadata?.provenanceSnapshot),
+  };
+}
+
+function provenanceCacheMetadata(context, options = {}) {
+  return {
+    provenanceSnapshot: buildFrameProvenanceCacheSnapshot(context?.decodeSession, options),
+  };
+}
+
 function resolveAvailableForecastHours(latestMetadata, targetHour, modelKey = null) {
   const candidates = latestMetadata?.rawLatest?.hours || latestMetadata?.noaa?.hours || latestMetadata?.hours || [];
   const hours = Array.isArray(candidates)
     ? candidates.map((hour) => Math.round(Number(hour))).filter((hour) => Number.isFinite(hour) && hour >= 0)
     : [];
-  hours.push(...buildPrecipSourceForecastHours(modelKey || latestMetadata?.modelKey, targetHour));
+  // A declared build roster is the temporal sampling contract. In particular,
+  // default GFS uses only its rendered 3-hourly source frames, while the
+  // opt-in mixed tier may consume hourly sources through F120. Only legacy or
+  // isolated planner contexts without metadata infer the operational cadence.
+  if (hours.length === 0) {
+    hours.push(...buildPrecipSourceForecastHours(modelKey || latestMetadata?.modelKey, targetHour));
+  }
   if (!hours.includes(Number(targetHour))) {
     hours.push(Number(targetHour));
   }
@@ -882,23 +999,62 @@ async function buildPrecipIntervalSumPlan(context, startHour, endHour) {
   const usable = intervals.filter((interval) => {
     return interval.startHour >= startHour && interval.endHour <= endHour && interval.endHour > interval.startHour;
   });
-  const terms = [];
-  let cursor = startHour;
-  while (cursor < endHour) {
-    const candidates = usable
-      .filter((interval) => interval.startHour === cursor && interval.endHour > cursor)
-      .sort((left, right) => right.endHour - left.endHour);
-    const selected = candidates[0] || null;
-    if (!selected) {
-      context.intervalSumPlanCache?.set(cacheKey, []);
-      return [];
-    }
-    terms.push(selected);
-    cursor = selected.endHour;
-  }
-  const resolved = cursor === endHour ? terms : [];
+  const resolved = findPrecipIntervalCover(usable, startHour, endHour) || [];
   context.intervalSumPlanCache?.set(cacheKey, resolved);
   return resolved;
+}
+
+// Depth-first cover search with bounded backtracking. The old greedy loop
+// took the longest candidate at every cursor and dead-ended into [] (product
+// omitted) even when a valid cover existed — e.g. hours [0,3,5,6] with
+// intervals [0,3],[0,5],[3,6], where the greedy pick [0,5] strands hour 5
+// while [0,3]+[3,6] covers [0,6]. The DFS tries candidates at each cursor in
+// the greedy's exact order (longest endHour first, ties keep `usable` order —
+// Array.prototype.sort is stable), so whenever the greedy succeeds the first
+// cover found IS the greedy plan: identical picks, identical order, identical
+// float summation bytes. Only a dead end triggers backtracking. Candidates at
+// a cursor satisfy endHour > cursor, so the cursor strictly increases along
+// every path (acyclic, depth <= endHour - startHour), and a cursor whose
+// subtree holds no cover is memoized dead so each cursor subtree is explored
+// at most once — the search stays O(distinct cursors x candidates). Returns
+// the picked intervals in cursor order, or null when no cover exists.
+function findPrecipIntervalCover(usable, startHour, endHour) {
+  const candidatesByStart = new Map();
+  for (const interval of usable) {
+    const list = candidatesByStart.get(interval.startHour);
+    if (list) {
+      list.push(interval);
+    } else {
+      candidatesByStart.set(interval.startHour, [interval]);
+    }
+  }
+  for (const list of candidatesByStart.values()) {
+    list.sort((left, right) => right.endHour - left.endHour);
+  }
+  const deadCursors = new Set();
+  const picked = [];
+  const stack = [{ cursor: startHour, nextIndex: 0 }];
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (frame.cursor === endHour) {
+      return picked.slice();
+    }
+    const candidates = candidatesByStart.get(frame.cursor);
+    if (!candidates || frame.nextIndex >= candidates.length) {
+      deadCursors.add(frame.cursor);
+      stack.pop();
+      picked.pop();
+      continue;
+    }
+    const interval = candidates[frame.nextIndex];
+    frame.nextIndex += 1;
+    if (deadCursors.has(interval.endHour)) {
+      continue;
+    }
+    picked.push(interval);
+    stack.push({ cursor: interval.endHour, nextIndex: 0 });
+  }
+  return null;
 }
 
 async function getPrecipIntervalsForHour(context, hour) {
@@ -983,6 +1139,7 @@ async function decodePrecipAccumulationSourceGrids(sourceRefs, context) {
         payload: precipSourceGridCachePayload(ref, context),
         context,
         values,
+        provenanceTerms: [ref],
       });
       unique.delete(sourceKey);
       cacheHits += 1;
@@ -1022,6 +1179,7 @@ async function decodePrecipAccumulationSourceGrids(sourceRefs, context) {
         payload: precipSourceGridCachePayload(ref, context),
         context,
         values: cached,
+        provenanceTerms: [ref],
       });
       unique.delete(sourceKey);
       cacheHits += 1;
@@ -1051,6 +1209,7 @@ async function decodePrecipAccumulationSourceGrids(sourceRefs, context) {
               payload: precipSourceGridCachePayload(ref, context),
               context,
               values,
+              provenanceTerms: [ref],
             });
           }
         }
@@ -1082,6 +1241,7 @@ async function decodePrecipAccumulationSourceGrids(sourceRefs, context) {
             payload: precipSourceGridCachePayload(ref, context),
             context,
             values,
+            provenanceTerms: [ref],
           });
         }
         if (ref && decodedResult.decodedKeys.has(key)) {
@@ -1304,6 +1464,7 @@ function precipSourceGridCachePayload(ref, context) {
     productKey: context.modelConfig?.productKey || "",
     date: context.date,
     cycle: context.cycle,
+    forecastHourRosterIdentity: buildBoundedForecastHourRosterIdentity(context, ref.hour),
     hour: Math.round(Number(ref.hour)),
     width: context.width,
     height: context.height,
@@ -1327,34 +1488,34 @@ function precipSourceHourLockPath(hour, context) {
 }
 
 async function waitForCachedPrecipHourSources(refs, context, lockPath) {
-  const startedAt = performance.now();
-  while (performance.now() - startedAt < GRID_CACHE_LOCK_TIMEOUT_MS) {
-    await sleep(GRID_CACHE_LOCK_POLL_MS + Math.round(Math.random() * 40));
-    const cached = await readCachedPrecipHourSources(refs, context);
-    if (cached.size === refs.length) {
-      return cached;
-    }
-    const lockExists = await pathExists(lockPath);
-    if (!lockExists) {
-      return cached;
-    }
+  return waitForCachedRefGrids({
+    refs,
+    lockPath,
+    concurrency: metadataFanoutConcurrency(context, 16),
+    probeRef: (ref) => probeCachedPrecipSourceGrid(ref, context),
+    readRef: (ref) => readCachedPrecipSourceGrid(ref, context),
+    profile: context.profile,
+    timeoutCounter: "precipAccumGridLockTimeouts",
+  });
+}
+
+async function probeCachedPrecipSourceGrid(ref, context) {
+  const cachePath = precipSourceGridCachePath(ref, context);
+  if (!cachePath) {
+    return false;
   }
-  incrementProfileCounter(context.profile, "precipAccumGridLockTimeouts");
-  return readCachedPrecipHourSources(refs, context);
+  try {
+    const metadata = JSON.parse(await fs.promises.readFile(`${cachePath}.json`, "utf8"));
+    return directCacheMetadataPayloadMatches(metadata, precipSourceGridCachePayload(ref, context));
+  } catch {
+    return false;
+  }
 }
 
 async function readCachedPrecipHourSources(refs, context) {
-  const pairs = await mapWithConcurrency(refs, metadataFanoutConcurrency(context, 16), async (ref) => [
-    ref.sourceKey,
-    await readCachedPrecipSourceGrid(ref, context),
-  ]);
-  const out = new Map();
-  for (const [sourceKey, cached] of pairs) {
-    if (cached) {
-      out.set(sourceKey, cached);
-    }
-  }
-  return out;
+  return readCachedRefGridsBySourceKey(refs, metadataFanoutConcurrency(context, 16), (ref) =>
+    readCachedPrecipSourceGrid(ref, context),
+  );
 }
 
 async function readCachedPrecipSourceGrid(ref, context) {
@@ -1373,6 +1534,7 @@ async function readCachedPrecipSourceGrid(ref, context) {
     if (body.length !== expectedBytes) {
       return null;
     }
+    restoreFrameProvenanceCacheSnapshot(context.decodeSession, metadata.provenanceSnapshot);
     return float32ArrayViewFromBuffer(body, 0, body.byteLength);
   } catch {
     return null;
@@ -1382,17 +1544,38 @@ async function readCachedPrecipSourceGrid(ref, context) {
 async function writeCachedPrecipSourceGrid(ref, values, context) {
   const cachePath = precipSourceGridCachePath(ref, context);
   if (!cachePath || !values || values.length !== Number(context.width) * Number(context.height)) {
-    return;
+    return false;
   }
   const metadata = precipSourceGridCachePayload(ref, context);
-  await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
   const tmp = `${cachePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   const tmpJson = `${tmp}.json`;
-  const body = Buffer.from(values.buffer, values.byteOffset, values.byteLength);
-  await fs.promises.writeFile(tmp, body);
-  await fs.promises.writeFile(tmpJson, JSON.stringify(cacheMetadataWithPayload(metadata)));
-  await fs.promises.rename(tmp, cachePath);
-  await fs.promises.rename(tmpJson, `${cachePath}.json`);
+  // Cache persistence is best-effort: a failed write must degrade to a
+  // warn-and-recompute, never fail the frame that already holds the grid
+  // (mirrors writeCachedFloatGrid).
+  try {
+    await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
+    const body = Buffer.from(values.buffer, values.byteOffset, values.byteLength);
+    await fs.promises.writeFile(tmp, body);
+    await fs.promises.writeFile(
+      tmpJson,
+      JSON.stringify(
+        cacheMetadataWithPayload(
+          metadata,
+          provenanceCacheMetadata(context, { terms: [ref], includeDerivations: false }),
+        ),
+      ),
+    );
+    await fs.promises.rename(tmp, cachePath);
+    await fs.promises.rename(tmpJson, `${cachePath}.json`);
+    return true;
+  } catch (error) {
+    await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    await fs.promises.rm(tmpJson, { force: true }).catch(() => {});
+    console.warn(
+      `[noaa-beta] precip source grid cache write failed for ${cachePath}: ${String(error?.message || error)}`,
+    );
+    return false;
+  }
 }
 
 function metadataFanoutConcurrency(context, cap = 8) {
@@ -1439,6 +1622,7 @@ module.exports = {
   precipSourceKey,
   precipTerm,
   previousRunMaxSourceHour,
+  probeCachedPrecipSourceGrid,
   readCachedPrecipHourSources,
   readCachedPrecipSourceGrid,
   readCachedRunMaxGridForHour,

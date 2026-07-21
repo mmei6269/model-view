@@ -7,6 +7,16 @@ const os = require("os");
 const path = require("path");
 const test = require("node:test");
 const { createLocalArtifactServer } = require("../scripts/lib/local-artifact-server");
+const { buildRecentCycleCandidates } = require("../scripts/lib/noaa-build/run-resolution");
+
+// A run inside the model's latest-resolution candidate window (the newest
+// recent cycle): a latest render CAN resolve to it, so it must conflict.
+// The 20260703 fixtures elsewhere in this file are archived runs a latest
+// request can never land on (the window spans 72 h).
+function recentCandidateRunId(modelKey = "hrrr") {
+  const candidate = buildRecentCycleCandidates(modelKey)[0];
+  return `${candidate.date}-${candidate.cycle}00Z`;
+}
 
 function request(port, method, rawPath, body, extraHeaders) {
   return new Promise((resolve, reject) => {
@@ -157,6 +167,84 @@ test("available-runs skips frame probing for built runs already at the model's f
   );
 });
 
+test("available-runs does not mistake NAM's 37-frame default tier for the official full horizon", async () => {
+  const { buildFullHoursForModel } = require("../scripts/lib/noaa-build/run-resolution");
+  const shortHours = buildFullHoursForModel("nam");
+  let frameProbeCalls = 0;
+  await withServer(
+    {
+      probeUpstreamRuns: async () => [],
+      probeRunFrameCount: async () => {
+        frameProbeCalls += 1;
+        return { frameCount: 53, maxHour: 84 };
+      },
+    },
+    async ({ runtime, port }) => {
+      const runId = "20260703-0600Z";
+      const manifestPath = runtime.getManifestStoragePath("nam", runId, runtime.defaultViewKey);
+      await fs.promises.mkdir(path.dirname(manifestPath), { recursive: true });
+      await fs.promises.writeFile(
+        manifestPath,
+        JSON.stringify({
+          model: "nam",
+          run: runId,
+          view: runtime.defaultViewKey,
+          frames: shortHours.map((hour) => ({ hour })),
+          hourStatus: {},
+        }),
+      );
+      const res = await request(port, "GET", "/actions/available-runs?models=nam&view=conus");
+      assert.equal(res.status, 200);
+      const built = JSON.parse(res.body).runs.nam.built[0];
+      assert.equal(built.upstreamFrameCount, 53);
+      assert.equal(built.upstreamMaxHour, 84);
+      assert.equal(frameProbeCalls, 1, "a short-tier NAM build can still gain official-horizon frames");
+    },
+  );
+});
+
+test("available-runs distinguishes GFS's 129-frame default from its 209-frame published cadence", async () => {
+  const { buildFullHoursForModel } = require("../scripts/lib/noaa-build/run-resolution");
+  const defaultHours = buildFullHoursForModel("gfs");
+  let frameProbeCalls = 0;
+  await withServer(
+    {
+      probeUpstreamRuns: async () => [{ date: "20260703", cycle: "00", runId: "20260703-0000Z" }],
+      probeRunFrameCount: async () => {
+        frameProbeCalls += 1;
+        return { frameCount: 209, maxHour: 384 };
+      },
+    },
+    async ({ runtime, port }) => {
+      const runId = "20260703-0000Z";
+      const manifestPath = runtime.getManifestStoragePath("gfs", runId, runtime.defaultViewKey);
+      await fs.promises.mkdir(path.dirname(manifestPath), { recursive: true });
+      await fs.promises.writeFile(
+        manifestPath,
+        JSON.stringify({
+          model: "gfs",
+          run: runId,
+          view: runtime.defaultViewKey,
+          frames: defaultHours.map((hour) => ({ hour })),
+          hourStatus: {},
+        }),
+      );
+      const res = await request(port, "GET", "/actions/available-runs?models=gfs&view=conus");
+      assert.equal(res.status, 200);
+      const payload = JSON.parse(res.body).runs.gfs;
+      const built = payload.built[0];
+      assert.equal(built.frameCount, 129);
+      assert.equal(built.upstreamFrameCount, 209, "legacy field remains the source-cadence count");
+      assert.equal(built.upstreamSourceFrameCount, 209, "source cadence is explicit");
+      assert.equal(built.upstreamDefaultRenderFrameCount, 129, "default renderer selects the 3-hourly subset");
+      assert.equal(payload.upstream[0].frameCount, 209, "legacy upstream count remains source cadence");
+      assert.equal(payload.upstream[0].sourceFrameCount, 209);
+      assert.equal(payload.upstream[0].defaultRenderFrameCount, 129);
+      assert.equal(frameProbeCalls, 1);
+    },
+  );
+});
+
 test("available-runs rejects an unknown model with 400 and does not probe", async () => {
   let probeCalls = 0;
   await withServer(
@@ -265,7 +353,8 @@ test("render spawns the builder with an argv array and returns a jobId", async (
     assert.ok(Array.isArray(argv), "argv is an array (shell:false)");
     assert.ok(argv.includes("--models=hrrr"), "models flag marshalled");
     assert.ok(argv.includes("--view=conus"), "view flag marshalled");
-    assert.ok(argv.includes("--full"), "UI renders build every published frame, not DEFAULT_HOURS");
+    assert.ok(argv.includes("--hours=full"), "UI renders build every published frame, not DEFAULT_HOURS");
+    assert.ok(argv.includes("--require-full-horizon"), "the UI full-horizon choice requires a completed horizon");
     assert.ok(argv.includes("--categories=surface,precip,cloud,severe,upperAir"), "enabled categories marshalled");
     assert.ok(argv.includes("--severe-tier=simple"), "severe tier marshalled");
     assert.ok(argv.includes("--winter-tier=full"), "winter tier marshalled even though winter is disabled");
@@ -345,8 +434,8 @@ test("render canonicalizes a full selection to the no-flags default build", asyn
     );
     assert.deepEqual(
       fullArgv,
-      ["--models=hrrr", "--view=conus", "--full"],
-      "full selection argv carries no selection flags (hours flag --full is orthogonal to selection parity)",
+      ["--models=hrrr", "--view=conus", "--hours=full", "--require-full-horizon"],
+      "full selection argv carries no selection flags (--hours=full is orthogonal to selection parity)",
     );
 
     const partialBody = JSON.parse(JSON.stringify(VALID_RENDER_BODY));
@@ -542,6 +631,8 @@ test("POST mutation routes accept localhost Origins and requests without an Orig
     assert.equal(fromUi.status, 200, "localhost Origin passes");
     assert.equal(spawn.calls.length, 1, "localhost-origin render spawned");
     // curl / server-to-server (Vite /__cf proxy): no Origin header at all.
+    // (The archived prefetch run is provably disjoint from the still-
+    // unresolved latest render, so no conflict interferes with this test.)
     await seedBuiltRun(runtime, PREFETCH_BODY.run, [0, 3]);
     const noOrigin = await request(port, "POST", "/actions/prefetch-soundings", PREFETCH_BODY);
     assert.equal(noOrigin.status, 200, "missing Origin passes");
@@ -817,6 +908,89 @@ test("status reports progress against THIS build's target, ignoring prior builds
   });
 });
 
+test("unbounded latest progress uses the builder's exact hour plan before the first frame", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ actions, port }) => {
+    const started = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      models: ["hrrr"],
+      run: "latest",
+    });
+    const { jobId } = JSON.parse(started.body);
+    const child = spawn.children[0];
+
+    child._emitStdoutLine(
+      "[noaa-beta] building models=hrrr view=conus hours=hrrr:0,1,2,3,4 cache=/tmp/noaa-beta-cache",
+    );
+    child._emitStdoutLine("[noaa-beta] hrrr/conus run=20260703-1200Z start");
+    child._emitStdoutLine("[noaa-beta] hrrr/20260703-1200Z F000 complete finish=12:00:00");
+
+    const status = JSON.parse((await request(port, "GET", `/actions/status/${jobId}`)).body);
+    assert.equal(status.total, 5, "exact planned denominator is known before the final JSON summary");
+    assert.equal(status.markerTotal, 5, "one completed frame reports 1/5, never the old false 1/1");
+    assert.equal(status.built, 1);
+    assert.deepEqual(actions.jobs.getJob(jobId).targetHours, [0, 1, 2, 3, 4]);
+    assert.deepEqual(actions.jobs.getJob(jobId).resolvedRunsByModel, { hrrr: "20260703-1200Z" });
+  });
+});
+
+test("builder hour plan replaces a requested cap with the realized published prefix", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ actions, port }) => {
+    const started = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      run: "20260703-1200Z",
+      maxHour: 24,
+    });
+    const { jobId } = JSON.parse(started.body);
+    const before = JSON.parse((await request(port, "GET", `/actions/status/${jobId}`)).body);
+    assert.equal(before.markerTotal, 25, "requested F000-F024 roster is only a pre-plan estimate");
+
+    spawn.children[0]._emitStdoutLine(
+      "[noaa-beta] building models=hrrr view=conus hours=hrrr:0,1,2,3,4,5,6 cache=/tmp/noaa-beta-cache",
+    );
+    const after = JSON.parse((await request(port, "GET", `/actions/status/${jobId}`)).body);
+    assert.equal(after.total, 7);
+    assert.equal(after.markerTotal, 7, "uploading run denominator is the realized F000-F006 prefix");
+    assert.deepEqual(actions.jobs.getJob(jobId).targetHours, [0, 1, 2, 3, 4, 5, 6]);
+  });
+});
+
+test("multi-model final builder summary aggregates every model's exact counts", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const started = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      models: ["hrrr", "nam3km"],
+      run: "latest",
+    });
+    const { jobId } = JSON.parse(started.body);
+    const child = spawn.children[0];
+    child._emitStdoutLine(
+      "[noaa-beta] building models=hrrr,nam3km view=conus hours=hrrr:0,1 nam3km:0,3,6 cache=/tmp/noaa-beta-cache",
+    );
+    let status = JSON.parse((await request(port, "GET", `/actions/status/${jobId}`)).body);
+    assert.equal(status.markerTotal, 5, "pre-frame plan sums both model rosters");
+
+    const summary = {
+      results: [
+        { model: "hrrr", run: "20260703-1200Z", frameCount: 2, built: 1, reused: 1, failed: 0 },
+        { model: "nam3km", run: "20260703-1200Z", frameCount: 3, built: 2, reused: 0, failed: 1 },
+      ],
+    };
+    for (const line of JSON.stringify(summary, null, 2).split("\n")) {
+      child._emitStdoutLine(line);
+    }
+    status = JSON.parse((await request(port, "GET", `/actions/status/${jobId}`)).body);
+    assert.equal(status.built, 3);
+    assert.equal(status.reused, 1);
+    assert.equal(status.failed, 1);
+    assert.equal(status.total, 5, "denominator aggregates both result frameCounts");
+    assert.equal(status.markerTotal, 5);
+    assert.equal(status.run, "latest", "different per-model latest cycles are never collapsed to one scalar run");
+  });
+});
+
 test("prefetch status tracks warmed/cached lines against the requested hours, not pre-existing render markers", async () => {
   const spawn = makeSpawnStub();
   await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ runtime, port }) => {
@@ -896,4 +1070,629 @@ test("read-only GET routes never spawn a child process", async () => {
       assert.equal(spawn.calls.length, 0, "no GET route spawned a process");
     },
   );
+});
+
+test("cancel terminates a running job as canceled, not failed", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const res = await request(port, "POST", "/actions/render", VALID_RENDER_BODY);
+    assert.equal(res.status, 200);
+    const { jobId } = JSON.parse(res.body);
+
+    const cancel = await request(port, "POST", `/actions/cancel/${jobId}`, {});
+    assert.equal(cancel.status, 200);
+    assert.equal(JSON.parse(cancel.body).status, "canceled", "stub kill exits synchronously -> canceled");
+    assert.equal(spawn.children[0].killed, true, "the running child was killed");
+
+    const status = await request(port, "GET", `/actions/status/${jobId}`);
+    assert.equal(JSON.parse(status.body).status, "canceled", "canceled, never failed");
+  });
+});
+
+test("canceling a queued chained job still launches its successors", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    // Three distinct run picks -> three chained jobs (only the first spawns).
+    const res = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      models: ["gfs", "nam", "hrrr"],
+      runs: { gfs: "latest", nam: "20260703-0600Z", hrrr: "20260703-1200Z" },
+    });
+    assert.equal(res.status, 200);
+    const { jobs } = JSON.parse(res.body);
+    assert.equal(jobs.length, 3, "three run groups");
+    assert.equal(spawn.children.length, 1, "only the head of the chain spawns");
+
+    const cancel = await request(port, "POST", `/actions/cancel/${jobs[1].jobId}`, {});
+    assert.equal(cancel.status, 200);
+    assert.equal(JSON.parse(cancel.body).status, "canceled", "queued job cancels immediately");
+    assert.equal(spawn.children.length, 1, "canceling a queued job spawns nothing");
+
+    // Head exits -> canceled middle is skipped -> tail spawns.
+    spawn.children[0]._emitExit(0);
+    assert.equal(spawn.children.length, 2, "successor behind the canceled job launched");
+    const tail = await request(port, "GET", `/actions/status/${jobs[2].jobId}`);
+    assert.equal(JSON.parse(tail.body).status, "running", "tail job is running");
+    const middle = await request(port, "GET", `/actions/status/${jobs[1].jobId}`);
+    assert.equal(JSON.parse(middle.body).status, "canceled", "middle job stays canceled");
+  });
+});
+
+test("cancel is idempotent on terminal jobs, 404s on unknown ids, and guards origin", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const res = await request(port, "POST", "/actions/render", VALID_RENDER_BODY);
+    const { jobId } = JSON.parse(res.body);
+    spawn.children[0]._emitExit(0);
+
+    const cancelDone = await request(port, "POST", `/actions/cancel/${jobId}`, {});
+    assert.equal(cancelDone.status, 200, "terminal cancel is a no-op, not an error");
+    assert.equal(JSON.parse(cancelDone.body).status, "done", "done job stays done");
+
+    const unknown = await request(port, "POST", "/actions/cancel/job-nope", {});
+    assert.equal(unknown.status, 404);
+
+    const crossOrigin = await request(port, "POST", `/actions/cancel/${jobId}`, {}, { Origin: "https://evil.example" });
+    assert.equal(crossOrigin.status, 403, "cancel rejects cross-origin POSTs");
+  });
+});
+
+test("render maxHour flows to the builder argv and sets the marker denominator", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const res = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      runs: { hrrr: "20260703-0600Z" },
+      maxHour: 6,
+    });
+    assert.equal(res.status, 200);
+    assert.ok(spawn.calls[0].argv.includes("--max-hour=6"), "argv carries the prefix cap");
+    assert.ok(
+      !spawn.calls[0].argv.includes("--require-full-horizon"),
+      "a short prefix remains eligible for the newest partially published run",
+    );
+
+    const { jobId } = JSON.parse(res.body);
+    const status = JSON.parse((await request(port, "GET", `/actions/status/${jobId}`)).body);
+    assert.equal(status.markerTotal, 7, "hrrr f000-f006 = 7 target frames");
+  });
+});
+
+test("NAM caps beyond F036 opt into the official mixed-cadence horizon", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const res = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      models: ["nam"],
+      maxHour: 48,
+    });
+    assert.equal(res.status, 200);
+    assert.ok(spawn.calls[0].argv.includes("--require-full-horizon"));
+    assert.ok(spawn.calls[0].argv.includes("--max-hour=48"));
+    const { jobId } = JSON.parse(res.body);
+    const status = JSON.parse((await request(port, "GET", `/actions/status/${jobId}`)).body);
+    assert.equal(status.markerTotal, 41, "NAM F000-F048 is 37 hourly frames plus four 3-hour frames");
+  });
+});
+
+test("render forwards optional GFS cadence and validated science prototype tiers", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const res = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      models: ["gfs", "hrrr"],
+      categories: {
+        ...VALID_RENDER_BODY.categories,
+        severe: { enabled: true, tier: "full" },
+      },
+      gfsTemporalTier: "hourly-through-120",
+      sciencePrototypes: ["camDcape21Level", "rowAwareCenterValidation"],
+    });
+    assert.equal(res.status, 200);
+    assert.ok(spawn.calls[0].argv.includes("--gfs-hourly-through-120"));
+    assert.ok(spawn.calls[0].argv.includes("--science-prototypes=camDcape21Level,rowAwareCenterValidation"));
+  });
+});
+
+test("render rejects science prototypes whose model or Severe Full prerequisites are absent", async () => {
+  const spawn = makeSpawnStub();
+  const withSevere = (enabled, tier, overrides = {}) => ({
+    ...VALID_RENDER_BODY,
+    ...overrides,
+    categories: {
+      ...VALID_RENDER_BODY.categories,
+      severe: { enabled, tier },
+    },
+  });
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const cases = [
+      withSevere(true, "full", { models: ["gfs"], sciencePrototypes: ["camDcape21Level"] }),
+      withSevere(true, "simple", { models: ["hrrr"], sciencePrototypes: ["camDcape21Level"] }),
+      withSevere(false, "full", { models: ["nam3km"], sciencePrototypes: ["camDcape21Level"] }),
+      withSevere(true, "simple", { models: ["gfs"], sciencePrototypes: ["effectiveStp100mbReduced"] }),
+      withSevere(false, "full", { models: ["hrrr"], sciencePrototypes: ["effectiveStp100mbReduced"] }),
+    ];
+    for (const body of cases) {
+      const res = await request(port, "POST", "/actions/render", body);
+      assert.equal(res.status, 400, res.body);
+    }
+    assert.equal(spawn.calls.length, 0);
+  });
+});
+
+test("row-aware center validation remains valid without upper-air or Severe Full categories", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const res = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      categories: {
+        surface: true,
+        precip: false,
+        radar: false,
+        cloud: false,
+        upperAir: false,
+        severe: { enabled: false, tier: "simple" },
+        winter: { enabled: false, tier: "simple" },
+      },
+      sciencePrototypes: ["rowAwareCenterValidation"],
+    });
+    assert.equal(res.status, 200, res.body);
+    assert.ok(spawn.calls[0].argv.includes("--science-prototypes=rowAwareCenterValidation"));
+  });
+});
+
+test("render rejects unknown GFS cadence and science prototype values before spawning", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    for (const body of [
+      { ...VALID_RENDER_BODY, gfsTemporalTier: "hourly-forever" },
+      { ...VALID_RENDER_BODY, models: ["hrrr"], gfsTemporalTier: "hourly-through-120" },
+      { ...VALID_RENDER_BODY, sciencePrototypes: ["inventedMethod"] },
+      { ...VALID_RENDER_BODY, sciencePrototypes: "camDcape21Level" },
+    ]) {
+      const res = await request(port, "POST", "/actions/render", body);
+      assert.equal(res.status, 400);
+    }
+    assert.equal(spawn.calls.length, 0);
+  });
+});
+
+test("render tuning fields flow to builder flags; full selections still emit no category flags", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const fullBody = {
+      models: ["hrrr"],
+      view: "conus",
+      run: "latest",
+      categories: {
+        surface: true,
+        precip: true,
+        radar: true,
+        cloud: true,
+        upperAir: true,
+        severe: { enabled: true, tier: "full" },
+        winter: { enabled: true, tier: "full" },
+      },
+      maxHour: 12,
+      tuning: { workerCount: 8, totalFrameConcurrency: 12, rangeConcurrency: 2, decodeConcurrency: 1 },
+    };
+    const res = await request(port, "POST", "/actions/render", fullBody);
+    assert.equal(res.status, 200);
+    const argv = spawn.calls[0].argv;
+    assert.ok(argv.includes("--worker-count=8"), "workerCount mapped");
+    assert.ok(argv.includes("--total-frame-concurrency=12"), "totalFrameConcurrency mapped");
+    assert.ok(argv.includes("--range-concurrency=2"), "rangeConcurrency mapped");
+    assert.ok(argv.includes("--decode-concurrency=1"), "decodeConcurrency mapped");
+    assert.ok(argv.includes("--max-hour=12"));
+    assert.ok(
+      !argv.some((flag) => flag.startsWith("--categories=")),
+      "byte-identical parity: tuning/maxHour never force selection flags onto a full render",
+    );
+  });
+});
+
+test("render rejects out-of-range maxHour and tuning values with 400", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    for (const body of [
+      { ...VALID_RENDER_BODY, maxHour: -1 },
+      { ...VALID_RENDER_BODY, maxHour: 3.5 },
+      { ...VALID_RENDER_BODY, maxHour: "abc" },
+      { ...VALID_RENDER_BODY, maxHour: 999 },
+      { ...VALID_RENDER_BODY, tuning: { workerCount: 99 } },
+      { ...VALID_RENDER_BODY, tuning: { decodeConcurrency: 0 } },
+      { ...VALID_RENDER_BODY, tuning: { bogusKnob: 4 } },
+      { ...VALID_RENDER_BODY, tuning: "fast" },
+    ]) {
+      const res = await request(port, "POST", "/actions/render", body);
+      assert.equal(res.status, 400, `rejected: ${JSON.stringify(body.maxHour ?? body.tuning)}`);
+    }
+    assert.equal(spawn.calls.length, 0, "nothing spawned for rejected bodies");
+  });
+});
+
+test("multi-run selection spawns one chained job per run, newest first", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const res = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      models: ["hrrr", "nam"],
+      runs: { hrrr: ["20260703-0600Z", "20260703-1200Z"], nam: "20260703-0600Z" },
+    });
+    assert.equal(res.status, 200);
+    const { jobs } = JSON.parse(res.body);
+    assert.equal(jobs.length, 2, "two distinct runs -> two jobs");
+    assert.equal(jobs[0].run, "20260703-1200Z", "newest run launches first");
+    assert.deepEqual(jobs[0].models, ["hrrr"]);
+    assert.equal(jobs[1].run, "20260703-0600Z");
+    assert.deepEqual(jobs[1].models, ["hrrr", "nam"], "models sharing a run stay in one job");
+
+    assert.equal(spawn.calls.length, 1, "only the newest-run job spawns immediately");
+    assert.ok(spawn.calls[0].argv.includes("--date=20260703"));
+    assert.ok(spawn.calls[0].argv.includes("--cycle=12"));
+
+    spawn.children[0]._emitExit(0);
+    assert.equal(spawn.calls.length, 2, "older run spawns after the newest finishes");
+    assert.ok(spawn.calls[1].argv.includes("--cycle=06"));
+    assert.ok(spawn.calls[1].argv.includes("--models=hrrr,nam"));
+  });
+});
+
+test("multi-run selection puts 'latest' ahead of picked runs and dedupes repeats", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const res = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      runs: { hrrr: ["20260703-0600Z", "latest", "20260703-0600Z"] },
+    });
+    assert.equal(res.status, 200);
+    const { jobs } = JSON.parse(res.body);
+    assert.equal(jobs.length, 2, "duplicate run ids collapse");
+    assert.equal(jobs[0].run, "latest", "latest is newest by definition and goes first");
+    assert.equal(jobs[1].run, "20260703-0600Z");
+  });
+});
+
+test("multi-run conflicts reject the whole request before any spawn", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const first = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      runs: { hrrr: "20260703-1200Z" },
+    });
+    assert.equal(first.status, 200);
+    assert.equal(spawn.calls.length, 1);
+
+    const second = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      runs: { hrrr: ["20260703-0600Z", "20260703-1200Z"] },
+    });
+    assert.equal(second.status, 409, "any overlapping (model, run) rejects the batch");
+    assert.equal(spawn.calls.length, 1, "no partial spawn from the rejected batch");
+  });
+});
+
+test("multi-run selection rejects malformed run ids inside arrays", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const res = await request(port, "POST", "/actions/render", {
+      ...VALID_RENDER_BODY,
+      runs: { hrrr: ["20260703-1200Z", "../etc"] },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(spawn.calls.length, 0);
+  });
+});
+
+test("render 409s a concrete run while a same-model 'latest' build is unresolved (and vice versa)", async () => {
+  // latest-then-concrete: the latest job has not logged its resolved cycle
+  // yet, so a concrete resubmit INSIDE the candidate window can target the
+  // very same run tree; an archived run is provably disjoint and proceeds.
+  const spawnLatestFirst = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawnLatestFirst.spawnBuildProcess }, async ({ port }) => {
+    const latest = await request(port, "POST", "/actions/render", VALID_RENDER_BODY);
+    assert.equal(latest.status, 200, "latest render accepted");
+    const concrete = JSON.parse(JSON.stringify(VALID_RENDER_BODY));
+    concrete.run = recentCandidateRunId();
+    const dup = await request(port, "POST", "/actions/render", concrete);
+    assert.equal(dup.status, 409, "an unresolved 'latest' job can land on this run — concrete resubmit must 409");
+    assert.equal(spawnLatestFirst.calls.length, 1, "no second builder on the same run tree");
+
+    const archived = JSON.parse(JSON.stringify(VALID_RENDER_BODY));
+    archived.run = "20260703-1200Z";
+    const allowed = await request(port, "POST", "/actions/render", archived);
+    assert.equal(allowed.status, 200, "an archived run is outside the latest window — provably disjoint");
+    assert.equal(spawnLatestFirst.calls.length, 2, "the archived-run build spawned");
+  });
+
+  // concrete-then-latest: 'latest' can resolve to any run inside the
+  // recent-cycle candidate window, this one included.
+  const spawnConcreteFirst = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawnConcreteFirst.spawnBuildProcess }, async ({ port }) => {
+    const concrete = JSON.parse(JSON.stringify(VALID_RENDER_BODY));
+    concrete.run = recentCandidateRunId();
+    const first = await request(port, "POST", "/actions/render", concrete);
+    assert.equal(first.status, 200, "concrete render accepted");
+    const dup = await request(port, "POST", "/actions/render", VALID_RENDER_BODY);
+    assert.equal(dup.status, 409, "'latest' can land on the running concrete run — must 409");
+    assert.equal(spawnConcreteFirst.calls.length, 1, "no second builder on the same run tree");
+  });
+});
+
+test("a resolved 'latest' build only 409s its own run — other picked runs proceed", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const latest = await request(port, "POST", "/actions/render", VALID_RENDER_BODY);
+    assert.equal(latest.status, 200);
+    // The builder logs its resolved cycle early ("run=... start"); from then
+    // on only that concrete run conflicts.
+    spawn.children[0]._emitStdoutLine("[noaa-beta] hrrr/conus run=20260703-1200Z start");
+
+    const same = JSON.parse(JSON.stringify(VALID_RENDER_BODY));
+    same.run = "20260703-1200Z";
+    const dup = await request(port, "POST", "/actions/render", same);
+    assert.equal(dup.status, 409, "the resolved run still conflicts");
+    assert.equal(spawn.calls.length, 1, "the duplicate did not spawn");
+
+    const other = JSON.parse(JSON.stringify(VALID_RENDER_BODY));
+    other.run = "20260703-0600Z";
+    const allowed = await request(port, "POST", "/actions/render", other);
+    assert.equal(allowed.status, 200, "a provably different run may proceed");
+    assert.equal(spawn.calls.length, 2, "the disjoint picked run spawned");
+  });
+});
+
+test("a prefetch pinned to an archived run never 409-blocks a latest render", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ runtime, port }) => {
+    // 20260703 is far outside the recent-cycle candidate window, so no
+    // latest resolution — even a --require-full-horizon fallback to an older
+    // fully-published cycle — can land on it.
+    await seedBuiltRun(runtime, "20260703-0600Z", [0, 3]);
+    await seedLatestPointer(runtime, "20260703-0600Z");
+
+    const prefetch = await request(port, "POST", "/actions/prefetch-soundings", {
+      models: ["hrrr"],
+      runs: { hrrr: "20260703-0600Z" },
+      view: "conus",
+    });
+    assert.equal(prefetch.status, 200, "archived-run prefetch accepted");
+    assert.equal(spawn.calls.length, 1);
+
+    const render = await request(port, "POST", "/actions/render", VALID_RENDER_BODY);
+    assert.equal(render.status, 200, "an archived-run prefetch never blocks a latest render");
+    assert.equal(spawn.calls.length, 2, "the latest render spawned");
+  });
+});
+
+test("a prefetch pinned to a run inside the latest candidate window still blocks a latest render", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ runtime, port }) => {
+    // A recent run CAN be what 'latest' resolves to — not only the newest
+    // cycle: --require-full-horizon renders skip partially published cycles
+    // and settle on an older fully published one. Everything in the window
+    // must therefore conflict.
+    const recentRun = recentCandidateRunId();
+    await seedBuiltRun(runtime, recentRun, [0, 3]);
+    await seedLatestPointer(runtime, recentRun);
+
+    const prefetch = await request(port, "POST", "/actions/prefetch-soundings", {
+      models: ["hrrr"],
+      runs: { hrrr: recentRun },
+      view: "conus",
+    });
+    assert.equal(prefetch.status, 200, "recent-run prefetch accepted");
+    assert.equal(spawn.calls.length, 1);
+
+    const render = await request(port, "POST", "/actions/render", VALID_RENDER_BODY);
+    assert.equal(render.status, 409, "a latest render can land on the prefetch's run tree — must 409");
+    assert.match(
+      JSON.parse(render.body).error,
+      /A job for hrrr\/latest\/conus is already running/,
+      "the 409 names a job, not a render — the blocker here is a prefetch",
+    );
+    assert.equal(spawn.calls.length, 1, "no second child spawned");
+  });
+});
+
+test("prefetch 409s an in-window run while an unresolved 'latest' render could be building it", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ runtime, port }) => {
+    const recentRun = recentCandidateRunId();
+    await seedBuiltRun(runtime, recentRun, [0, 3]);
+    await seedLatestPointer(runtime, recentRun);
+    const render = await request(port, "POST", "/actions/render", VALID_RENDER_BODY);
+    assert.equal(render.status, 200);
+
+    // 'latest' resolves to the built pointer run — a cycle inside the
+    // candidate window that the unresolved latest render may be building
+    // right now. The exact-match check used to pass this and put two
+    // children on one run tree.
+    const conflicted = await request(port, "POST", "/actions/prefetch-soundings", {
+      models: ["hrrr"],
+      runs: { hrrr: "latest" },
+      view: "conus",
+    });
+    assert.equal(conflicted.status, 409, "a possibly-shared run tree is a conflict");
+    assert.equal(spawn.calls.length, 1, "no second child spawned");
+
+    // An ARCHIVED run stays warmable during the unresolved phase: the
+    // latest render can only land inside the window, so the trees are
+    // provably disjoint (the symmetric direction of the archived-run rule).
+    await seedBuiltRun(runtime, "20260703-0600Z", [0, 3]);
+    const archived = await request(port, "POST", "/actions/prefetch-soundings", {
+      models: ["hrrr"],
+      runs: { hrrr: "20260703-0600Z" },
+      view: "conus",
+    });
+    assert.equal(archived.status, 200, "archived-run prefetch is disjoint from an unresolved latest render");
+    assert.equal(spawn.calls.length, 2);
+
+    // Once the builder logs a DIFFERENT resolved cycle, even the in-window
+    // pointer run is provably disjoint and the prefetch proceeds.
+    spawn.children[0]._emitStdoutLine("[noaa-beta] hrrr/conus run=20260703-1800Z start");
+    const allowed = await request(port, "POST", "/actions/prefetch-soundings", {
+      models: ["hrrr"],
+      runs: { hrrr: "latest" },
+      view: "conus",
+    });
+    assert.equal(allowed.status, 200, "a resolved-different latest render no longer conflicts");
+    assert.equal(spawn.calls.length, 3);
+  });
+});
+
+test("render spawns builders with roster env vars stripped from the child environment", async (t) => {
+  // The control panel's argv is the complete specification of what a job
+  // builds: a roster variable exported in the operator's shell (for CLI
+  // experiments) must never silently truncate a server-spawned build.
+  const original = process.env.MODELVIEW_NOAA_HRRR_HOURS;
+  process.env.MODELVIEW_NOAA_HRRR_HOURS = "0,3,6";
+  t.after(() => {
+    if (original === undefined) {
+      delete process.env.MODELVIEW_NOAA_HRRR_HOURS;
+    } else {
+      process.env.MODELVIEW_NOAA_HRRR_HOURS = original;
+    }
+  });
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    const res = await request(port, "POST", "/actions/render", VALID_RENDER_BODY);
+    assert.equal(res.status, 200);
+    const env = spawn.calls[0].spawnOptions.env;
+    assert.equal(env.MODELVIEW_NOAA_HRRR_HOURS, undefined, "per-model roster env never reaches the child");
+    assert.equal(env.PATH, process.env.PATH, "the rest of the environment passes through");
+  });
+});
+
+test("render rejects run ids with non-00 minute fields", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    // Real run ids are always YYYYMMDD-HH00Z: "20260703-1299Z" used to
+    // validate and silently build --cycle=12 while naming a run that does
+    // not exist.
+    for (const run of ["20260703-1299Z", "20260703-1230Z"]) {
+      const bad = JSON.parse(JSON.stringify(VALID_RENDER_BODY));
+      bad.run = run;
+      const res = await request(port, "POST", "/actions/render", bad);
+      assert.equal(res.status, 400, `run ${run} rejected`);
+    }
+    const badMap = JSON.parse(JSON.stringify(VALID_RENDER_BODY));
+    badMap.runs = { hrrr: "20260703-1260Z" };
+    const res = await request(port, "POST", "/actions/render", badMap);
+    assert.equal(res.status, 400, "the per-model runs map applies the same strict shape");
+    assert.equal(spawn.calls.length, 0, "no build spawned for minute-field run ids");
+  });
+});
+
+test("render rejects non-boolean severe/winter enabled flags instead of reading them as disabled", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    for (const override of [
+      { severe: { enabled: 1, tier: "full" } },
+      { winter: { enabled: "yes", tier: "simple" } },
+      { severe: { tier: "full" } }, // enabled missing entirely
+    ]) {
+      const bad = JSON.parse(JSON.stringify(VALID_RENDER_BODY));
+      Object.assign(bad.categories, override);
+      const res = await request(port, "POST", "/actions/render", bad);
+      assert.equal(res.status, 400, `rejected: ${JSON.stringify(override)}`);
+      assert.match(JSON.parse(res.body).error, /enabled must be a boolean/);
+    }
+    assert.equal(spawn.calls.length, 0, "no build spawned for non-boolean enabled flags");
+  });
+});
+
+test("render rejects boolean/array coercions in numeric fields with 400", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ port }) => {
+    // Number(false) === 0 used to turn maxHour:false into --max-hour=0; true
+    // and [6] coerced to 1 and 6 the same way.
+    for (const body of [
+      { ...VALID_RENDER_BODY, maxHour: false },
+      { ...VALID_RENDER_BODY, maxHour: true },
+      { ...VALID_RENDER_BODY, maxHour: [6] },
+      { ...VALID_RENDER_BODY, tuning: { workerCount: true } },
+      { ...VALID_RENDER_BODY, tuning: { rangeConcurrency: [2] } },
+    ]) {
+      const res = await request(port, "POST", "/actions/render", body);
+      assert.equal(res.status, 400, `rejected: ${JSON.stringify(body.maxHour ?? body.tuning)}`);
+    }
+    assert.equal(spawn.calls.length, 0, "nothing spawned for coerced values");
+
+    // Plain numbers and digit strings remain valid.
+    const ok = await request(port, "POST", "/actions/render", { ...VALID_RENDER_BODY, maxHour: "24" });
+    assert.equal(ok.status, 200, "a digit-string maxHour is still accepted");
+    assert.ok(spawn.calls[0].argv.includes("--max-hour=24"), "the string coerces to the same flag value");
+  });
+});
+
+test("prefetch-soundings rejects malformed hours instead of silently rewriting or widening the request", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ runtime, port }) => {
+    await seedBuiltRun(runtime, "20260703-0600Z", [0, 3, 6]);
+    // 3.7 used to round to 3; "abc"/-5 were dropped; an all-invalid list
+    // OMITTED --hours and warmed every loaded frame.
+    for (const hours of [[0, 3.7], ["abc"], [-5], [true], "0,3", []]) {
+      const res = await request(port, "POST", "/actions/prefetch-soundings", { ...PREFETCH_BODY, hours });
+      assert.equal(res.status, 400, `rejected: ${JSON.stringify(hours)}`);
+    }
+    assert.equal(spawn.calls.length, 0, "no prefetch spawned for malformed hours");
+
+    // Integer hours still marshal verbatim.
+    const ok = await request(port, "POST", "/actions/prefetch-soundings", PREFETCH_BODY);
+    assert.equal(ok.status, 200);
+    assert.ok(spawn.calls[0].argv.includes("--hours=0,3"), "integer hours reach the argv untouched");
+    spawn.children[0]._emitExit(0);
+
+    // Omitting hours remains the (only) way to warm every loaded frame.
+    const { hours, ...noHoursBody } = PREFETCH_BODY;
+    void hours;
+    const all = await request(port, "POST", "/actions/prefetch-soundings", noHoursBody);
+    assert.equal(all.status, 200);
+    assert.ok(
+      !spawn.calls[1].argv.some((flag) => flag.startsWith("--hours=")),
+      "an omitted hours field warms all loaded hours — never an emptied list",
+    );
+  });
+});
+
+test("two concurrent identical prefetch POSTs spawn one child — the loser 409s", async () => {
+  const spawn = makeSpawnStub();
+  await withServer({ spawnBuildProcess: spawn.spawnBuildProcess }, async ({ runtime, port }) => {
+    await seedBuiltRun(runtime, "20260703-1200Z", [0, 1, 2], "hrrr");
+    await seedBuiltRun(runtime, "20260703-1800Z", [0, 3], "nam3km");
+    const body = {
+      models: ["hrrr", "nam3km"],
+      runs: { hrrr: "20260703-1200Z", nam3km: "20260703-1800Z" },
+      view: "conus",
+    };
+    // Both requests resolve their targets (awaiting manifests) before either
+    // reaches the launch loop; the second must re-check and lose there.
+    const [first, second] = await Promise.all([
+      request(port, "POST", "/actions/prefetch-soundings", body),
+      request(port, "POST", "/actions/prefetch-soundings", body),
+    ]);
+    assert.deepEqual(
+      [first.status, second.status].sort(),
+      [200, 409],
+      "one request wins, the duplicate 409s — never two children on one run tree",
+    );
+    assert.equal(spawn.calls.length, 1, "exactly one prefetch child spawned");
+    const loser = first.status === 409 ? first : second;
+    assert.match(JSON.parse(loser.body).error, /already running/i, "the loser is told a job is running");
+  });
+});
+
+test("cache/prune rejects boolean/array coercions in keep and budgetGb", async () => {
+  await withServer({}, async ({ port }) => {
+    // Number(true) === 1 used to turn keep:true into keep=1 run and
+    // budgetGb:true into a 1 GiB budget.
+    for (const body of [{ keep: true }, { keep: [4] }, { budgetGb: true }, { budgetGb: [1] }]) {
+      const res = await request(port, "POST", "/actions/cache/prune", body);
+      assert.equal(res.status, 400, `rejected: ${JSON.stringify(body)}`);
+    }
+    const ok = await request(port, "POST", "/actions/cache/prune", { keep: "2" });
+    assert.equal(ok.status, 200, "a digit-string keep remains valid (dry run by default)");
+    assert.equal(JSON.parse(ok.body).dryRun, true);
+  });
 });

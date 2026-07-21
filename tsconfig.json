@@ -11,7 +11,7 @@
     "allowJs": false,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "types": ["vite/client"]
+    "types": ["vite/client", "geojson"]
   },
   "include": ["next/src", "vite.config.ts"]
 }

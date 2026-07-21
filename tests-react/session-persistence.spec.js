@@ -1,6 +1,7 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
-const KEY = "modelview.session.v1";
+// v2 = the native-zoom session schema (Task 6.2); writes only ever go here.
+const KEY = "modelview.session.v2";
 
 test("view key persists across reload", async ({ page }) => {
   await page.goto("/");
@@ -13,6 +14,9 @@ test("view key persists across reload", async ({ page }) => {
 });
 
 test("a stored session hydrates the view and synoptic toggles", async ({ page }) => {
+  // Deliberately seeds the LEGACY v1 key: unit-less fields hydrate through
+  // the Task 6.2 fallback loader unchanged (viewport-zoom conversion has its
+  // own tests in url-state.spec.js + tests-node/zoom-persistence-migration).
   await page.addInitScript(() => {
     window.localStorage.setItem(
       "modelview.session.v1",

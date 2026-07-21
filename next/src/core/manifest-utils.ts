@@ -154,6 +154,7 @@ export function normalizeManifest(raw: ModelManifest, modelKey: ModelKey, viewKe
         synopticStyleVersion: legacyStyleVersion,
         synopticStyleVersions: normalizedStyleVersions,
         pressureUploadMeta: normalizePressureUploadMeta(frame.pressureUploadMeta, frame.rows, frame.cols),
+        parameterAvailability: normalizeFrameParameterAvailability(frame.parameterAvailability),
         hoverGridKey: frame.hoverGridKey || null,
         hoverGridBytes: Number(frame.hoverGridBytes) || null,
         hoverGridSchemaVersion: Number(frame.hoverGridSchemaVersion) || null,
@@ -178,6 +179,25 @@ export function normalizeManifest(raw: ModelManifest, modelKey: ModelKey, viewKe
   };
 }
 
+function normalizeFrameParameterAvailability(
+  availability: FrameRecord["parameterAvailability"],
+): FrameRecord["parameterAvailability"] {
+  if (!availability || typeof availability !== "object") {
+    return null;
+  }
+  const normalized: NonNullable<FrameRecord["parameterAvailability"]> = {};
+  for (const [key, state] of Object.entries(availability)) {
+    const normalizedKey = String(key || "").trim();
+    if (!normalizedKey) {
+      continue;
+    }
+    if (state === "available" || state === "unavailable") {
+      normalized[normalizedKey] = state;
+    }
+  }
+  return normalized;
+}
+
 function normalizeParameterMetadata(parameters: ModelManifest["parameters"]): ModelManifest["parameters"] | undefined {
   if (!parameters || typeof parameters !== "object") {
     return undefined;
@@ -191,10 +211,14 @@ function normalizeParameterMetadata(parameters: ModelManifest["parameters"]): Mo
       continue;
     }
     const legendTicks = Array.isArray(value.legendTicks)
-      ? value.legendTicks.map((tick) => Number(tick)).filter(Number.isFinite)
+      ? (value.legendTicks as unknown[])
+          .filter((tick) => tick !== null && tick !== undefined && tick !== "")
+          .map((tick) => Number(tick))
+          .filter(Number.isFinite)
       : [];
     const legendTickPositions = Array.isArray(value.legendTickPositions)
-      ? value.legendTickPositions
+      ? (value.legendTickPositions as unknown[])
+          .filter((position) => position !== null && position !== undefined && position !== "")
           .map((position) => Number(position))
           .filter((position) => Number.isFinite(position))
           .map((position) => Math.max(0, Math.min(1, position)))
@@ -342,6 +366,12 @@ function normalizeLegendStop(
   if (!Array.isArray(stop) || stop.length !== 2 || !Array.isArray(stop[1]) || stop[1].length < 3) {
     return null;
   }
+  if (stop[0] === null || stop[0] === undefined || stop[0] === "") {
+    return null;
+  }
+  if (stop[1].slice(0, 3).some((value) => value === null || value === undefined || value === "")) {
+    return null;
+  }
   const position = Number(stop[0]);
   const color = stop[1].map((value) => Number(value));
   if (!Number.isFinite(position) || color.slice(0, 3).some((component) => !Number.isFinite(component))) {
@@ -360,6 +390,9 @@ function normalizeLegendColor(color: unknown): [number, number, number, number] 
   if (!Array.isArray(color) || color.length < 4) {
     return null;
   }
+  if (color.slice(0, 4).some((value) => value === null || value === undefined || value === "")) {
+    return null;
+  }
   const values = color.map((value) => Number(value));
   if (values.slice(0, 4).some((value) => !Number.isFinite(value))) {
     return null;
@@ -373,6 +406,9 @@ function normalizeLegendColor(color: unknown): [number, number, number, number] 
 }
 
 function normalizeOptionalNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -400,8 +436,11 @@ function normalizeSynopticVectorKeys(
   const simpleValue = String(vectorKeys?.simple || "").trim();
   const detailedValue = String(vectorKeys?.detailed || "").trim();
   const legacyValue = String(legacyKey || "").trim();
-  const resolvedSimple = simpleValue || legacyValue || detailedValue || "";
-  const resolvedDetailed = detailedValue || simpleValue || legacyValue || "";
+  // A legacy singleton is the simple-density product. Preserve absent modes
+  // instead of cloning one key into both slots: otherwise the UI cannot tell
+  // an actual detailed vector from a simple fallback.
+  const resolvedSimple = simpleValue || legacyValue || "";
+  const resolvedDetailed = detailedValue || "";
   if (!resolvedSimple && !resolvedDetailed) {
     return null;
   }
@@ -484,8 +523,8 @@ function normalizeSynopticStyleVersions(
   const simpleValue = String(styleVersions?.simple || "").trim();
   const detailedValue = String(styleVersions?.detailed || "").trim();
   const legacyValue = String(legacyVersion || "").trim();
-  const resolvedSimple = simpleValue || legacyValue || detailedValue || "";
-  const resolvedDetailed = detailedValue || simpleValue || legacyValue || "";
+  const resolvedSimple = simpleValue || legacyValue || "";
+  const resolvedDetailed = detailedValue || "";
   if (!resolvedSimple && !resolvedDetailed) {
     return null;
   }

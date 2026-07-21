@@ -23,10 +23,15 @@ const {
   collectFrameByteRefs,
   createTransparentPng,
   mergeManifestWithTemplate,
+  mergeParameterAvailability,
+  normalizeParameterAvailability,
   normalizeRenderedFrameArtifacts,
 } = require("./local-artifact-manifest");
 const { inferHoverGridFormatFromKey, mergeHoverGridPayloads } = require("./hover-grid-binary");
 const { pathExists, readJsonIfExists, writeBufferAtomic, writeJsonAtomic } = require("./local-artifact-io");
+const { FrameStatIndex } = require("./local-artifact-stat-index");
+const { getNoaaNamParameterMetadata } = require("./noaa-nam-parameter-catalog");
+const { mergeFrameSourceProvenance, normalizeFrameSourceProvenance } = require("./noaa-beta/source-provenance");
 const {
   clampInt,
   emitProgress,
@@ -35,6 +40,31 @@ const {
   parseOptionalNumber,
   sleep,
 } = require("./local-artifact-options");
+
+// Identity keys for run-constant latestMetadata objects shipped to frame
+// workers. Keys follow object identity: any refreshed/replaced metadata
+// object gets a fresh key, so workers can cache by key safely.
+const LATEST_METADATA_IDENTITY_KEYS = new WeakMap();
+
+// Bounded parallelism for multi-frame completeness sweeps
+// (applyManifestArtifactCompleteness / areFramesCompleteForState). Each frame
+// probes its own directory, so sweeps stay I/O-bound; 8 matches the default
+// frame-build concurrency flavor without flooding the disk on serve polls.
+const DEFAULT_COMPLETENESS_SWEEP_CONCURRENCY = 8;
+
+let nextLatestMetadataIdentity = 0;
+function latestMetadataIdentityKey(metadata) {
+  if (!metadata || typeof metadata !== "object") {
+    return null;
+  }
+  let key = LATEST_METADATA_IDENTITY_KEYS.get(metadata);
+  if (!key) {
+    nextLatestMetadataIdentity += 1;
+    key = `latest-metadata-${process.pid}-${nextLatestMetadataIdentity}`;
+    LATEST_METADATA_IDENTITY_KEYS.set(metadata, key);
+  }
+  return key;
+}
 
 class LocalArtifactRuntime {
   constructor(options = {}) {
@@ -60,7 +90,6 @@ class LocalArtifactRuntime {
     this.artifactWriteConcurrency = clampInt(options.artifactWriteConcurrency, 0, 256, 0);
     this.artifactWriteSemaphore =
       this.artifactWriteConcurrency > 0 ? new AsyncSemaphore(this.artifactWriteConcurrency) : null;
-    this.prefetchFrameInput = typeof options.prefetchFrameInput === "function" ? options.prefetchFrameInput : null;
     this.stateCache = new Map();
     this.stateLoads = new Map();
     this.frameRenders = new Map();
@@ -73,6 +102,12 @@ class LocalArtifactRuntime {
     this.manifestCompletenessTtlMs = Number.isFinite(options.manifestCompletenessTtlMs)
       ? Math.max(0, Number(options.manifestCompletenessTtlMs))
       : 2_000;
+    this.completenessSweepConcurrency = clampInt(
+      options.completenessSweepConcurrency,
+      1,
+      64,
+      DEFAULT_COMPLETENESS_SWEEP_CONCURRENCY,
+    );
     this.stats = {
       latestFetches: 0,
       buildRuns: 0,
@@ -137,6 +172,7 @@ class LocalArtifactRuntime {
     if (!manifest) {
       return null;
     }
+    refreshManifestParameterMetadata(manifest);
     return this.applyManifestArtifactCompleteness(modelKey, runId, viewKey, manifest);
   }
 
@@ -158,10 +194,12 @@ class LocalArtifactRuntime {
       return null;
     }
     // ETag folds mtime + the derived per-hour completeness so a marker landing
-    // (which changes hourStatus without touching the manifest file) still yields a
-    // fresh tag and defeats a stale 304.
+    // (which changes hourStatus without touching the manifest file) still yields
+    // a fresh tag and defeats a stale 304. The catalog-metadata stamp does the
+    // same for serve-time parameter refreshes: upgrading the app (new legend
+    // data) must invalidate manifests cached against the old metadata.
     const statusStamp = JSON.stringify(manifest.hourStatus || {});
-    const etag = `"${mtimeMs.toString(36)}-${hashString(statusStamp).toString(36)}"`;
+    const etag = `"${mtimeMs.toString(36)}-${hashString(statusStamp).toString(36)}-${catalogMetadataStamp().toString(36)}"`;
     this.manifestCompletenessCache.set(cacheKey, { mtimeMs, etag, manifest, cachedAt: Date.now() });
     return { manifest, etag };
   }
@@ -180,12 +218,6 @@ class LocalArtifactRuntime {
       1,
       frameConcurrency,
       Math.max(1, Math.min(2, Math.ceil(frameConcurrency / 4))),
-    );
-    const retryPrefetchConcurrency = clampInt(
-      options.retryPrefetchConcurrency ?? options.retryOmPrefetchConcurrency,
-      1,
-      retryFrameConcurrency,
-      retryFrameConcurrency,
     );
     const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
     // Only frames in this build's plan are targets; union-merged frames from
@@ -254,14 +286,17 @@ class LocalArtifactRuntime {
 
     const processFrame = async (frame, retryAttempt = 0) => {
       const framePlan = state.framePlanByHour.get(Number(frame.hour));
-      const prefetchFailure = state.primaryOmPrefetchFailures?.get(Number(frame.hour));
-      if (prefetchFailure && (forceFrames || !(await this.isFrameCompleteForState(state, frame)))) {
-        emitFrameFailure(frame, framePlan, prefetchFailure, active, retryAttempt, retryAttempt === 0);
-        return false;
-      }
-      if (!forceFrames && (await this.isFrameCompleteForState(state, frame))) {
+      // Per-invocation index: the completeness probe and the byte refresh share
+      // one directory listing. Each retry attempt re-indexes, so a frame that
+      // finished persisting between attempts is seen exactly as fresh per-key
+      // probes would see it.
+      const statIndex = this.createFrameStatIndex();
+      if (!forceFrames && (await this.isFrameCompleteForState(state, frame, { statIndex }))) {
         state.manifest.hourStatus[String(frame.hour)] = "loaded";
-        await this.refreshFrameArtifactBytes(frame);
+        await this.refreshFrameArtifactBytes(frame, {
+          statIndex,
+          frameDir: this.getFrameDirectory(state.modelKey, state.runId, state.viewKey, frame.hour),
+        });
         this.stats.frameRenderCacheHits += 1;
         if (retryAttempt > 0) {
           markFrameRecovered(frame);
@@ -342,7 +377,6 @@ class LocalArtifactRuntime {
       }
     };
 
-    await this.prefetchFrameInputsForState(state, targetFrames, { onProgress });
     await runWithConcurrency(targetFrames, frameConcurrency, (frame) => processFrame(frame, 0));
 
     for (let retryAttempt = 1; retryAttempt <= frameRetries && failedFrames.size > 0; retryAttempt += 1) {
@@ -359,7 +393,6 @@ class LocalArtifactRuntime {
         maxRetries: frameRetries,
         delayMs,
         frameConcurrency: retryFrameConcurrency,
-        prefetchConcurrency: retryPrefetchConcurrency,
         built,
         reused,
         failed,
@@ -369,14 +402,6 @@ class LocalArtifactRuntime {
       if (delayMs > 0) {
         await sleep(delayMs);
       }
-      for (const frame of retryFrames) {
-        state.primaryOmPrefetchFailures?.delete(Number(frame.hour));
-      }
-
-      await this.prefetchFrameInputsForState(state, retryFrames, {
-        onProgress,
-        concurrency: retryPrefetchConcurrency,
-      });
 
       await runWithConcurrency(retryFrames, retryFrameConcurrency, (frame) => processFrame(frame, retryAttempt));
     }
@@ -422,13 +447,6 @@ class LocalArtifactRuntime {
     };
   }
 
-  async prefetchFrameInputsForState(state, frames, options = {}) {
-    if (!this.prefetchFrameInput || !Array.isArray(frames) || frames.length === 0) {
-      return;
-    }
-    await this.prefetchFrameInput({ state, frames, options });
-  }
-
   async ensureFrameRendered(modelKey, runId, viewKey, hour, options = {}) {
     const state = await this.ensureLatestState(modelKey, viewKey);
     if (String(runId || "").trim() !== state.runId) {
@@ -447,9 +465,13 @@ class LocalArtifactRuntime {
       throw new Error(`Unknown frame hour '${frame?.hour}' for ${state.modelKey}/${state.viewKey}.`);
     }
     const forceFrame = parseBooleanOption(options.forceFrame ?? options.forceFrames ?? options.force, false);
-    if (!forceFrame && (await this.isFrameCompleteForState(state, frame))) {
+    const statIndex = this.createFrameStatIndex();
+    if (!forceFrame && (await this.isFrameCompleteForState(state, frame, { statIndex }))) {
       state.manifest.hourStatus[String(frame.hour)] = "loaded";
-      await this.refreshFrameArtifactBytes(frame);
+      await this.refreshFrameArtifactBytes(frame, {
+        statIndex,
+        frameDir: this.getFrameDirectory(state.modelKey, state.runId, state.viewKey, frame.hour),
+      });
       this.stats.frameRenderCacheHits += 1;
       return frame;
     }
@@ -518,6 +540,12 @@ class LocalArtifactRuntime {
       parameterOrder: latestMetadata.parameterOrder || latestMetadata.parameterKeys || null,
       hoverGridFormat: latestMetadata.hoverGridFormat || null,
       renderSelection: latestMetadata.renderSelection || null,
+      // The build's resolved roster (e.g. the GFS hourly-through-F120 tier)
+      // must drive the frame plan; the model's configured step only guards
+      // legacy metadata that carries no roster.
+      forecastHours: Array.isArray(latestMetadata.forecastHourRoster?.hours)
+        ? latestMetadata.forecastHourRoster.hours
+        : null,
     });
     const manifestPath = this.getManifestStoragePath(modelKey, runId, viewKey);
     const existingManifest = await readJsonIfExists(manifestPath);
@@ -541,7 +569,6 @@ class LocalArtifactRuntime {
       latestPointer,
       checkedAt: Date.now(),
       frameByHour: new Map(manifest.frames.map((frame) => [Number(frame.hour), frame])),
-      primaryOmPrefetchFailures: new Map(),
       framePlanByHour: new Map(
         template.frames.map((frame) => [
           Number(frame.hour),
@@ -573,6 +600,11 @@ class LocalArtifactRuntime {
       modelKey: state.modelKey,
       viewKey: state.viewKey,
       latestMetadata: state.latestMetadata,
+      // Identity key for run-constant metadata: the worker pool ships the
+      // metadata once per worker per key and workers cache it, so per-frame
+      // structured clones carry only this string. A refreshed metadata
+      // object gets a new key automatically.
+      latestMetadataKey: latestMetadataIdentityKey(state.latestMetadata),
       framePlan,
       pngCompressionLevel: this.pngCompressionLevel,
       pngFilterType: this.pngFilterType,
@@ -597,6 +629,10 @@ class LocalArtifactRuntime {
     }
     const renderedFrame = state.frameByHour.get(Number(frame.hour)) || frame;
     attachFrameRenderProfile(renderedFrame, normalized.renderProfile);
+    attachFrameSourceProvenance(
+      renderedFrame,
+      mergeFrameSourceProvenance(renderedFrame.__sourceProvenance, normalized.sourceProvenance),
+    );
     return renderedFrame;
   }
 
@@ -734,6 +770,20 @@ class LocalArtifactRuntime {
       await this.refreshFrameArtifactBytes(frame);
       return;
     }
+    const markerParameterAvailability = mergeParameterAvailability(
+      frame.parameterAvailability,
+      rendered?.parameterAvailability,
+    );
+    const markerSourceProvenance = mergeFrameSourceProvenance(
+      frame.__sourceProvenance,
+      rendered?.sourceProvenance || rendered?.renderProfile?.sourceProvenance,
+    );
+    const markerRenderProfile = {
+      ...(rendered?.renderProfile && typeof rendered.renderProfile === "object" ? rendered.renderProfile : {}),
+    };
+    // Provenance is a single top-level marker sidecar. Older profiles also
+    // embedded the identical object, doubling forensic metadata bytes.
+    delete markerRenderProfile.sourceProvenance;
     await this.runArtifactWrite(() =>
       writeJsonAtomic(
         frameMarkerPath,
@@ -747,7 +797,9 @@ class LocalArtifactRuntime {
           openDataModel: state.latestMetadata.openDataModel,
           runPath: state.latestMetadata.runPath,
           rendererSignature: state.latestMetadata.rendererSignature || null,
-          renderProfile: rendered.renderProfile || null,
+          parameterAvailability: normalizeParameterAvailability(markerParameterAvailability),
+          sourceProvenance: normalizeFrameSourceProvenance(markerSourceProvenance),
+          renderProfile: markerRenderProfile,
         },
         frameMarkerWriteOptions,
       ),
@@ -757,7 +809,8 @@ class LocalArtifactRuntime {
       rendered?.hoverGridSupplemental ||
       rendered?.synopticVectors ||
       rendered?.weatherVectors ||
-      rendered?.pressureUploadMeta
+      rendered?.pressureUploadMeta ||
+      rendered?.parameterAvailability
     ) {
       applyRenderedFrameToManifestFrame(frame, rendered);
     }
@@ -796,6 +849,38 @@ class LocalArtifactRuntime {
     return task();
   }
 
+  createFrameStatIndex() {
+    // Sweep-scoped by contract: never cache one across sweeps. The next sweep
+    // (TTL poll, retry attempt, build-end check) re-reads every directory —
+    // the same freshness boundary per-key probes had.
+    return new FrameStatIndex();
+  }
+
+  // Artifact presence for one key. Keys from buildFrameAssetKeySet are direct
+  // children of their frame directory, so a sweep index answers them from one
+  // readdir; a key escaping the frame dir keeps the per-key probe it had.
+  async frameArtifactExists(frameDir, key, statIndex) {
+    const storagePath = this.getArtifactStoragePath(key);
+    if (statIndex && frameDir && path.dirname(storagePath) === frameDir) {
+      return statIndex.has(frameDir, path.basename(storagePath));
+    }
+    return pathExists(storagePath);
+  }
+
+  // Stat for one key: fs.Stats on success, null on any failure — the exact
+  // contract refreshFrameArtifactBytes has always read sizes from.
+  async statFrameArtifact(frameDir, key, statIndex) {
+    const storagePath = this.getArtifactStoragePath(key);
+    if (statIndex && frameDir && path.dirname(storagePath) === frameDir) {
+      return statIndex.stat(frameDir, path.basename(storagePath));
+    }
+    try {
+      return await fs.promises.stat(storagePath);
+    } catch {
+      return null;
+    }
+  }
+
   async applyManifestArtifactCompleteness(modelKey, runId, viewKey, manifest, latestMetadata = null) {
     if (!manifest || !Array.isArray(manifest.frames)) {
       return manifest;
@@ -804,30 +889,43 @@ class LocalArtifactRuntime {
       manifest.hourStatus && typeof manifest.hourStatus === "object" ? { ...manifest.hourStatus } : {};
     const expectedOpenDataModel =
       latestMetadata?.openDataModel || manifest.openDataModel || MODEL_CONFIG[modelKey]?.openDataModel || "";
-    for (const frame of manifest.frames) {
+    // One sweep-scoped stat index: each frame directory is listed once and
+    // entry stats are memoized per path, replacing the per-key access/stat
+    // probes. Mutations are strictly per frame (hourStatus key, frame byte
+    // fields, marker-merged availability), so bounded parallelism across frame
+    // dirs leaves the manifest byte-identical — hourStatus keys are canonical
+    // integers and serialize in ascending numeric order regardless of worker
+    // completion order.
+    const statIndex = this.createFrameStatIndex();
+    await runWithConcurrency(manifest.frames, this.completenessSweepConcurrency, async (frame) => {
       const hourKey = String(frame.hour);
 
       const complete = await this.isFrameComplete(modelKey, runId, viewKey, frame, {
         expectedOpenDataModel,
         expectedRendererSignature: latestMetadata?.rendererSignature,
+        statIndex,
       });
       if (complete) {
         manifest.hourStatus[hourKey] = "loaded";
 
-        await this.refreshFrameArtifactBytes(frame);
+        await this.refreshFrameArtifactBytes(frame, {
+          statIndex,
+          frameDir: this.getFrameDirectory(modelKey, runId, viewKey, frame.hour),
+        });
       } else if (manifest.hourStatus[hourKey] === "error" || manifest.hourStatus[hourKey] === "unavailable") {
-        continue;
+        return;
       } else {
         manifest.hourStatus[hourKey] = "pending";
       }
-    }
+    });
     return manifest;
   }
 
-  async isFrameCompleteForState(state, frame) {
+  async isFrameCompleteForState(state, frame, options = {}) {
     return this.isFrameComplete(state.modelKey, state.runId, state.viewKey, frame, {
       expectedOpenDataModel: state.latestMetadata?.openDataModel || MODEL_CONFIG[state.modelKey]?.openDataModel || "",
       expectedRendererSignature: state.latestMetadata?.rendererSignature,
+      statIndex: options.statIndex || null,
     });
   }
 
@@ -835,9 +933,43 @@ class LocalArtifactRuntime {
     if (!Array.isArray(frames) || frames.length === 0) {
       return false;
     }
-    for (const frame of frames) {
-      if (!(await this.isFrameCompleteForState(state, frame))) {
-        return false;
+    // Probe one bounded batch at a time, each frame on a throwaway copy: the
+    // marker availability merge feeds key collection, so it cannot be
+    // deferred past the probe. Results are replayed on the real frames in
+    // order through the first incomplete frame inclusive — the exact mutation
+    // window of the old sequential early-exit loop. Batching keeps directory
+    // reads parallel while ensuring an early miss launches at most one batch,
+    // rather than eagerly probing an entire 209-frame GFS horizon. A shallow
+    // copy is full isolation: the probe's only frame write is the
+    // parameterAvailability ASSIGNMENT in mergeMarkerParameterAvailability
+    // (always a freshly merged object, never an in-place edit), so cloning
+    // the byte refs, hover maps, and provenance of 209 GFS frames per sweep
+    // would buy nothing.
+    const statIndex = this.createFrameStatIndex();
+    const expectedOpenDataModel =
+      state.latestMetadata?.openDataModel || MODEL_CONFIG[state.modelKey]?.openDataModel || "";
+    const batchSize = Math.min(this.completenessSweepConcurrency, frames.length);
+    for (let offset = 0; offset < frames.length; offset += batchSize) {
+      const batch = frames.slice(offset, offset + batchSize);
+      const probes = new Array(batch.length);
+      await runWithConcurrency(batch, batchSize, async (frame, index) => {
+        probes[index] = await this.probeFrameComplete(
+          state.modelKey,
+          state.runId,
+          state.viewKey,
+          { ...frame },
+          {
+            expectedOpenDataModel,
+            expectedRendererSignature: state.latestMetadata?.rendererSignature,
+            statIndex,
+          },
+        );
+      });
+      for (let index = 0; index < batch.length; index += 1) {
+        mergeMarkerParameterAvailability(frames[offset + index], probes[index].availabilityMarker);
+        if (!probes[index].complete) {
+          return false;
+        }
       }
     }
     return true;
@@ -881,10 +1013,16 @@ class LocalArtifactRuntime {
     return runs;
   }
 
-  async isFrameComplete(modelKey, runId, viewKey, frame, options = {}) {
+  // Completeness probe: marker fetch + artifact presence. Returns the
+  // decision plus the marker exactly when it passed the identity gates — the
+  // point at which the availability merge fires — so parallel sweeps probing
+  // on clones can replay that merge onto the real frames in order. Note the
+  // merge must precede collectFrameArtifactKeys: an "unavailable" stamp
+  // narrows the probed key set.
+  async probeFrameComplete(modelKey, runId, viewKey, frame, options = {}) {
     const hour = Number(frame?.hour);
     if (!Number.isFinite(hour)) {
-      return false;
+      return { complete: false, availabilityMarker: null };
     }
     const markerPath = this.getFrameMarkerPath(modelKey, runId, viewKey, hour);
     let marker = null;
@@ -894,39 +1032,45 @@ class LocalArtifactRuntime {
       // Treat unreadable markers as incomplete frames.
     }
     if (!marker) {
-      return false;
+      return { complete: false, availabilityMarker: null };
     }
     const expectedOpenDataModel = String(options.expectedOpenDataModel || "").trim();
     const markerOpenDataModel = String(marker.openDataModel || "").trim();
     if (expectedOpenDataModel && markerOpenDataModel && markerOpenDataModel !== expectedOpenDataModel) {
-      return false;
+      return { complete: false, availabilityMarker: null };
     }
     const expectedRendererSignature = String(options.expectedRendererSignature || "").trim();
     const markerRendererSignature = String(marker.rendererSignature || "").trim();
     if (expectedRendererSignature && markerRendererSignature !== expectedRendererSignature) {
-      return false;
+      return { complete: false, availabilityMarker: null };
     }
+    mergeMarkerParameterAvailability(frame, marker);
     const keys = collectFrameArtifactKeys(frame);
     if (keys.length === 0) {
-      return false;
+      return { complete: false, availabilityMarker: marker };
     }
+    const frameDir = this.getFrameDirectory(modelKey, runId, viewKey, hour);
+    const statIndex = options.statIndex || null;
     for (const key of keys) {
-      if (!(await pathExists(this.getArtifactStoragePath(key)))) {
-        return false;
+      if (!(await this.frameArtifactExists(frameDir, key, statIndex))) {
+        return { complete: false, availabilityMarker: marker };
       }
     }
-    return true;
+    return { complete: true, availabilityMarker: marker };
   }
 
-  async refreshFrameArtifactBytes(frame) {
+  async isFrameComplete(modelKey, runId, viewKey, frame, options = {}) {
+    const probe = await this.probeFrameComplete(modelKey, runId, viewKey, frame, options);
+    return probe.complete;
+  }
+
+  async refreshFrameArtifactBytes(frame, options = {}) {
+    const statIndex = options.statIndex || null;
+    const frameDir = typeof options.frameDir === "string" ? options.frameDir : null;
+    const statByKey = (key) => this.statFrameArtifact(frameDir, key, statIndex);
     for (const ref of collectFrameByteRefs(frame)) {
-      const filePath = this.getArtifactStoragePath(ref.key);
-      try {
-        const stat = await fs.promises.stat(filePath);
-        ref.bytes = stat.size;
-      } catch {
-        ref.bytes = 0;
-      }
+      const stat = await statByKey(ref.key);
+      ref.bytes = stat ? stat.size : 0;
     }
     frame.synopticVectorBytes = frame.synopticVectorBytes || {};
     for (const mode of ["simple", "detailed"]) {
@@ -934,31 +1078,19 @@ class LocalArtifactRuntime {
       if (!key) {
         continue;
       }
-      try {
-        const stat = await fs.promises.stat(this.getArtifactStoragePath(key));
-        frame.synopticVectorBytes[mode] = stat.size;
-      } catch {
-        frame.synopticVectorBytes[mode] = 0;
-      }
+      const stat = await statByKey(key);
+      frame.synopticVectorBytes[mode] = stat ? stat.size : 0;
     }
     if (frame.hoverGridKey) {
-      try {
-        const stat = await fs.promises.stat(this.getArtifactStoragePath(frame.hoverGridKey));
-        frame.hoverGridBytes = stat.size;
-      } catch {
-        frame.hoverGridBytes = 0;
-      }
+      const stat = await statByKey(frame.hoverGridKey);
+      frame.hoverGridBytes = stat ? stat.size : 0;
     }
     for (const ref of Object.values(frame.hoverGridSupplemental || {})) {
       if (!ref?.key) {
         continue;
       }
-      try {
-        const stat = await fs.promises.stat(this.getArtifactStoragePath(ref.key));
-        ref.bytes = stat.size;
-      } catch {
-        ref.bytes = 0;
-      }
+      const stat = await statByKey(ref.key);
+      ref.bytes = stat ? stat.size : 0;
     }
   }
 
@@ -1054,6 +1186,15 @@ class LocalArtifactRuntime {
   }
 }
 
+// The marker-availability merge a completeness check applies once the marker
+// passes the identity gates. Probe-based sweeps replay it in frame order
+// after parallel read-only probes, preserving the sequential mutation window.
+function mergeMarkerParameterAvailability(frame, marker) {
+  if (marker?.parameterAvailability && typeof marker.parameterAvailability === "object") {
+    frame.parameterAvailability = mergeParameterAvailability(frame.parameterAvailability, marker.parameterAvailability);
+  }
+}
+
 function applyLatestMetadataToManifest(manifest, latestMetadata, sourceName = LOCAL_SOURCE_NAME) {
   if (!manifest || typeof manifest !== "object") {
     return manifest;
@@ -1071,6 +1212,18 @@ function applyLatestMetadataToManifest(manifest, latestMetadata, sourceName = LO
   }
   if (latestMetadata?.rendererSignature) {
     manifest.rendererSignature = String(latestMetadata.rendererSignature);
+  }
+  if (latestMetadata?.forecastHourPolicy && typeof latestMetadata.forecastHourPolicy === "object") {
+    manifest.forecastHourPolicy = { ...latestMetadata.forecastHourPolicy };
+  }
+  if (latestMetadata?.forecastHourRoster && typeof latestMetadata.forecastHourRoster === "object") {
+    manifest.forecastHourRoster = {
+      ...latestMetadata.forecastHourRoster,
+      hours: Array.isArray(latestMetadata.forecastHourRoster.hours) ? [...latestMetadata.forecastHourRoster.hours] : [],
+    };
+  }
+  if (latestMetadata?.sourceProvenanceCatalog && typeof latestMetadata.sourceProvenanceCatalog === "object") {
+    manifest.sourceProvenanceCatalog = latestMetadata.sourceProvenanceCatalog;
   }
   if (Array.isArray(latestMetadata?.parameterOrder)) {
     manifest.parameterOrder = latestMetadata.parameterOrder;
@@ -1090,6 +1243,74 @@ function isManifestUsablyComplete(manifest) {
   }
   const hourStatus = manifest?.hourStatus && typeof manifest.hourStatus === "object" ? manifest.hourStatus : {};
   return frames.every((frame) => hourStatus[String(frame.hour)] === "loaded");
+}
+
+let cachedCatalogMetadata = null;
+let cachedCatalogMetadataStamp = null;
+
+function catalogMetadata() {
+  if (!cachedCatalogMetadata) {
+    cachedCatalogMetadata = getNoaaNamParameterMetadata();
+  }
+  return cachedCatalogMetadata;
+}
+
+function catalogMetadataStamp() {
+  if (cachedCatalogMetadataStamp === null) {
+    cachedCatalogMetadataStamp = hashString(JSON.stringify(catalogMetadata()));
+  }
+  return cachedCatalogMetadataStamp;
+}
+
+// PRESENTATION metadata only. Behavioral and provenance fields
+// (minForecastHour, accumulationMode/WindowHours, category, costTier,
+// methodVersion, derivation, applicability, formulaReference, sourceNote,
+// artifactRequired) describe how the ARTIFACTS ON DISK were built and gated —
+// overlaying current catalog values onto old runs would hide parameters whose
+// rendered layers exist, or claim a method version the frames were never
+// computed with.
+const PRESENTATION_METADATA_FIELDS = Object.freeze([
+  "label",
+  "unit",
+  "thresholdNote",
+  "legendTicks",
+  "legendTickPositions",
+  "legendStops",
+  "legendType",
+  "legendDisplayScale",
+  "precipTypeLegend",
+  "precipRateTypeLegend",
+  "contourIntervalDam",
+  "contourLevelMb",
+]);
+
+// Serve-time refresh: manifest parameter metadata is a build-time snapshot of
+// the catalog. Legend fixes must not require re-rendering hundreds of GB of
+// artifacts, so every read overlays the CURRENT catalog's presentation fields
+// onto the keys the manifest already carries. Keys are never added: selective
+// builds filter deselected parameters out of the manifest, and that gating
+// must survive the refresh. Values are cloned so a caller mutating a served
+// manifest can never corrupt the shared catalog cache.
+function refreshManifestParameterMetadata(manifest) {
+  const parameters = manifest?.parameters;
+  if (!parameters || typeof parameters !== "object") {
+    return;
+  }
+  const metadata = catalogMetadata();
+  for (const key of Object.keys(parameters)) {
+    const fresh = metadata[key];
+    const entry = parameters[key];
+    if (!fresh || !entry || typeof entry !== "object") {
+      continue;
+    }
+    for (const field of PRESENTATION_METADATA_FIELDS) {
+      if (fresh[field] === undefined) {
+        delete entry[field];
+      } else {
+        entry[field] = structuredClone(fresh[field]);
+      }
+    }
+  }
 }
 
 function hashString(text) {
@@ -1154,6 +1375,18 @@ function attachFrameRenderProfile(frame, renderProfile) {
   }
   Object.defineProperty(frame, "__renderProfile", {
     value: renderProfile,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+function attachFrameSourceProvenance(frame, provenance) {
+  if (!frame || !provenance) {
+    return;
+  }
+  Object.defineProperty(frame, "__sourceProvenance", {
+    value: provenance,
+    writable: true,
     enumerable: false,
     configurable: true,
   });

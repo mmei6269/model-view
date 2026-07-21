@@ -95,8 +95,11 @@ export default function DisplayMenu({ display, open, onOpenChange, onChange }: D
                 value={display.basemap}
                 onChange={(value) => updateCustom({ basemap: value as DisplayBasemapKey })}
                 options={[
+                  // Light first: it is the app default (spec §8a.1 — the
+                  // weather color maps were designed for a white background).
+                  // Topographic was removed app-wide in Task 5.2.
                   { value: "light", label: "Light" },
-                  { value: "topographic", label: "Topographic" },
+                  { value: "dark", label: "Dark" },
                 ]}
               />
               <MenuCheckbox
@@ -135,6 +138,35 @@ export default function DisplayMenu({ display, open, onOpenChange, onChange }: D
                 step={5}
                 unit="%"
               />
+            </div>
+
+            <div className="grid gap-2 border-b border-white/[0.06] pb-3">
+              <span className="text-[10px] font-medium tracking-widest text-slate-400 uppercase">Map details</span>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                <MenuCheckbox
+                  label="County lines"
+                  checked={display.features.counties}
+                  onChange={(counties) => updateNested("features", { counties })}
+                />
+                <MenuCheckbox
+                  label="Major roads"
+                  checked={display.features.roads}
+                  onChange={(roads) => updateNested("features", { roads })}
+                />
+                <MenuCheckbox
+                  label="Cities"
+                  checked={display.features.cities}
+                  onChange={(cities) => updateNested("features", { cities })}
+                />
+                <MenuCheckbox
+                  label="Lat/lon grid"
+                  checked={display.features.graticule}
+                  onChange={(graticule) => updateNested("features", { graticule })}
+                />
+              </div>
+              <span className="text-[10px] leading-relaxed text-slate-500">
+                Counties and roads fade in as you zoom; cities add ranked place labels.
+              </span>
             </div>
 
             <div className="grid gap-2">
@@ -207,6 +239,58 @@ export default function DisplayMenu({ display, open, onOpenChange, onChange }: D
                 unit="px"
                 disabled={display.boundaries.mode !== "reference"}
               />
+              {/* Basemap-boundary controls (v5): live only in mode "basemap" —
+                  the border modes are exclusive (one border source at a time,
+                  owner decision 2026-07-09), so these are dead knobs anywhere
+                  else. Weight is a scale over the basemap's own line-widths;
+                  "Auto" keeps the theme's boundary ink (engine color:null). */}
+              <MenuSlider
+                label="Basemap weight"
+                value={display.boundaries.basemapWidthScale}
+                onChange={(basemapWidthScale) => updateNested("boundaries", { basemapWidthScale })}
+                min={0.5}
+                max={3}
+                step={0.1}
+                unit="x"
+                disabled={display.boundaries.mode !== "basemap"}
+              />
+              <div
+                className={`flex items-center justify-between gap-3 ${
+                  display.boundaries.mode !== "basemap" ? "opacity-45" : ""
+                }`}
+              >
+                <span className="text-[11px] text-slate-400">Basemap Color</span>
+                {/* Accessible names carry a "Basemap" prefix: the Border Color
+                    row above reuses the same swatch set, and two same-named
+                    buttons in one menu would be an a11y defect and a Playwright
+                    strict-mode trap. */}
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    title="Auto"
+                    aria-label="Basemap Auto"
+                    disabled={display.boundaries.mode !== "basemap"}
+                    onClick={() => updateNested("boundaries", { basemapColor: "auto" })}
+                    className={`h-5 w-5 rounded-full border-2 bg-gradient-to-br from-slate-200 to-slate-600 active:scale-90 disabled:cursor-not-allowed ${
+                      display.boundaries.basemapColor === "auto" ? "border-cyan-300" : "border-white/20"
+                    }`}
+                  />
+                  {DISPLAY_BOUNDARY_COLORS.map((color) => (
+                    <button
+                      key={color.value}
+                      type="button"
+                      title={color.label}
+                      aria-label={`Basemap ${color.label}`}
+                      disabled={display.boundaries.mode !== "basemap"}
+                      onClick={() => updateNested("boundaries", { basemapColor: color.value })}
+                      className={`h-5 w-5 rounded-full border-2 active:scale-90 disabled:cursor-not-allowed ${
+                        display.boundaries.basemapColor === color.value ? "border-cyan-300" : "border-white/20"
+                      }`}
+                      style={{ backgroundColor: color.value }}
+                    />
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </AnchoredPopover>

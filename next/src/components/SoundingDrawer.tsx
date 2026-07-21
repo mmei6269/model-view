@@ -1,7 +1,12 @@
-import type { PointSoundingIndices, PointSoundingLevel, PointSoundingPayload } from "../types";
-import { useEffect, useState, type FormEvent, type ReactElement } from "react";
+import type { ModelKey, PointSoundingIndices, PointSoundingLevel, PointSoundingPayload, ViewKey } from "../types";
+import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
+import { MODEL_CONFIG, MODEL_KEYS } from "../config/constants";
+import { fetchModelManifestWithOptions, fetchPointSoundingPayload } from "../core/artifact-client";
 import { humanizeArtifactError } from "../core/humanize-error";
-import { formatValidLabel } from "../core/time";
+import { resolveFrameByValidTime } from "../core/manifest-utils";
+import { copyPngToClipboard, downloadBlob, renderSoundingChartsPng } from "../core/sounding-export";
+import { formatValidLabel, toEpochMs } from "../core/time";
+import { pushToast } from "../core/toasts";
 import { formatCoordinate } from "./map-panel/format-utils";
 
 interface SoundingDrawerProps {
@@ -9,6 +14,7 @@ interface SoundingDrawerProps {
   loading: boolean;
   error: string | null;
   sounding: PointSoundingPayload | null;
+  viewKey: ViewKey;
   point: { lat: number; lon: number } | null;
   forecastHour: number | null;
   validLabel: string;
@@ -65,12 +71,14 @@ const HODO_LEGEND = [
   { label: "6-9", color: "#38bdf8" },
   { label: "9-12", color: "#a78bfa" },
 ];
+const MAX_DIRECT_COMPARISON_OFFSET_MINUTES = 90;
 
 export default function SoundingDrawer({
   open,
   loading,
   error,
   sounding,
+  viewKey,
   point,
   forecastHour,
   validLabel: frameValidLabel,
@@ -84,6 +92,121 @@ export default function SoundingDrawer({
   onRequestPoint,
   onClose,
 }: SoundingDrawerProps) {
+  // Hooks live above the early return so the hook order never depends on `open`.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [exporting, setExporting] = useState(false);
+  // Comparison overlay: a second model's profile at the same point, sampled
+  // from that model's latest built run at the frame nearest this valid time.
+  const [compareModel, setCompareModel] = useState<ModelKey | "">("");
+  const [comparePayload, setComparePayload] = useState<PointSoundingPayload | null>(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareError, setCompareError] = useState<string | null>(null);
+  const soundingModel = sounding?.model ?? null;
+  const soundingValidTime = sounding?.validTime ?? null;
+  const soundingLat = Number.isFinite(sounding?.lat) ? Number(sounding?.lat) : null;
+  const soundingLon = Number.isFinite(sounding?.lon) ? Number(sounding?.lon) : null;
+  useEffect(() => {
+    // Model switched under an active compare pick of the same model: reset.
+    if (compareModel && compareModel === soundingModel) {
+      setCompareModel("");
+    }
+  }, [compareModel, soundingModel]);
+  useEffect(() => {
+    if (!open || !compareModel || soundingLat === null || soundingLon === null) {
+      setComparePayload(null);
+      setCompareError(null);
+      setCompareLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setCompareLoading(true);
+    setCompareError(null);
+    void (async () => {
+      const manifest = await fetchModelManifestWithOptions(compareModel, viewKey);
+      // The shared resolver handles unparsable valid-hour keys and no-target
+      // fallbacks the same way the map panels do.
+      const resolved = resolveFrameByValidTime(manifest, soundingValidTime ?? null, "nearest-absolute");
+      if (!resolved) {
+        throw new Error(`${MODEL_CONFIG[compareModel].label} has no built frames on this view.`);
+      }
+      const payload = await fetchPointSoundingPayload({
+        modelKey: compareModel,
+        runId: manifest.run,
+        viewKey,
+        hour: resolved.hour,
+        lat: soundingLat,
+        lon: soundingLon,
+      });
+      if (!cancelled) {
+        setComparePayload({
+          ...payload,
+          run: payload.run || manifest.run,
+          referenceTime: payload.referenceTime || manifest.referenceTime || null,
+          validTime: payload.validTime || resolved.validHourKey,
+        });
+      }
+    })()
+      .catch((fetchError) => {
+        if (!cancelled) {
+          setComparePayload(null);
+          setCompareError(humanizeArtifactError(String(fetchError instanceof Error ? fetchError.message : fetchError)));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCompareLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [compareModel, open, soundingLat, soundingLon, soundingValidTime, viewKey]);
+  const comparisonOffsetMinutes = validTimeOffsetMinutes(soundingValidTime, comparePayload?.validTime ?? null);
+  const comparisonIsGrosslyMismatched =
+    comparisonOffsetMinutes !== null && Math.abs(comparisonOffsetMinutes) > MAX_DIRECT_COMPARISON_OFFSET_MINUTES;
+  const comparablePayload = comparisonIsGrosslyMismatched ? null : comparePayload;
+  const exportCharts = (mode: "download" | "copy") => {
+    const root = contentRef.current;
+    if (!root || !sounding || exporting) {
+      return;
+    }
+    const svgs = Array.from(root.querySelectorAll<SVGSVGElement>("svg[data-sounding-export]"));
+    setExporting(true);
+    const blobPromise = renderSoundingChartsPng(svgs, {
+      title: `${sounding.modelLabel || sounding.model} point sounding`,
+      provenanceLines: buildSoundingProvenanceLines({
+        sounding,
+        compare: comparePayload,
+        comparisonOffsetMinutes,
+        comparisonSuppressed: comparisonIsGrosslyMismatched,
+        timeZone,
+      }),
+    });
+    // Clipboard writes must start inside the click's user activation — Safari
+    // rejects clipboard.write after an awaited rasterization, so the write is
+    // issued synchronously with the blob PROMISE as the ClipboardItem value.
+    const outcome =
+      mode === "copy"
+        ? copyPngToClipboard(blobPromise).then(() => {
+            pushToast({ tone: "success", title: "Sounding image copied" });
+          })
+        : blobPromise.then((blob) => {
+            downloadBlob(blob, buildSoundingFileName(sounding));
+            pushToast({ tone: "success", title: "Sounding PNG saved" });
+          });
+    void outcome
+      .catch((error) => {
+        pushToast({
+          tone: "error",
+          title: mode === "download" ? "Sounding export failed" : "Copy failed",
+          detail: String(error instanceof Error ? error.message : error),
+        });
+      })
+      .finally(() => {
+        setExporting(false);
+      });
+  };
+
   if (!open) {
     return null;
   }
@@ -95,10 +218,10 @@ export default function SoundingDrawer({
   const requestLon = Number.isFinite(sounding?.lon) ? Number(sounding?.lon) : Number(point?.lon);
   return (
     <aside
-      className="pointer-events-auto absolute right-3 z-[700] flex w-[min(1240px,calc(100%-1.5rem))] flex-col overflow-hidden rounded-lg border border-sky-300/20 bg-[#02060d]/96 shadow-2xl backdrop-blur-xl"
+      className="pointer-events-auto absolute right-3 z-[1100] flex w-[min(1240px,calc(100%-1.5rem))] flex-col overflow-hidden rounded-lg border border-sky-300/20 bg-[#02060d]/96 shadow-2xl backdrop-blur-xl"
       style={{
-        top: "calc(var(--chrome-top, 96px) + 12px)",
-        bottom: "calc(var(--chrome-bottom, 72px) + 12px)",
+        top: "calc(var(--panel-inset-top, var(--chrome-top, 96px)) + 12px)",
+        bottom: "calc(var(--panel-inset-bottom, var(--chrome-bottom, 72px)) + 12px)",
       }}
     >
       <header className="flex items-start justify-between gap-3 border-b border-sky-200/10 px-4 py-3">
@@ -114,29 +237,100 @@ export default function SoundingDrawer({
             onRecenter={onRecenter}
             onRequestPoint={onRequestPoint}
           />
-          <label className="mt-1.5 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] text-slate-300">
-            <input
-              type="checkbox"
-              checked={followTimeline}
-              onChange={onToggleFollowTimeline}
-              className="h-3.5 w-3.5 accent-cyan-400"
-            />
-            Follow timeline
-          </label>
-          {sounding?.sampleLat && sounding?.sampleLon ? (
-            <p className="m-0 mt-1 font-mono text-[10px] text-slate-500">
-              sampled {formatCoordinate(sounding.sampleLat, "N", "S")} {formatCoordinate(sounding.sampleLon, "E", "W")}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+            <label className="flex w-fit cursor-pointer items-center gap-1.5 text-[11px] text-slate-300">
+              <input
+                type="checkbox"
+                checked={followTimeline}
+                onChange={onToggleFollowTimeline}
+                className="h-3.5 w-3.5 accent-cyan-400"
+              />
+              Follow timeline
+            </label>
+            <label className="flex w-fit items-center gap-1.5 text-[11px] text-slate-300">
+              Compare
+              <select
+                aria-label="Compare against"
+                value={compareModel}
+                onChange={(event) => setCompareModel(event.target.value as ModelKey | "")}
+                className="h-6 rounded border border-white/10 bg-white/[0.04] px-1.5 text-[11px] text-slate-100 outline-none focus:border-orange-300/60"
+              >
+                <option value="" className="bg-slate-900">
+                  None
+                </option>
+                {MODEL_KEYS.filter((key) => key !== soundingModel).map((key) => (
+                  <option key={key} value={key} className="bg-slate-900">
+                    {MODEL_CONFIG[key].label}
+                  </option>
+                ))}
+              </select>
+              {compareLoading ? <span className="text-[10px] text-slate-500">loading…</span> : null}
+              {comparePayload && !compareLoading ? (
+                <span className="font-mono text-[10px] text-orange-300">
+                  ‒ ‒ {comparePayload.modelLabel || comparePayload.model} f
+                  {String(comparePayload.forecastHour ?? 0).padStart(3, "0")}
+                  {comparisonOffsetMinutes !== null ? ` · Δt ${formatTimeOffset(comparisonOffsetMinutes)}` : ""}
+                </span>
+              ) : null}
+            </label>
+          </div>
+          {compareError ? (
+            <p className="m-0 mt-1 text-[10px] text-rose-300" data-testid="sounding-compare-error">
+              {compareError}
             </p>
           ) : null}
+          {comparisonIsGrosslyMismatched && comparePayload ? (
+            <p
+              className="m-0 mt-1 rounded border border-rose-300/25 bg-rose-950/30 px-2 py-1 text-[10px] leading-4 text-rose-100"
+              data-testid="sounding-compare-time-warning"
+            >
+              Comparison traces and index pairs are suppressed: valid times differ by{" "}
+              {formatTimeOffset(comparisonOffsetMinutes)}, exceeding the {MAX_DIRECT_COMPARISON_OFFSET_MINUTES}-minute
+              direct-comparison limit.
+            </p>
+          ) : comparisonOffsetMinutes !== null && comparisonOffsetMinutes !== 0 ? (
+            <p className="m-0 mt-1 text-[10px] text-amber-200" data-testid="sounding-compare-time-notice">
+              Comparison valid time offset: {formatTimeOffset(comparisonOffsetMinutes)}. Interpret rapidly evolving
+              fields with care.
+            </p>
+          ) : null}
+          {sounding ? (
+            <SoundingProvenanceBand
+              sounding={sounding}
+              compare={comparePayload}
+              comparisonOffsetMinutes={comparisonOffsetMinutes}
+              timeZone={timeZone}
+            />
+          ) : null}
         </div>
-        <button
-          type="button"
-          aria-label="Close sounding"
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-white/10 bg-white/5 text-sm text-slate-300 hover:bg-white/10 hover:text-white"
-          onClick={onClose}
-        >
-          x
-        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            disabled={!sounding || loading || exporting}
+            title="Download the Skew-T + hodograph as a PNG"
+            className="h-8 rounded-md border border-white/10 bg-white/5 px-2.5 text-[11px] font-medium text-slate-300 hover:bg-white/10 hover:text-white disabled:opacity-40"
+            onClick={() => exportCharts("download")}
+          >
+            {exporting ? "Exporting…" : "PNG"}
+          </button>
+          <button
+            type="button"
+            disabled={!sounding || loading || exporting}
+            title="Copy the Skew-T + hodograph image to the clipboard"
+            className="h-8 rounded-md border border-white/10 bg-white/5 px-2.5 text-[11px] font-medium text-slate-300 hover:bg-white/10 hover:text-white disabled:opacity-40"
+            onClick={() => exportCharts("copy")}
+          >
+            Copy
+          </button>
+          <button
+            type="button"
+            aria-label="Close sounding"
+            className="grid h-8 w-8 place-items-center rounded-md border border-white/10 bg-white/5 text-sm text-slate-300 hover:bg-white/10 hover:text-white"
+            onClick={onClose}
+          >
+            x
+          </button>
+        </div>
       </header>
 
       {staleNotice ? (
@@ -164,7 +358,7 @@ export default function SoundingDrawer({
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+      <div ref={contentRef} className="min-h-0 flex-1 overflow-auto px-4 py-3">
         {loading ? (
           <div className="grid h-full min-h-[420px] place-items-center text-sm text-slate-300">
             Building point profile...
@@ -179,13 +373,14 @@ export default function SoundingDrawer({
         ) : sounding && levelCount > 0 ? (
           <div className="grid min-h-0 gap-3 xl:grid-cols-[660px_minmax(360px,1fr)]">
             <section className="min-w-0">
-              <SkewTChart sounding={sounding} />
+              <SkewTChart sounding={sounding} compare={comparablePayload} />
               <OperationalTables sounding={sounding} />
               <LevelTable levels={sounding.levels} />
             </section>
             <section className="grid content-start gap-3">
-              <Hodograph sounding={sounding} />
-              <HazardPanel indices={sounding.indices || {}} />
+              <Hodograph sounding={sounding} compare={comparablePayload} />
+              {comparablePayload ? <CompareIndicesTable primary={sounding} compare={comparablePayload} /> : null}
+              <HazardPanel indices={sounding.indices || {}} model={sounding.model} />
               <StormMotionPanel sounding={sounding} />
               <EffectiveLayerPanel indices={sounding.indices || {}} />
               <TechnicalSourcePanel sounding={sounding} />
@@ -204,6 +399,116 @@ export default function SoundingDrawer({
       </div>
     </aside>
   );
+}
+
+function SoundingProvenanceBand({
+  sounding,
+  compare,
+  comparisonOffsetMinutes,
+  timeZone,
+}: {
+  sounding: PointSoundingPayload;
+  compare: PointSoundingPayload | null;
+  comparisonOffsetMinutes: number | null;
+  timeZone: string;
+}) {
+  const requestCoordinates = formatCoordinatePair(sounding.lat, sounding.lon);
+  const sampleCoordinates = formatCoordinatePair(sounding.sampleLat, sounding.sampleLon);
+  return (
+    <div
+      className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 rounded border border-sky-200/10 bg-sky-950/20 px-2 py-1 font-mono text-[9px] leading-4 text-slate-400"
+      data-testid="sounding-provenance"
+      aria-label="Sounding provenance"
+    >
+      <span>model {sounding.modelLabel || sounding.model}</span>
+      <span>run {sounding.run || "--"}</span>
+      <span>init {formatValidLabel(sounding.referenceTime ?? null, timeZone)}</span>
+      <span>valid {formatValidLabel(sounding.validTime ?? null, timeZone)}</span>
+      <span>F{String(sounding.forecastHour ?? 0).padStart(3, "0")}</span>
+      <span>request {requestCoordinates}</span>
+      <span>sample {sampleCoordinates}</span>
+      <span>method {sounding.methodVersion || "--"}</span>
+      <span>wind {formatWindReference(sounding)}</span>
+      {compare ? (
+        <>
+          <span className="text-orange-200/80">
+            compare {compare.modelLabel || compare.model} run {compare.run || "--"} init{" "}
+            {formatValidLabel(compare.referenceTime ?? null, timeZone)} valid{" "}
+            {formatValidLabel(compare.validTime ?? null, timeZone)} F
+            {String(compare.forecastHour ?? 0).padStart(3, "0")}
+            {comparisonOffsetMinutes !== null ? ` (delta t ${formatTimeOffset(comparisonOffsetMinutes)})` : ""}
+          </span>
+          <span className="text-orange-200/80">
+            compare request {formatCoordinatePair(compare.lat, compare.lon)} sample{" "}
+            {formatCoordinatePair(compare.sampleLat, compare.sampleLon)}
+          </span>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function buildSoundingProvenanceLines({
+  sounding,
+  compare,
+  comparisonOffsetMinutes,
+  comparisonSuppressed,
+  timeZone,
+}: {
+  sounding: PointSoundingPayload;
+  compare: PointSoundingPayload | null;
+  comparisonOffsetMinutes: number | null;
+  comparisonSuppressed: boolean;
+  timeZone: string;
+}): string[] {
+  const lines = [
+    `Model ${sounding.modelLabel || sounding.model} | run ${sounding.run || "--"} | init ${formatValidLabel(sounding.referenceTime ?? null, timeZone)} | valid ${formatValidLabel(sounding.validTime ?? null, timeZone)} | F${String(sounding.forecastHour ?? 0).padStart(3, "0")}`,
+    `Request ${formatCoordinatePair(sounding.lat, sounding.lon)} | sample ${formatCoordinatePair(sounding.sampleLat, sounding.sampleLon)}`,
+    `Source ${String(sounding.source || "cached NOAA GRIB point-profile sampling")} | method ${sounding.methodVersion || "--"}`,
+    `Wind reference ${formatWindReference(sounding)}`,
+  ];
+  if (compare) {
+    lines.push(
+      `Comparison ${compare.modelLabel || compare.model} | run ${compare.run || "--"} | init ${formatValidLabel(compare.referenceTime ?? null, timeZone)} | valid ${formatValidLabel(compare.validTime ?? null, timeZone)} | F${String(compare.forecastHour ?? 0).padStart(3, "0")}${
+        comparisonOffsetMinutes !== null ? ` | delta t ${formatTimeOffset(comparisonOffsetMinutes)}` : ""
+      }${comparisonSuppressed ? ` | traces/index pairs suppressed (>${MAX_DIRECT_COMPARISON_OFFSET_MINUTES} min)` : ""}`,
+      `Comparison request ${formatCoordinatePair(compare.lat, compare.lon)} | sample ${formatCoordinatePair(compare.sampleLat, compare.sampleLon)}`,
+    );
+  }
+  return lines;
+}
+
+function validTimeOffsetMinutes(primary: string | null, comparison: string | null): number | null {
+  if (!primary || !comparison) {
+    return null;
+  }
+  const primaryMs = toEpochMs(primary);
+  const comparisonMs = toEpochMs(comparison);
+  return Number.isFinite(primaryMs) && Number.isFinite(comparisonMs)
+    ? Math.round((comparisonMs - primaryMs) / 60_000)
+    : null;
+}
+
+function formatTimeOffset(minutes: number | null): string {
+  if (!Number.isFinite(minutes)) {
+    return "--";
+  }
+  const rounded = Math.round(Number(minutes));
+  if (rounded === 0) {
+    return "0 min";
+  }
+  const sign = rounded > 0 ? "+" : "-";
+  const magnitude = Math.abs(rounded);
+  const hours = Math.floor(magnitude / 60);
+  const remainder = magnitude % 60;
+  return `${sign}${hours > 0 ? `${hours}h` : ""}${hours > 0 && remainder > 0 ? " " : ""}${remainder > 0 ? `${remainder}m` : ""}`;
+}
+
+function formatCoordinatePair(lat: number | null | undefined, lon: number | null | undefined): string {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return "--";
+  }
+  return `${formatCoordinate(Number(lat), "N", "S")} ${formatCoordinate(Number(lon), "E", "W")}`;
 }
 
 function PointCoordinateForm({
@@ -313,24 +618,32 @@ function PointCoordinateForm({
   );
 }
 
-function SkewTChart({ sounding }: { sounding: PointSoundingPayload }) {
+function SkewTChart({
+  sounding,
+  compare = null,
+}: {
+  sounding: PointSoundingPayload;
+  compare?: PointSoundingPayload | null;
+}) {
   const levels = normalizedLevels(sounding.levels);
   const tempPath = pathForLevels(levels, "temp");
   const dewpointPath = pathForLevels(levels, "dwpt");
+  const compareLevels = compare ? normalizedLevels(compare.levels) : [];
+  const compareTempPath = compareLevels.length > 0 ? pathForLevels(compareLevels, "temp") : "";
+  const compareDewpointPath = compareLevels.length > 0 ? pathForLevels(compareLevels, "dwpt") : "";
   const parcelTracePath = pathForParcelTrace(sounding.parcelTrace?.levels || []);
   const parcelLabel = sounding.parcelTrace?.label || "Parcel";
-  const windBarbs = windBarbLevels(levels);
   const indices = sounding.indices || {};
   const parcelMarkers = sounding.parcelTrace || null;
   const surfaceLevel = levels.find((level) => level.source === "surface") || null;
-  const surfaceHeightMsl = Number(surfaceLevel?.hght ?? levels[0]?.hght);
+  const surfaceHeightMsl = resolveProfileSurfaceHeightMsl(levels, sounding.surface?.heightM);
+  const windBarbs = windBarbLevels(levels, surfaceHeightMsl);
   const criticalTempAgl = (heightMsl: number | null | undefined) =>
-    Number.isFinite(heightMsl)
-      ? Number(heightMsl) - (Number.isFinite(surfaceHeightMsl) ? surfaceHeightMsl : 0)
-      : Number.NaN;
-  const heightMarkers = HEIGHT_MARKS_M.map((heightM) => ({ heightM, y: yForAglHeight(levels, heightM) })).filter(
-    (mark) => Number.isFinite(mark.y),
-  );
+    Number.isFinite(heightMsl) && Number.isFinite(surfaceHeightMsl) ? Number(heightMsl) - surfaceHeightMsl : Number.NaN;
+  const heightMarkers = HEIGHT_MARKS_M.map((heightM) => ({
+    heightM,
+    y: yForAglHeight(levels, heightM, surfaceHeightMsl),
+  })).filter((mark) => Number.isFinite(mark.y));
   // Parcel levels render as SHARPpy-style short right-side ticks with labels
   // dodged apart when LCL/LFC sit at nearly the same height; isotherm
   // crossings render as right-edge labels at the crossing height with a dot
@@ -342,7 +655,7 @@ function SkewTChart({ sounding }: { sounding: PointSoundingPayload }) {
     { label: "EL", value: parcelMarkers?.elM ?? indices.elM, color: "#c084fc" },
   ]
     .filter((row) => Number.isFinite(row.value))
-    .map((row) => ({ ...row, y: yForAglHeight(levels, row.value) }))
+    .map((row) => ({ ...row, y: yForAglHeight(levels, row.value, surfaceHeightMsl) }))
     .filter((row) => Number.isFinite(row.y))
     .sort((left, right) => left.y - right.y)
     .map((row) => {
@@ -356,7 +669,7 @@ function SkewTChart({ sounding }: { sounding: PointSoundingPayload }) {
     { tempC: -30, label: "-30C", heightMsl: indices.tempMinus30CHeightM, ft: indices.tempMinus30CHeightFt },
   ]
     .map((row) => {
-      const pressure = pressureForAglHeight(levels, criticalTempAgl(row.heightMsl));
+      const pressure = pressureForAglHeight(levels, criticalTempAgl(row.heightMsl), surfaceHeightMsl);
       if (!Number.isFinite(pressure)) {
         return null;
       }
@@ -376,8 +689,8 @@ function SkewTChart({ sounding }: { sounding: PointSoundingPayload }) {
           y: yForPressure(Number(surfaceLevel.press)),
         }
       : null;
-  const effectiveBaseY = yForAglHeight(levels, indices.effectiveBaseM);
-  const effectiveTopY = yForAglHeight(levels, indices.effectiveTopM);
+  const effectiveBaseY = yForAglHeight(levels, indices.effectiveBaseM, surfaceHeightMsl);
+  const effectiveTopY = yForAglHeight(levels, indices.effectiveTopM, surfaceHeightMsl);
 
   return (
     <svg
@@ -385,6 +698,7 @@ function SkewTChart({ sounding }: { sounding: PointSoundingPayload }) {
       style={{ aspectRatio: `${SKEWT_VIEWBOX_WIDTH} / ${SKEWT_VIEWBOX_HEIGHT}` }}
       viewBox={`0 0 ${SKEWT_VIEWBOX_WIDTH} ${SKEWT_VIEWBOX_HEIGHT}`}
       preserveAspectRatio="xMinYMin meet"
+      data-sounding-export="skewt"
     >
       <defs>
         <clipPath id="sounding-plot-clip">
@@ -581,6 +895,31 @@ function SkewTChart({ sounding }: { sounding: PointSoundingPayload }) {
       ) : null}
 
       <g clipPath="url(#sounding-plot-clip)">
+        {/* Comparison profile first (dashed, warm hues) so the primary
+            traces always draw on top of it. */}
+        {compareTempPath ? (
+          <path
+            d={compareTempPath}
+            data-testid="skewt-compare-temp"
+            fill="none"
+            stroke="#fb923c"
+            strokeWidth="2.2"
+            strokeDasharray="7 5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ) : null}
+        {compareDewpointPath ? (
+          <path
+            d={compareDewpointPath}
+            fill="none"
+            stroke="#f0abfc"
+            strokeWidth="2.2"
+            strokeDasharray="7 5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ) : null}
         <path d={tempPath} fill="none" stroke="#ef4444" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
         <path
           d={dewpointPath}
@@ -602,6 +941,11 @@ function SkewTChart({ sounding }: { sounding: PointSoundingPayload }) {
           />
         ) : null}
       </g>
+      {compare ? (
+        <text x={PLOT.left + PLOT.width - 8} y={PLOT.top + 16} textAnchor="end" className="fill-orange-300 text-[11px]">
+          ‒ ‒ {compare.modelLabel || compare.model} f{String(compare.forecastHour ?? 0).padStart(3, "0")}
+        </text>
+      ) : null}
 
       {windBarbs.map(({ level, y }) => (
         <WindBarb key={`barb-${level.source}-${level.press}-${level.hght}`} x={WIND_BARB_X} y={y} level={level} />
@@ -637,14 +981,19 @@ function SkewTChart({ sounding }: { sounding: PointSoundingPayload }) {
   );
 }
 
-function Hodograph({ sounding }: { sounding: PointSoundingPayload }) {
-  const levels = profileLevelsWithAgl(sounding.levels).filter(
+// Wind trace clipped at 12 km AGL (with an interpolated end point). The weak,
+// directionally erratic stratospheric winds above add clutter without
+// analyst value. Returns the filtered profile levels alongside the trace.
+function buildHodographTrace(
+  rawLevels: PointSoundingLevel[],
+  surfaceHeightMsl: number | null = null,
+): {
+  levels: ReturnType<typeof profileLevelsWithAgl>;
+  trace: Array<{ u: number; v: number; heightAglM: number }>;
+} {
+  const levels = profileLevelsWithAgl(rawLevels, surfaceHeightMsl).filter(
     (level) => Number.isFinite(level.uKt) && Number.isFinite(level.vKt) && Number.isFinite(level.heightAglM),
   );
-  const indices = sounding.indices || {};
-  // Clip the trace at 12 km AGL (with an interpolated end point). The weak,
-  // directionally erratic stratospheric winds above add clutter without
-  // analyst value.
   const trace: Array<{ u: number; v: number; heightAglM: number }> = levels
     .filter((level) => Number(level.heightAglM) <= HODO_TOP_AGL_M)
     .map((level) => ({ u: Number(level.uKt), v: Number(level.vKt), heightAglM: Number(level.heightAglM) }));
@@ -658,6 +1007,25 @@ function Hodograph({ sounding }: { sounding: PointSoundingPayload }) {
       heightAglM: HODO_TOP_AGL_M,
     });
   }
+  return { levels, trace };
+}
+
+function Hodograph({
+  sounding,
+  compare = null,
+}: {
+  sounding: PointSoundingPayload;
+  compare?: PointSoundingPayload | null;
+}) {
+  const { levels, trace } = buildHodographTrace(
+    sounding.levels,
+    resolveProfileSurfaceHeightMsl(sounding.levels, sounding.surface?.heightM),
+  );
+  const compareTrace = compare
+    ? buildHodographTrace(compare.levels, resolveProfileSurfaceHeightMsl(compare.levels, compare.surface?.heightM))
+        .trace
+    : [];
+  const indices = sounding.indices || {};
   const motions = [
     { label: "RM", dir: indices.bunkersRightDirDeg, speed: indices.bunkersRightKt, color: "#facc15" },
     { label: "LM", dir: indices.bunkersLeftDirDeg, speed: indices.bunkersLeftKt, color: "#c084fc" },
@@ -757,7 +1125,7 @@ function Hodograph({ sounding }: { sounding: PointSoundingPayload }) {
           km
         </span>
       </div>
-      <svg viewBox="0 0 320 320" className="h-80 w-full">
+      <svg viewBox="0 0 320 320" className="h-80 w-full" data-sounding-export="hodo">
         <defs>
           <clipPath id="hodo-clip">
             <rect x={center - plotHalf} y={center - plotHalf} width={plotHalf * 2} height={plotHalf * 2} />
@@ -813,6 +1181,20 @@ function Hodograph({ sounding }: { sounding: PointSoundingPayload }) {
               strokeDasharray="4 4"
             />
           ))}
+          {compareTrace.length > 1 ? (
+            <path
+              d={compareTrace
+                .map((point, index) => `${index === 0 ? "M" : "L"}${toX(point.u)} ${toY(point.v)}`)
+                .join(" ")}
+              data-testid="hodo-compare-trace"
+              fill="none"
+              stroke="#fb923c"
+              strokeWidth="2"
+              strokeDasharray="5 4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ) : null}
           {trace.slice(1).map((point, index) => {
             const previous = trace[index];
             const midHeight = (previous.heightAglM + point.heightAglM) / 2;
@@ -902,7 +1284,7 @@ function OperationalTables({ sounding }: { sounding: PointSoundingPayload }) {
   return (
     <div className="mt-3 grid gap-3 xl:grid-cols-2">
       <DenseTable
-        title="Parcel"
+        title="Parcel (CAPE/CIN J/kg; heights m AGL)"
         headers={["PCL", "CAPE", "CINH", "LCL", "LIv", "LFC", "EL"]}
         rows={[
           [
@@ -936,7 +1318,7 @@ function OperationalTables({ sounding }: { sounding: PointSoundingPayload }) {
         ]}
       />
       <DenseTable
-        title="Kinematics"
+        title="Kinematics (SRH m2/s2; wind/shear kt; Eff layer m AGL)"
         headers={["Layer", "EHI", "SRH", "Shear", "Mean"]}
         rows={[
           [
@@ -978,11 +1360,16 @@ function OperationalTables({ sounding }: { sounding: PointSoundingPayload }) {
           ["PW", formatNumber(indices.pwatMm, " mm", 1), "K", formatNumber(indices.kIndexC, "", 1)],
           ["TT", formatNumber(indices.totalTotalsC, "", 1), "VT", formatNumber(indices.verticalTotalsC, "", 1)],
           ["CT", formatNumber(indices.crossTotalsC, "", 1), "Show", formatNumber(indices.showalterIndexC, "", 1)],
-          ["DCAPE", formatNumber(indices.dcapeJkg, "", 0), "Max Wind", formatNumber(indices.maxWindKt, " kt", 0)],
           [
-            "Hail",
+            "DCAPE (J/kg)",
+            formatNumber(indices.dcapeJkg, "", 0),
+            "Max Prof Wind",
+            formatNumber(indices.maxWindKt, " kt", 0),
+          ],
+          [
+            "Model Hail",
             formatNumber(indices.maxHailSizeIn, " in", 2),
-            "UH",
+            "1-h Max UH",
             formatNumber(indices.updraftHelicity2to5kmM2S2, "", 0),
           ],
         ]}
@@ -1134,29 +1521,57 @@ function LapseRateValue({
   );
 }
 
-function HazardPanel({ indices }: { indices: PointSoundingIndices }) {
-  const signal = deriveHazardSignal(indices);
+function HazardPanel({ indices, model }: { indices: PointSoundingIndices; model: ModelKey | string }) {
+  const signal = deriveHazardSignal(indices, model);
+  const roster = hazardRosterForModel(model);
+  const hailProvided = Number.isFinite(indices.maxHailSizeIn);
+  const hailEvaluated = roster.hailExpected || hailProvided;
+  const modelLabel = (MODEL_CONFIG as Partial<Record<string, { label: string }>>)[model]?.label || model;
   return (
     <div className="rounded-lg border border-white/10 bg-[#030910] p-3">
       <div className="mb-2 flex items-center justify-between text-xs text-slate-300">
-        <span className="font-semibold text-slate-100">Psbl Haz. Type</span>
-        <span className="font-mono text-[10px] text-slate-500">signal</span>
+        <span className="font-semibold text-slate-100">App Convective-Environment Heuristic</span>
+        <span className="font-mono text-[10px] text-slate-500">screening aid</span>
       </div>
       <div className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-4 text-center">
         <div className="font-mono text-2xl font-semibold tracking-normal" style={{ color: signal.color }}>
           {signal.label}
         </div>
         <div className="mt-1 text-[11px] text-slate-400">{signal.detail}</div>
+        <div className="mt-1 font-mono text-[9px] text-slate-500" data-testid="hazard-input-roster">
+          {roster.hailExpected
+            ? model === "hrrr"
+              ? `${modelLabel} roster includes model-simulated hail; missing hail stays N/A when it could change the category.`
+              : `${modelLabel} has no declared hail exemption; missing hail stays fail-closed when it could change the category.`
+            : hailProvided
+              ? `${modelLabel} does not require hail, but this payload provides a finite value and the hail-only branch is evaluated.`
+              : `${modelLabel} roster permits missing simulated hail; the hail-only branch is omitted for this payload.`}
+        </div>
       </div>
+      <p className="mb-0 mt-2 text-[10px] leading-4 text-amber-100/80">
+        Custom app threshold tree - not a forecast, outlook, watch, or warning. It does not evaluate forcing, storm
+        mode, elevated inflow, or observational confirmation. It applies no independent CIN veto; CIN enters only where
+        it is already embedded in an input STP or SCP composite.
+      </p>
+      <details className="mt-1.5 text-[9px] leading-4 text-slate-500">
+        <summary className="cursor-pointer text-slate-400">Exact thresholds</summary>
+        TOR: STP &gt;=2, CAPE &gt;=500 J/kg, shear &gt;=30 kt, SRH &gt;=100 m2/s2. TOR?: STP &gt;=1, CAPE &gt;=500,
+        shear &gt;=25. SUP: SCP &gt;=4, CAPE &gt;=1000, shear &gt;=35. SVR: CAPE &gt;=1000 and shear &gt;=30
+        {hailEvaluated ? ", or model-simulated hail >=1 in" : "; this payload omits the hail-only branch"}. MRGL: CAPE
+        &gt;=250 and shear &gt;=25. Before thresholding, the app independently takes the maximum available
+        SBCAPE/MLCAPE/MUCAPE, effective/0-6 km shear, effective/0-1/0-3 km SRH, fixed/effective STP, and
+        proxy/fixed/effective SCP; these maxima can combine non-coincident parcels or layers.
+      </details>
     </div>
   );
 }
 
 function StormMotionPanel({ sounding }: { sounding: PointSoundingPayload }) {
   const indices = sounding.indices || {};
-  const levels = profileLevelsWithAgl(sounding.levels).filter(
-    (level) => Number.isFinite(level.uKt) && Number.isFinite(level.vKt),
-  );
+  const levels = profileLevelsWithAgl(
+    sounding.levels,
+    resolveProfileSurfaceHeightMsl(sounding.levels, sounding.surface?.heightM),
+  ).filter((level) => Number.isFinite(level.uKt) && Number.isFinite(level.vKt));
   const storm = windVectorFromDirectionSpeed(indices.bunkersRightDirDeg, indices.bunkersRightKt);
   const hasStorm = Number.isFinite(storm.uKt) && Number.isFinite(storm.vKt);
   const points = hasStorm
@@ -1247,6 +1662,9 @@ function TechnicalSourcePanel({ sounding }: { sounding: PointSoundingPayload }) 
           : "Cached GRIB sampled"}
       </div>
       <div className="font-mono">{sounding.levels.length} profile levels</div>
+      <div className="font-mono">Method: {sounding.methodVersion || "--"}</div>
+      <div className="font-mono">Cloud ceiling: {formatPointCloudCeiling(sounding.indices || {})}</div>
+      <div className="font-mono">Wind reference: {formatWindReference(sounding)}</div>
       {parcelLabel ? <div className="font-mono">{parcelLabel} trace plotted from clicked profile</div> : null}
       <div className="font-mono">Surface parcel requires 2m TMP and DPT/RH with surface pressure/height</div>
       <div className="font-mono">
@@ -1255,6 +1673,9 @@ function TechnicalSourcePanel({ sounding }: { sounding: PointSoundingPayload }) 
       <div className="font-mono">Parcel buoyancy uses virtual-temperature correction</div>
       <div className="font-mono">LIv is lifted index using virtual-temperature correction</div>
       <div className="font-mono">Effective-layer CAPE/CIN are profile-derived layer diagnostics</div>
+      <div className="font-mono">
+        Gridded effective STP uses native 90-mb mixed-layer CAPE/CIN inputs rather than the SPC 100-mb mixed layer
+      </div>
       <div className="font-mono">Bunkers RM method: {formatBunkersMethod(indices.bunkersMethod)}</div>
       <div className="font-mono">Bunkers deviation is orthogonal to point-wind shear (SHARPpy wind_shear)</div>
       <div className="font-mono">SRH/EHI prefer profile Bunkers RM; sampled model SRH fills gaps</div>
@@ -1280,6 +1701,31 @@ function formatBunkersMethod(method: string | null | undefined): string {
     return "fixed SFC-6km fallback";
   }
   return "--";
+}
+
+export function formatPointCloudCeiling(indices: PointSoundingIndices): string {
+  if (indices.cloudCeilingState === "none") {
+    return "No ceiling (UPP/model total cloud cover <50% or no-ceiling sentinel)";
+  }
+  if (indices.cloudCeilingState === "reported" && Number.isFinite(indices.cloudCeilingM)) {
+    return `${Math.round(Number(indices.cloudCeilingM) * 3.28084)} ft ${indices.cloudCeilingDatum || "AGL"}`;
+  }
+  return "Unavailable (ceiling state could not be established)";
+}
+
+export function formatWindReference(sounding: PointSoundingPayload): string {
+  const reference = sounding.windReference;
+  if (!reference) {
+    return "--";
+  }
+  const frames = `${reference.sourceFrame || "unknown"} -> ${reference.outputFrame || "unknown"}`;
+  const projection = reference.projection ? `, ${reference.projection}` : "";
+  const rotation = reference.rotationApplied
+    ? `, rotation applied${Number.isFinite(reference.rotationAngleDeg) ? ` (${Number(reference.rotationAngleDeg).toFixed(2)} deg)` : ""}`
+    : reference.outputFrame === "earth-relative"
+      ? ", earth-relative source (no rotation required)"
+      : ", unresolved reference; profile-wind diagnostics suppressed";
+  return `${frames}${projection}${rotation}`;
 }
 
 function formatModelSrhSummary(indices: PointSoundingIndices): string {
@@ -1316,12 +1762,12 @@ function LevelTable({ levels }: { levels: PointSoundingLevel[] }) {
         <table className="w-full border-collapse text-left font-mono text-[11px] text-slate-300">
           <thead className="sticky top-0 bg-[#07111f] text-[10px] uppercase text-slate-300">
             <tr>
-              <th className="px-3 py-1.5 font-medium">P</th>
-              <th className="px-2 py-1.5 font-medium">Hgt</th>
-              <th className="px-2 py-1.5 font-medium">T</th>
-              <th className="px-2 py-1.5 font-medium">Td</th>
-              <th className="px-2 py-1.5 font-medium">RH</th>
-              <th className="px-2 py-1.5 font-medium">Wind</th>
+              <th className="px-3 py-1.5 font-medium">P hPa</th>
+              <th className="px-2 py-1.5 font-medium">Hgt m MSL</th>
+              <th className="px-2 py-1.5 font-medium">T C</th>
+              <th className="px-2 py-1.5 font-medium">Td C</th>
+              <th className="px-2 py-1.5 font-medium">RH %</th>
+              <th className="px-2 py-1.5 font-medium">Wind kt</th>
             </tr>
           </thead>
           <tbody>
@@ -1436,16 +1882,31 @@ function normalizedLevels(levels: PointSoundingLevel[]): PointSoundingLevel[] {
     .sort((left, right) => Number(right.press) - Number(left.press));
 }
 
-function profileLevelsWithAgl(levels: PointSoundingLevel[]): Array<PointSoundingLevel & { heightAglM: number }> {
+export function profileLevelsWithAgl(
+  levels: PointSoundingLevel[],
+  surfaceHeightMsl: number | null = null,
+): Array<PointSoundingLevel & { heightAglM: number }> {
   const rows = normalizedLevels(levels)
     .filter((level) => Number.isFinite(level.hght))
     .sort((left, right) => Number(left.hght) - Number(right.hght));
-  const surface = rows.find((level) => level.source === "surface") || rows[0] || null;
-  const surfaceHeight = Number(surface?.hght);
+  const surfaceHeight = resolveProfileSurfaceHeightMsl(rows, surfaceHeightMsl);
   return rows.map((level) => ({
     ...level,
-    heightAglM: Number(level.hght) - (Number.isFinite(surfaceHeight) ? surfaceHeight : 0),
+    heightAglM: Number.isFinite(surfaceHeight) ? Number(level.hght) - surfaceHeight : Number.NaN,
   }));
+}
+
+export function resolveProfileSurfaceHeightMsl(
+  levels: PointSoundingLevel[],
+  fallbackHeightMsl: number | null | undefined,
+): number {
+  const surfaceLevel = (Array.isArray(levels) ? levels : []).find(
+    (level) => level.source === "surface" && Number.isFinite(level.hght),
+  );
+  if (surfaceLevel) {
+    return Number(surfaceLevel.hght);
+  }
+  return Number.isFinite(fallbackHeightMsl) ? Number(fallbackHeightMsl) : Number.NaN;
 }
 
 function pathForLevels(levels: PointSoundingLevel[], key: "temp" | "dwpt"): string {
@@ -1458,13 +1919,15 @@ function pathForLevels(levels: PointSoundingLevel[], key: "temp" | "dwpt"): stri
     .join(" ");
 }
 
-function windBarbLevels(levels: PointSoundingLevel[]): Array<{ level: PointSoundingLevel; y: number }> {
-  const rows = profileLevelsWithAgl(levels);
-  const surface = rows.find((level) => level.source === "surface") || rows[0] || null;
-  const surfaceHeight = Number(surface?.hght);
+function windBarbLevels(
+  levels: PointSoundingLevel[],
+  surfaceHeightMsl: number | null = null,
+): Array<{ level: PointSoundingLevel; y: number }> {
+  const rows = profileLevelsWithAgl(levels, surfaceHeightMsl);
+  const surfaceHeight = resolveProfileSurfaceHeightMsl(rows, surfaceHeightMsl);
   const lowLevelBarbs: Array<{ level: PointSoundingLevel; y: number }> = [];
   for (const aglM of LOW_LEVEL_WIND_BARB_AGL_LEVELS_M) {
-    const pressure = pressureForAglHeight(levels, aglM);
+    const pressure = pressureForAglHeight(levels, aglM, surfaceHeightMsl);
     const wind = interpolateWindAtAgl(rows, aglM);
     const y = Number.isFinite(pressure) ? yForPressure(pressure) : Number.NaN;
     if (!wind || !Number.isFinite(y)) {
@@ -1629,16 +2092,24 @@ function yForPressure(pressureHpa: number): number {
   return PLOT.top + (1 - clamped) * PLOT.height;
 }
 
-function yForAglHeight(levels: PointSoundingLevel[], aglM: number | null | undefined): number {
-  const pressure = pressureForAglHeight(levels, aglM);
+function yForAglHeight(
+  levels: PointSoundingLevel[],
+  aglM: number | null | undefined,
+  surfaceHeightMsl: number | null = null,
+): number {
+  const pressure = pressureForAglHeight(levels, aglM, surfaceHeightMsl);
   return Number.isFinite(pressure) ? yForPressure(pressure) : Number.NaN;
 }
 
-function pressureForAglHeight(levels: PointSoundingLevel[], aglM: number | null | undefined): number {
+function pressureForAglHeight(
+  levels: PointSoundingLevel[],
+  aglM: number | null | undefined,
+  surfaceHeightMsl: number | null = null,
+): number {
   if (!Number.isFinite(aglM)) {
     return Number.NaN;
   }
-  const rows = profileLevelsWithAgl(levels)
+  const rows = profileLevelsWithAgl(levels, surfaceHeightMsl)
     .filter((level) => Number.isFinite(level.press) && Number.isFinite(level.heightAglM))
     .sort((left, right) => Number(left.heightAglM) - Number(right.heightAglM));
   const target = Number(aglM);
@@ -1730,48 +2201,132 @@ function hodographColorForHeight(heightAglM: number): string {
   return "#a78bfa";
 }
 
-function deriveHazardSignal(indices: PointSoundingIndices): { label: string; detail: string; color: string } {
-  const cape = Math.max(
-    finiteOrNegative(indices.sbcapeJkg),
-    finiteOrNegative(indices.mlcapeJkg),
-    finiteOrNegative(indices.mucapeJkg),
-  );
-  const stp = Math.max(
-    finiteOrNegative(indices.significantTornadoEffective),
-    finiteOrNegative(indices.significantTornadoFixed),
-  );
-  const scp = Math.max(
-    finiteOrNegative(indices.supercellCompositeEffective),
-    finiteOrNegative(indices.supercellCompositeProxy),
-    finiteOrNegative(indices.supercellComposite),
-  );
-  const shear = Math.max(finiteOrNegative(indices.effectiveBulkShearKt), finiteOrNegative(indices.shear0to6kmKt));
-  const srh = Math.max(
-    finiteOrNegative(indices.effectiveSrhM2S2),
-    finiteOrNegative(indices.srh0to1kmM2S2),
-    finiteOrNegative(indices.srh0to3kmM2S2),
-  );
-  const hail = finiteOrNegative(indices.maxHailSizeIn);
-  if (stp >= 2 && cape >= 500 && shear >= 30 && srh >= 100) {
+export function deriveHazardSignal(
+  indices: PointSoundingIndices,
+  model: ModelKey | string | null = null,
+): { label: string; detail: string; color: string } {
+  const roster = hazardRosterForModel(model);
+  const capeInputs = [indices.sbcapeJkg, indices.mlcapeJkg, indices.mucapeJkg].filter(Number.isFinite) as number[];
+  const shearInputs = [indices.effectiveBulkShearKt, indices.shear0to6kmKt].filter(Number.isFinite) as number[];
+  if (capeInputs.length === 0 || shearInputs.length === 0) {
+    return {
+      label: "N/A",
+      detail: "CAPE and shear are both required for this heuristic",
+      color: "#94a3b8",
+    };
+  }
+  const cape = Math.max(...capeInputs);
+  const stp = maxFiniteOrNull([indices.significantTornadoEffective, indices.significantTornadoFixed]);
+  const scp = maxFiniteOrNull([
+    indices.supercellCompositeEffective,
+    indices.supercellCompositeProxy,
+    indices.supercellComposite,
+  ]);
+  const shear = Math.max(...shearInputs);
+  const srh = maxFiniteOrNull([indices.effectiveSrhM2S2, indices.srh0to1kmM2S2, indices.srh0to3kmM2S2]);
+  const hail = Number.isFinite(indices.maxHailSizeIn) ? Number(indices.maxHailSizeIn) : null;
+  const unavailable = () => ({
+    label: "N/A",
+    detail: "Required inputs are missing; a higher heuristic category cannot be ruled out",
+    color: "#94a3b8",
+  });
+
+  const tornado = allKnownThresholds([
+    thresholdTruth(stp, 2),
+    thresholdTruth(cape, 500),
+    thresholdTruth(shear, 30),
+    thresholdTruth(srh, 100),
+  ]);
+  if (tornado === true) {
     return { label: "TOR", detail: "tornadic supercell signal", color: "#ef4444" };
   }
-  if (stp >= 1 && cape >= 500 && shear >= 25) {
+  if (tornado === null) {
+    return unavailable();
+  }
+
+  const conditionalTornado = allKnownThresholds([
+    thresholdTruth(stp, 1),
+    thresholdTruth(cape, 500),
+    thresholdTruth(shear, 25),
+  ]);
+  if (conditionalTornado === true) {
     return { label: "TOR?", detail: "conditional tornado signal", color: "#fb7185" };
   }
-  if (scp >= 4 && cape >= 1000 && shear >= 35) {
+  if (conditionalTornado === null) {
+    return unavailable();
+  }
+
+  const supercell = allKnownThresholds([thresholdTruth(scp, 4), thresholdTruth(cape, 1000), thresholdTruth(shear, 35)]);
+  if (supercell === true) {
     return { label: "SUP", detail: "supercell-favored signal", color: "#f97316" };
   }
-  if ((cape >= 1000 && shear >= 30) || hail >= 1) {
+  if (supercell === null) {
+    return unavailable();
+  }
+
+  const severeBranches: ThresholdTruth[] = [
+    allKnownThresholds([thresholdTruth(cape, 1000), thresholdTruth(shear, 30)]),
+  ];
+  if (roster.hailExpected || hail !== null) {
+    severeBranches.push(thresholdTruth(hail, 1));
+  }
+  const severe = anyKnownThreshold(severeBranches);
+  if (severe === true) {
     return { label: "SVR", detail: "organized severe signal", color: "#facc15" };
   }
-  if (cape >= 250 && shear >= 25) {
+  if (severe === null) {
+    return unavailable();
+  }
+
+  const marginal = allKnownThresholds([thresholdTruth(cape, 250), thresholdTruth(shear, 25)]);
+  if (marginal === true) {
     return { label: "MRGL", detail: "weak or conditional signal", color: "#38bdf8" };
   }
-  return { label: "NONE", detail: "limited severe signal", color: "#facc15" };
+  if (marginal === null) {
+    return unavailable();
+  }
+  return {
+    label: "LOW",
+    detail:
+      roster.hailExpected || hail !== null
+        ? "no app threshold crossed in the evaluated model inputs"
+        : "no app threshold crossed in this model roster; missing hail was not required",
+    color: "#facc15",
+  };
 }
 
-function finiteOrNegative(value: number | null | undefined): number {
-  return Number.isFinite(value) ? Number(value) : Number.NEGATIVE_INFINITY;
+function hazardRosterForModel(model: ModelKey | string | null): { hailExpected: boolean } {
+  // maxSimulatedHailSize is declared only for HRRR in the source catalog.
+  // Treating that impossible input as unknown for GFS/NAM/NAM3km would make
+  // every otherwise-low environment N/A. Only those three known rosters get
+  // a missing-hail exemption; null/unknown/future models stay fail-closed.
+  // A finite hail value is evaluated independently of this missing policy.
+  return { hailExpected: model !== "gfs" && model !== "nam" && model !== "nam3km" };
+}
+
+type ThresholdTruth = boolean | null;
+
+function maxFiniteOrNull(values: Array<number | null | undefined>): number | null {
+  const finite = values.filter(Number.isFinite) as number[];
+  return finite.length > 0 ? Math.max(...finite) : null;
+}
+
+function thresholdTruth(value: number | null, threshold: number): ThresholdTruth {
+  return value === null || !Number.isFinite(value) ? null : value >= threshold;
+}
+
+function allKnownThresholds(values: ThresholdTruth[]): ThresholdTruth {
+  if (values.some((value) => value === false)) {
+    return false;
+  }
+  return values.every((value) => value === true) ? true : null;
+}
+
+function anyKnownThreshold(values: ThresholdTruth[]): ThresholdTruth {
+  if (values.some((value) => value === true)) {
+    return true;
+  }
+  return values.every((value) => value === false) ? false : null;
 }
 
 function formatMetersCompact(value: number | null | undefined): string {
@@ -1842,4 +2397,65 @@ function formatLayerCompact(baseM: number | null | undefined, topM: number | nul
   const base = Number.isFinite(baseM) ? formatMetersCompact(baseM) : "--";
   const top = Number.isFinite(topM) ? formatMetersCompact(topM) : "--";
   return `${base}-${top}`;
+}
+
+function buildSoundingFileName(sounding: PointSoundingPayload): string {
+  const hour = String(sounding.forecastHour ?? 0).padStart(3, "0");
+  const lat = Number.isFinite(sounding.lat) ? sounding.lat.toFixed(2) : "na";
+  const lon = Number.isFinite(sounding.lon) ? sounding.lon.toFixed(2) : "na";
+  const run = String(sounding.run || "run");
+  return `sounding_${sounding.model}_${run}_f${hour}_${lat}_${lon}.png`.replace(/[^\w.+-]/g, "-");
+}
+
+const COMPARE_INDEX_ROWS: Array<{ label: string; key: keyof PointSoundingIndices; decimals: number }> = [
+  { label: "SBCAPE (J/kg)", key: "sbcapeJkg", decimals: 0 },
+  { label: "SBCIN (J/kg)", key: "sbcinJkg", decimals: 0 },
+  { label: "MLCAPE (J/kg)", key: "mlcapeJkg", decimals: 0 },
+  { label: "MLCIN (J/kg)", key: "mlcinJkg", decimals: 0 },
+  { label: "MUCAPE (J/kg)", key: "mucapeJkg", decimals: 0 },
+  { label: "DCAPE (J/kg)", key: "dcapeJkg", decimals: 0 },
+  { label: "PWAT (mm)", key: "pwatMm", decimals: 1 },
+  { label: "SRH 0-1 (m²/s²)", key: "srh0to1kmM2S2", decimals: 0 },
+  { label: "SRH 0-3 (m²/s²)", key: "srh0to3kmM2S2", decimals: 0 },
+  { label: "Shear 0-6 (kt)", key: "shear0to6kmKt", decimals: 0 },
+  { label: "LCL (m AGL)", key: "lclM", decimals: 0 },
+];
+
+function formatCompareValue(value: number | null | undefined, decimals: number): string {
+  return Number.isFinite(value) ? Number(value).toFixed(decimals) : "--";
+}
+
+// Side-by-side key indices for the comparison profile. Only rows where at
+// least one side has a value render, so sparse profiles stay compact.
+function CompareIndicesTable({ primary, compare }: { primary: PointSoundingPayload; compare: PointSoundingPayload }) {
+  const primaryIndices = primary.indices || {};
+  const compareIndices = compare.indices || {};
+  const rows = COMPARE_INDEX_ROWS.filter(
+    (row) => Number.isFinite(primaryIndices[row.key] as number) || Number.isFinite(compareIndices[row.key] as number),
+  );
+  if (rows.length === 0) {
+    return null;
+  }
+  return (
+    <div className="rounded-lg border border-orange-300/20 bg-[#030910] p-3" data-testid="sounding-compare-table">
+      <div className="mb-2 grid grid-cols-[minmax(0,1fr)_72px_72px] items-baseline gap-2 text-[10px]">
+        <span className="font-semibold text-slate-100">Compare</span>
+        <span className="text-right font-mono text-slate-300">{primary.modelLabel || primary.model}</span>
+        <span className="text-right font-mono text-orange-300">{compare.modelLabel || compare.model}</span>
+      </div>
+      <div className="grid gap-0.5">
+        {rows.map((row) => (
+          <div key={row.key} className="grid grid-cols-[minmax(0,1fr)_72px_72px] gap-2 text-[11px] leading-4">
+            <span className="min-w-0 truncate text-slate-400">{row.label}</span>
+            <span className="text-right font-mono text-slate-100">
+              {formatCompareValue(primaryIndices[row.key] as number | null | undefined, row.decimals)}
+            </span>
+            <span className="text-right font-mono text-orange-200">
+              {formatCompareValue(compareIndices[row.key] as number | null | undefined, row.decimals)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }

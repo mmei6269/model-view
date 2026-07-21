@@ -13,7 +13,13 @@ const {
   filterNoaaParameterSetByRenderSelection,
 } = require("../scripts/lib/noaa-build/run-resolution");
 const { parseRenderSelectionFromArgs } = require("../scripts/lib/noaa-build/render-selection-args");
-const { NOAA_NAM_PARAMETER_CATALOG, getNoaaNamParameterOrder } = require("../scripts/lib/noaa-nam-parameter-catalog");
+const {
+  CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY,
+  EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY,
+  NOAA_NAM_PARAMETER_CATALOG,
+  getNoaaNamParameterOrder,
+} = require("../scripts/lib/noaa-nam-parameter-catalog");
+const { getNoaaGribRendererSignature } = require("../scripts/lib/noaa-beta-renderer");
 
 const CATEGORY_BY_KEY = new Map(NOAA_NAM_PARAMETER_CATALOG.map((entry) => [entry.key, entry.category]));
 // buildFrameAssetKeySet always appends the legacy layer floor regardless of the
@@ -116,6 +122,53 @@ test("no flags (null selection) keeps today's manifest and passes null to the re
   for (const presentKey of ["sbcape", "snowDepth", "cloudCover", "height850", "reflectivityComposite"]) {
     assert.equal(presentKey in frame.layers, true, `default build keeps layer '${presentKey}'`);
   }
+});
+
+test("--science-prototypes is validated, canonicalized, stamped, and changes only the opted-in catalog/signature", async () => {
+  const selection = parseRenderSelectionFromArgs(
+    {
+      "science-prototypes": "rowAwareCenterValidation,effectiveStp100mbReduced,camDcape21Level",
+    },
+    { models: ["hrrr"], view: "conus", run: "latest" },
+  );
+  assert.deepEqual(selection.sciencePrototypes, [
+    "camDcape21Level",
+    "effectiveStp100mbReduced",
+    "rowAwareCenterValidation",
+  ]);
+  assert.throws(
+    () => parseRenderSelectionFromArgs({ "science-prototypes": "denseExactDcape" }),
+    /unknown science prototype 'denseExactDcape'/,
+  );
+
+  const { renderCalls, manifest, metadata } = await runStubBuild(selection);
+  assert.deepEqual(renderCalls[0].renderSelection.sciencePrototypes, selection.sciencePrototypes);
+  assert.deepEqual(manifest.renderSelection.sciencePrototypes, selection.sciencePrototypes);
+  assert.equal(metadata.parameterOrder.includes(CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY), true);
+  assert.equal(metadata.parameterOrder.includes(EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY), true);
+  assert.equal(manifest.parameterOrder.includes(CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY), true);
+  assert.equal(manifest.parameterOrder.includes(EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY), true);
+  assert.notEqual(metadata.rendererSignature, getNoaaGribRendererSignature());
+  const signatureOptions = { forecastHourRosterIdentity: metadata.rawLatest.forecastHourCompletionIdentity };
+  assert.equal(metadata.rendererSignature, getNoaaGribRendererSignature(selection, signatureOptions));
+  assert.equal(
+    getNoaaGribRendererSignature(
+      {
+        sciencePrototypes: ["rowAwareCenterValidation", "camDcape21Level", "effectiveStp100mbReduced"],
+      },
+      signatureOptions,
+    ),
+    getNoaaGribRendererSignature(selection, signatureOptions),
+    "prototype order must not create a different cache identity for the same enabled set",
+  );
+  assert.equal(
+    getNoaaGribRendererSignature({ sciencePrototypes: [] }),
+    getNoaaGribRendererSignature(),
+    "an empty prototype list must preserve the current default renderer signature",
+  );
+
+  assert.equal(getNoaaNamParameterOrder().includes(CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY), false);
+  assert.equal(getNoaaNamParameterOrder().includes(EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY), false);
 });
 
 test("filterNoaaParameterSetByRenderSelection: null and all-on selections return identical inputs", () => {

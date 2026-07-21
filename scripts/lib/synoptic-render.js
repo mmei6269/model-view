@@ -2,7 +2,7 @@
 
 const { loadSynopticStyle } = require("./synoptic-style");
 const { rowToLatMercator } = require("./mercator");
-const { encodeVectorLine } = require("./vector-encoding");
+const { encodeVectorLineProjected } = require("./vector-encoding");
 
 function renderSynopticArtifacts({
   pressureGrid,
@@ -14,11 +14,29 @@ function renderSynopticArtifacts({
   detailMode = "detailed",
   style = loadSynopticStyle(),
   drawImage = true,
+  detectCenters = true,
+  // Optional research diagnostic. It recomputes locality and annular
+  // prominence with great-circle distances at each Mercator row, attaches the
+  // comparison to emitted markers, and never changes the marker roster.
+  centerValidationMode = "off",
+  // Display-resolution MSLP field for H/L center refinement (Task 4.5, spec
+  // §8a.6). Detection happens on the prepared (possibly downsampled) grid;
+  // each center's position and value are then refined against this field.
+  // Defaults to `pressureGrid` itself, which is already full-resolution in
+  // simple mode; detailed mode receives a pre-downsampled grid, so callers
+  // pass the display grid here.
+  refinementPressureGrid = null,
 }) {
-  const styleVersion = String(style?.styleVersion || "v1-operational-contrast");
+  const styleVersion = String(style?.styleVersion || "v4-operational-contrast");
   const shouldDrawImage = drawImage !== false;
-  const empty = createEmptyOutput(width, height, styleVersion, { drawImage: shouldDrawImage });
   const normalizedDetailMode = detailMode === "simple" ? "simple" : "detailed";
+  const normalizedCenterValidationMode =
+    centerValidationMode === "row-aware-diagnostic" ? "row-aware-diagnostic" : "off";
+  const methodMetadata = buildSynopticMethodMetadata(style, normalizedDetailMode, normalizedCenterValidationMode);
+  const empty = createEmptyOutput(width, height, styleVersion, {
+    drawImage: shouldDrawImage,
+    methodMetadata,
+  });
   const sourcePressureGrid = normalizeGridPayload(pressureGrid);
   if (!sourcePressureGrid) {
     return empty;
@@ -55,7 +73,7 @@ function renderSynopticArtifacts({
   }
 
   const rgba = shouldDrawImage ? new Uint8Array(width * height * 4) : null;
-  const vector = createEmptyVector(styleVersion);
+  const vector = createEmptyVector(styleVersion, methodMetadata);
   let visibleCount = 0;
 
   const mslpMajorInterval = Number(style?.mslp?.majorIntervalHpa || 8);
@@ -64,6 +82,7 @@ function renderSynopticArtifacts({
   const mslpEnd = Math.ceil(pressureRange.max / mslpMinorInterval) * mslpMinorInterval;
   const mslpLevels = buildSteppedLevels(mslpStart, mslpEnd, mslpMinorInterval);
   const pressureSegmentsByLevel = marchingSquaresMany(smoothedPressure, pressureCols, pressureRows, mslpLevels);
+  const projectPressureLatLon = projectGridLatLon(pressureCols, pressureRows, targetBounds);
 
   for (const level of mslpLevels) {
     const rawSegments = pressureSegmentsByLevel.get(level) || [];
@@ -94,7 +113,6 @@ function renderSynopticArtifacts({
       if (!Array.isArray(contour) || contour.length < 2) {
         continue;
       }
-      const latLonPoints = contour.map((point) => toLatLon(point.x, point.y, pressureCols, pressureRows, targetBounds));
       const lineMeta = {
         kind: isMajor ? "mslp-major" : "mslp-minor",
         value: level,
@@ -102,7 +120,7 @@ function renderSynopticArtifacts({
         alpha,
         width: weight,
       };
-      const encodedLine = encodeVectorLine(lineMeta, latLonPoints);
+      const encodedLine = encodeVectorLineProjected(lineMeta, contour, projectPressureLatLon);
       vector.isobars.lines.push(encodedLine);
       vector.lines.push(encodedLine);
 
@@ -158,6 +176,7 @@ function renderSynopticArtifacts({
         thicknessRows,
         thicknessLevels,
       );
+      const projectThicknessLatLon = projectGridLatLon(thicknessCols, thicknessRows, targetBounds);
       for (const level of thicknessLevels) {
         const rawSegments = thicknessSegmentsByLevel.get(level) || [];
         if (!rawSegments.length) {
@@ -172,7 +191,7 @@ function renderSynopticArtifacts({
             ? style?.thickness?.major
             : style?.thickness?.minor;
         const colorHex = isEmphasis
-          ? String(style?.thickness?.boundaryColor || "#7A1FA2")
+          ? String(style?.thickness?.boundaryColor || "#6A1B9A")
           : level < emphasisDam
             ? String(style?.thickness?.coldColor || "#0072B2")
             : String(style?.thickness?.warmColor || "#D7302F");
@@ -211,10 +230,7 @@ function renderSynopticArtifacts({
             width: weight,
             dash,
           };
-          const encodedLine = encodeVectorLine(
-            lineMeta,
-            contour.map((point) => toLatLon(point.x, point.y, thicknessCols, thicknessRows, targetBounds)),
-          );
+          const encodedLine = encodeVectorLineProjected(lineMeta, contour, projectThicknessLatLon);
           vector.thickness.lines.push(encodedLine);
           vector.lines.push(encodedLine);
 
@@ -248,16 +264,78 @@ function renderSynopticArtifacts({
     }
   }
 
-  const centers = detectPressureCenters(smoothedPressure, pressureValues, pressureCols, pressureRows, style);
+  const centers = [];
+  let centerGridCols = pressureCols;
+  let centerGridRows = pressureRows;
+  if (detectCenters !== false) {
+    // H/L analysis has its own bounded, physically sized grid. Reusing the
+    // simple contour grid made a declared 200 km locality test operate on
+    // ~200-300 km cells, where the forced two-cell radius was really a
+    // 400-600 km test. A ~50 km analysis grid gives the 200 km disc about four
+    // independent radial samples while remaining tiny beside contour and
+    // raster work. It is derived from the same source field regardless of
+    // contour detail, so detail mode cannot change the scientific roster.
+    const centerAnalysisGrid = prepareCenterAnalysisGrid(sourcePressureGrid, targetBounds);
+    centerGridCols = centerAnalysisGrid?.cols || pressureCols;
+    centerGridRows = centerAnalysisGrid?.rows || pressureRows;
+    const centerPressureValues = centerAnalysisGrid
+      ? smoothPressureField(
+          centerAnalysisGrid.values,
+          centerAnalysisGrid.cols,
+          centerAnalysisGrid.rows,
+          targetBounds,
+          modelKey,
+          style,
+        )
+      : smoothedPressure;
+    const centerRefinement = buildCenterRefinementContext({
+      grid: normalizeGridPayload(refinementPressureGrid) || sourcePressureGrid,
+      bounds: targetBounds,
+      modelKey,
+      style,
+      detectionCols: centerGridCols,
+      detectionRows: centerGridRows,
+    });
+    const detectionSpacingKm = estimateGridSpacingKm(targetBounds, centerGridCols, centerGridRows);
+    centers.push(
+      ...detectPressureCenters(
+        centerPressureValues,
+        centerGridCols,
+        centerGridRows,
+        style,
+        centerRefinement,
+        detectionSpacingKm,
+        normalizedCenterValidationMode === "row-aware-diagnostic"
+          ? {
+              bounds: targetBounds,
+              mode: normalizedCenterValidationMode,
+            }
+          : null,
+      ),
+    );
+  }
   const centerMetadata = { highs: [], lows: [] };
   for (const center of centers) {
-    const latLon = toLatLon(center.x, center.y, pressureCols, pressureRows, targetBounds);
+    // Center metadata is an analyst-facing quality statement. Never emit a
+    // marker whose refined pressure or annular prominence is non-finite: JSON
+    // would silently turn Infinity into null and make a fabricated global
+    // extremum look like a valid, unqualified pressure center.
+    if (!Number.isFinite(center?.value) || !Number.isFinite(center?.prominence)) {
+      continue;
+    }
+    const latLon = toLatLon(center.x, center.y, centerGridCols, centerGridRows, targetBounds);
+    if (!Number.isFinite(latLon[0]) || !Number.isFinite(latLon[1])) {
+      continue;
+    }
     const metadata = {
       lat: latLon[0],
       lon: latLon[1],
       valueHpa: Math.round(center.value),
       prominenceHpa: Number(center.prominence.toFixed(2)),
     };
+    if (center.rowAwareValidation) {
+      metadata.rowAwareValidation = { ...center.rowAwareValidation };
+    }
     if (center.kind === "high") {
       centerMetadata.highs.push(metadata);
     } else {
@@ -286,12 +364,14 @@ function renderHeightContourArtifacts({
   style = loadSynopticStyle(),
   drawImage = true,
 }) {
-  const styleVersion = String(style?.styleVersion || "v1-operational-contrast");
+  const styleVersion = String(style?.styleVersion || "v4-operational-contrast");
   const shouldDrawImage = drawImage !== false;
+  const methodMetadata = buildHeightContourMethodMetadata(style, levelMb, intervalDam);
   const empty = createEmptyHeightContourOutput(width, height, styleVersion, {
     drawImage: shouldDrawImage,
     levelMb,
     intervalDam,
+    methodMetadata,
   });
   const sourceHeightGrid = normalizeGridPayload(heightGrid);
   if (!sourceHeightGrid) {
@@ -323,7 +403,7 @@ function renderHeightContourArtifacts({
   }
 
   const rgba = shouldDrawImage ? new Uint8Array(width * height * 4) : null;
-  const vector = createEmptyHeightContourVector(styleVersion, levelMb, contourInterval);
+  const vector = createEmptyHeightContourVector(styleVersion, levelMb, contourInterval, methodMetadata);
   let visibleCount = 0;
   const levels = buildHeightContourLevels(heightRange.min, heightRange.max, contourInterval);
   const segmentsByLevel = marchingSquaresMany(smoothedHeight, cols, rows, levels);
@@ -418,12 +498,13 @@ function appendHeightContourLines({
   height,
 }) {
   let visibleCount = 0;
+  const projectLatLon = projectGridLatLon(cols, rows, targetBounds);
   for (const contour of contours) {
     if (!Array.isArray(contour) || contour.length < 2) {
       continue;
     }
     vector.lines.push(
-      encodeVectorLine(
+      encodeVectorLineProjected(
         {
           kind,
           value: contourLevel,
@@ -431,7 +512,8 @@ function appendHeightContourLines({
           alpha: paint.alpha,
           width: paint.weight,
         },
-        contour.map((point) => toLatLon(point.x, point.y, cols, rows, targetBounds)),
+        contour,
+        projectLatLon,
       ),
     );
 
@@ -450,18 +532,19 @@ function appendHeightContourLines({
   return visibleCount;
 }
 
-function createEmptyOutput(width, height, styleVersion, { drawImage = true } = {}) {
+function createEmptyOutput(width, height, styleVersion, { drawImage = true, methodMetadata = null } = {}) {
   return {
     rgba: drawImage ? new Uint8Array(width * height * 4) : null,
     visibleCount: 0,
     centers: { highs: [], lows: [] },
-    vector: createEmptyVector(styleVersion),
+    vector: createEmptyVector(styleVersion, methodMetadata),
   };
 }
 
-function createEmptyVector(styleVersion) {
+function createEmptyVector(styleVersion, methodMetadata = null) {
   return {
     styleVersion,
+    method: methodMetadata,
     isobars: {
       lines: [],
       labels: [],
@@ -477,22 +560,93 @@ function createEmptyVector(styleVersion) {
   };
 }
 
-function createEmptyHeightContourOutput(width, height, styleVersion, { drawImage = true, levelMb, intervalDam } = {}) {
+function createEmptyHeightContourOutput(
+  width,
+  height,
+  styleVersion,
+  { drawImage = true, levelMb, intervalDam, methodMetadata = null } = {},
+) {
   return {
     rgba: drawImage ? new Uint8Array(width * height * 4) : null,
     visibleCount: 0,
-    vector: createEmptyHeightContourVector(styleVersion, levelMb, intervalDam),
+    vector: createEmptyHeightContourVector(styleVersion, levelMb, intervalDam, methodMetadata),
   };
 }
 
-function createEmptyHeightContourVector(styleVersion, levelMb, intervalDam) {
+function createEmptyHeightContourVector(styleVersion, levelMb, intervalDam, methodMetadata = null) {
   return {
     styleVersion,
     layerType: "height-contour",
+    method: methodMetadata,
     contourLevelMb: Number.isFinite(Number(levelMb)) ? Number(levelMb) : null,
     contourIntervalDam: Number.isFinite(Number(intervalDam)) ? Number(intervalDam) : null,
     lines: [],
     labels: [],
+  };
+}
+
+function buildSynopticMethodMetadata(style, detailMode, centerValidationMode = "off") {
+  const minorIntervalHpa = Number(style?.mslp?.minorIntervalHpa || 4);
+  const majorIntervalHpa = Number(style?.mslp?.majorIntervalHpa || 8);
+  const thicknessMinorIntervalDam = Number(style?.thickness?.minorIntervalDam || 6);
+  const thicknessMajorIntervalDam = Number(style?.thickness?.majorIntervalDam || 12);
+  const thicknessEmphasisDam = Number(style?.thickness?.emphasisDam || 540);
+  return {
+    methodVersion: "synoptic-mslp-thickness-automated-centers-v3",
+    detailMode,
+    isobars: {
+      minorIntervalHpa,
+      majorIntervalHpa,
+      presentationSmoothing: "model-dependent Gaussian smoothing",
+    },
+    thickness: {
+      minorIntervalDam: thicknessMinorIntervalDam,
+      majorIntervalDam: thicknessMajorIntervalDam,
+      emphasisDam: thicknessEmphasisDam,
+      emphasisRole: "synoptic thermal reference; not a deterministic precipitation-phase boundary",
+    },
+    centers: {
+      classification: "automated model-guidance MSLP centers; not a human surface analysis",
+      localityRadiusKm: CENTER_DETECTION_RADIUS_KM,
+      analysisGridTargetSpacingKm: CENTER_ANALYSIS_TARGET_SPACING_KM,
+      analysisGridMaxShape: [CENTER_ANALYSIS_MAX_ROWS, CENTER_ANALYSIS_MAX_COLS],
+      prominenceMinHpa: resolveCenterProminenceThreshold(style),
+      prominenceAnnulusKm: [CENTER_RING_INNER_KM, CENTER_RING_OUTER_KM],
+      sameKindMinSeparationKm: CENTER_SAME_KIND_MIN_KM,
+      maxPerKind: Number(style?.centers?.maxMarkersByBucket?.z4_6 || 18),
+      emittedPressureField: "unsmoothed source/refinement MSLP",
+      detailInvariant: true,
+      ...(centerValidationMode === "row-aware-diagnostic"
+        ? {
+            rowAwareValidation: {
+              methodVersion: ROW_AWARE_CENTER_VALIDATION_METHOD_VERSION,
+              mode: "diagnostic-only",
+              effectOnRoster: "none",
+              distanceMethod: "great-circle distance at each Mercator analysis-grid row",
+              evaluatedField: "once-smoothed center-analysis MSLP at the pre-refinement detection candidate",
+              rosterDistanceEvaluation: "final refined and deduplicated emitted marker roster",
+              coverageRule:
+                "finite in-domain row-aware locality samples must cover at least 60% of a complete local-grid 200 km disc",
+              disclosure:
+                "Reports whether each retained marker independently passes row-aware locality, 300-500 km prominence, and retained-roster 450/300 km separation checks; it does not reject or reprioritize markers.",
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+function buildHeightContourMethodMetadata(style, levelMb, intervalDam) {
+  const minorIntervalDam = Number(intervalDam);
+  return {
+    methodVersion: "hgt-pressure-contour-model-smoothed-v2",
+    pressureLevelMb: Number.isFinite(Number(levelMb)) ? Number(levelMb) : null,
+    minorIntervalDam: Number.isFinite(minorIntervalDam) ? minorIntervalDam : null,
+    majorIntervalDam: Number.isFinite(minorIntervalDam) ? minorIntervalDam * 2 : null,
+    presentationSmoothing: "model-dependent Gaussian smoothing",
+    hoverField: "unsmoothed decoded HGT converted to dam",
+    presentationInk: "theme-aware warm upper-air ink",
+    styleVersion: String(style?.styleVersion || "v4-operational-contrast"),
   };
 }
 
@@ -522,6 +676,54 @@ function resolveSimpleGridSize(width, height) {
   };
 }
 
+// Center analysis is intentionally independent of contour density. At the
+// 50 km target, a 200 km locality disc spans ~4 cells; a CONUS analysis is
+// only about 119x73 (~8,700 cells). That resolution also represents the
+// configured 30-60 km MSLP smoothing without a floor-strength substitute.
+// Caps bound unusual domains and keep this work negligible beside the
+// display-grid interpolation and PNG encoding.
+const CENTER_ANALYSIS_TARGET_SPACING_KM = 50;
+const CENTER_ANALYSIS_MAX_COLS = 128;
+const CENTER_ANALYSIS_MAX_ROWS = 80;
+
+function prepareCenterAnalysisGrid(sourceGrid, bounds) {
+  if (!sourceGrid || !sourceGrid.values) {
+    return null;
+  }
+  const size = resolveCenterAnalysisGridSize(bounds, sourceGrid.cols, sourceGrid.rows);
+  return resampleGridBilinear(sourceGrid, size.cols, size.rows);
+}
+
+function resolveCenterAnalysisGridSize(bounds, sourceCols, sourceRows) {
+  const cols = clampInt(sourceCols, 2, 4096, 2);
+  const rows = clampInt(sourceRows, 2, 4096, 2);
+  if (!bounds) {
+    return {
+      cols: Math.min(cols, CENTER_ANALYSIS_MAX_COLS),
+      rows: Math.min(rows, CENTER_ANALYSIS_MAX_ROWS),
+    };
+  }
+  const latSpanKm = Math.abs(Number(bounds.north) - Number(bounds.south)) * 111;
+  const meanLat = ((Number(bounds.north) + Number(bounds.south)) / 2) * (Math.PI / 180);
+  const lonSpanKm = Math.abs(Number(bounds.east) - Number(bounds.west)) * 111 * Math.max(0.2, Math.cos(meanLat));
+  const requestedCols = clampInt(
+    Math.ceil(lonSpanKm / CENTER_ANALYSIS_TARGET_SPACING_KM) + 1,
+    18,
+    CENTER_ANALYSIS_MAX_COLS,
+    48,
+  );
+  const requestedRows = clampInt(
+    Math.ceil(latSpanKm / CENTER_ANALYSIS_TARGET_SPACING_KM) + 1,
+    10,
+    CENTER_ANALYSIS_MAX_ROWS,
+    32,
+  );
+  return {
+    cols: Math.max(2, Math.min(cols, requestedCols)),
+    rows: Math.max(2, Math.min(rows, requestedRows)),
+  };
+}
+
 function resampleGridBilinear(grid, outCols, outRows) {
   if (!grid || !grid.values) {
     return null;
@@ -541,7 +743,9 @@ function resampleGridBilinear(grid, outCols, outRows) {
     };
   }
 
-  const out = new Float32Array(targetRows * targetCols).fill(Number.NaN);
+  // Every target cell is assigned in the loop below (sampleGridBilinear
+  // returns NaN when no tap is usable), so the NaN prefill was redundant.
+  const out = new Float32Array(targetRows * targetCols);
   for (let y = 0; y < targetRows; y += 1) {
     const gy = (y / Math.max(1, targetRows - 1)) * (srcRows - 1);
     const y0 = Math.floor(gy);
@@ -732,14 +936,27 @@ function dedupeContourPoints(points) {
   return out;
 }
 
-function smoothPressureField(values, width, height, bounds, modelKey, style) {
+function resolveMslpSigmaKm(modelKey, style) {
   const sigmaByModel = style?.smoothing?.mslpSigmaKmByModel || {};
-  const sigmaKm = Number(sigmaByModel?.[modelKey] || sigmaByModel?.gfs || 45);
+  return Number(sigmaByModel?.[modelKey] || sigmaByModel?.gfs || 45);
+}
+
+// Both smoothers may return the input array itself when no kernel runs
+// (aliasing, not a copy) — smoothed fields are read-only downstream.
+function smoothPressureField(values, width, height, bounds, modelKey, style) {
+  const sigmaKm = resolveMslpSigmaKm(modelKey, style);
   if (!Number.isFinite(sigmaKm) || sigmaKm <= 0) {
-    return Float32Array.from(values);
+    return values;
   }
   const spacingKm = estimateGridSpacingKm(bounds, width, height);
-  const sigmaCells = clamp(sigmaKm / Math.max(1e-6, spacingKm), 0.6, 4.5);
+  const rawSigmaCells = sigmaKm / Math.max(1e-6, spacingKm);
+  // Sub-floor sigma means the per-model policy is inert on this grid: the 64x
+  // downsample has already low-passed far beyond it, and the floor-clamped
+  // kernel was silent extra smoothing. Skip it (slightly sharpens the field).
+  if (rawSigmaCells < 0.6) {
+    return values;
+  }
+  const sigmaCells = clamp(rawSigmaCells, 0.6, 4.5);
   return gaussianBlur(values, width, height, sigmaCells);
 }
 
@@ -747,10 +964,16 @@ function smoothHeightContourField(values, width, height, bounds, modelKey, style
   const sigmaByModel = style?.smoothing?.heightSigmaKmByModel || style?.smoothing?.mslpSigmaKmByModel || {};
   const sigmaKm = Number(sigmaByModel?.[modelKey] || sigmaByModel?.gfs || 45);
   if (!Number.isFinite(sigmaKm) || sigmaKm <= 0) {
-    return Float32Array.from(values);
+    return values;
   }
   const spacingKm = estimateGridSpacingKm(bounds, width, height);
-  const sigmaCells = clamp(sigmaKm / Math.max(1e-6, spacingKm), 0.6, 4.5);
+  const rawSigmaCells = sigmaKm / Math.max(1e-6, spacingKm);
+  // Same sub-floor skip as smoothPressureField: an inert sigma policy must
+  // not smuggle in a floor-strength kernel.
+  if (rawSigmaCells < 0.6) {
+    return values;
+  }
+  const sigmaCells = clamp(rawSigmaCells, 0.6, 4.5);
   return gaussianBlur(values, width, height, sigmaCells);
 }
 
@@ -780,7 +1003,11 @@ function buildSteppedLevels(startValue, endValue, intervalValue) {
     return [];
   }
   const levels = [];
-  for (let level = start; level <= end + interval * 0.001; level += interval) {
+  // Same guard as buildHeightContourLevels: a mis-scaled field (e.g. Pa
+  // instead of hPa) must yield a bounded bad frame, not tens of thousands of
+  // contour levels. Real MSLP/thickness level counts sit far below the cap.
+  const maxLevels = 512;
+  for (let level = start; level <= end + interval * 0.001 && levels.length < maxLevels; level += interval) {
     levels.push(Number(level.toFixed(6)));
   }
   return levels;
@@ -861,16 +1088,69 @@ function convolve1D(values, width, height, kernel, axis) {
   return out;
 }
 
-function detectPressureCenters(values, rawValues, width, height, style) {
-  const prominenceThreshold = Number(style?.centers?.prominenceMinHpa || 2.4);
-  const radius = 4; // 9x9 neighborhood
-  const extremumEpsilon = 0.03;
-  const neighborhood = offsetsWithinRadius(radius, true);
-  const ring = offsetsInAnnulus(3, 5);
-  const candidates = [];
+// H/L detection scales in PHYSICAL units (audit 2026-07-09): the legacy
+// fixed cell counts meant ~1000 km windows on the simple grid but ~64 km on
+// the detailed grid — a 15× mismatch. Kilometre targets, converted per grid
+// and clamped to sane cell counts, gate both modes on the same synoptic
+// scale. Prominence 1.8 hPa over a 300–500 km annulus ≈ the classic "at
+// least one closed 2 hPa isobar" center-marking rule.
+//
+// Role separation (met review 2026-07-10): the strict-extremum disc tests
+// LOCALITY only — at 400 km it conflated "is a local closed center" with "is
+// the deepest system within 400 km", erasing a real 1007 hPa New England low
+// sitting ~390 km from a deeper cell of the separate Quebec trough (NAM
+// 20260710-00Z f003). Multi-system separation belongs to curation (450 km
+// same-kind minimum), and roster RANKING weighs prominence re-measured on a
+// SYNOPTIC_MERIT_SIGMA_KM-smoothed field, where mesoscale terrain-reduction
+// bullseyes collapse but real broad systems survive.
+const CENTER_DETECTION_RADIUS_KM = 200; // strict-extremum disc (locality only)
+const CENTER_RING_INNER_KM = 300; // prominence annulus (background env)
+const CENTER_RING_OUTER_KM = 500;
+const CENTER_SAME_KIND_MIN_KM = 450; // distinct same-kind systems
+const CENTER_OPPOSING_MIN_KM = 300; // H/L pair suppression radius
+const SYNOPTIC_MERIT_SIGMA_KM = 120; // roster-ranking smoothing scale
+const DEFAULT_CENTER_PROMINENCE_MIN_HPA = 1.8;
+const ROW_AWARE_CENTER_VALIDATION_METHOD_VERSION = "row-aware-center-validation-diagnostic-v1";
 
-  for (let y = radius; y < height - radius; y += 1) {
-    for (let x = radius; x < width - radius; x += 1) {
+function resolveCenterProminenceThreshold(style) {
+  const configured = Number(style?.centers?.prominenceMinHpa);
+  return Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_CENTER_PROMINENCE_MIN_HPA;
+}
+
+function detectPressureCenters(values, width, height, style, refinement, spacingKm, validationContext = null) {
+  const prominenceThreshold = resolveCenterProminenceThreshold(style);
+  const cellKm = Number.isFinite(spacingKm) && spacingKm > 0 ? spacingKm : 25;
+  // Min 2 cells keeps the disc from degenerating to the ±1 ring for direct
+  // callers with coarse inputs. Production center analysis uses the bounded
+  // ~50 km grid above, where four cells genuinely approximate the 200 km
+  // locality declared in method metadata.
+  const radius = clamp(Math.round(CENTER_DETECTION_RADIUS_KM / cellKm), 2, 24);
+  const ringInner = clamp(Math.round(CENTER_RING_INNER_KM / cellKm), 1, 31);
+  const ringOuter = clamp(Math.round(CENTER_RING_OUTER_KM / cellKm), ringInner + 1, 32);
+  // Perf guard (renderer hot path): stride-sample large discs so the per-pixel
+  // sample count stays near the legacy 9x9 cost on the detailed grid. The
+  // strided disc always retains the ±1 ring (see offsetsWithinRadius), which
+  // keeps the strict-extremum test stride-independent: a cell adjacent to a
+  // higher/lower cell can never pass, whatever the stride. The annulus gets
+  // its own (coarser) stride — it only estimates a background mean, and ~50
+  // samples are statistically plenty.
+  const stride = Math.max(1, Math.floor(radius / 4));
+  const ringStride = Math.max(1, Math.floor(ringOuter / 5));
+  const extremumEpsilon = 0.03;
+  const neighborhood = offsetsWithinRadius(radius, true, stride);
+  const ring = offsetsInAnnulus(ringInner, ringOuter, ringStride);
+  const candidates = [];
+  // Near-edge recovery (met review 2026-07-10): a full-disc inset of ~radius
+  // cells meant landfalling/offshore systems got no marker until their core
+  // crossed ~radius·spacing into the domain and popped into existence. Scan
+  // every cell whose full ±1 adjacent ring is in-domain and judge the strict
+  // test on the disc samples that exist, gated by a quorum: >=60% of the disc
+  // must be in-domain AND finite (native model domains can end inside the
+  // view), plus the existing ringCount >= 8 annulus floor.
+  const discQuorum = Math.ceil(neighborhood.length * 0.6);
+
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
       const centerValue = Number(values[y * width + x]);
       if (!Number.isFinite(centerValue)) {
         continue;
@@ -879,14 +1159,21 @@ function detectPressureCenters(values, rawValues, width, height, style) {
       let strictMin = true;
       let hasHigher = false;
       let hasLower = false;
+      let discCount = 0;
       let ringSum = 0;
       let ringCount = 0;
 
       for (const offset of neighborhood) {
-        const sample = Number(values[(y + offset.dy) * width + (x + offset.dx)]);
+        const xx = x + offset.dx;
+        const yy = y + offset.dy;
+        if (xx < 0 || yy < 0 || xx >= width || yy >= height) {
+          continue;
+        }
+        const sample = Number(values[yy * width + xx]);
         if (!Number.isFinite(sample)) {
           continue;
         }
+        discCount += 1;
         if (sample > centerValue + extremumEpsilon) {
           strictMax = false;
         }
@@ -901,8 +1188,15 @@ function detectPressureCenters(values, rawValues, width, height, style) {
         }
       }
 
+      // The annulus extends past the ±1 scan inset, so bounds-check every
+      // sample (the legacy 3-5 ring read past row 0 into wrapped indices).
       for (const offset of ring) {
-        const sample = Number(values[(y + offset.dy) * width + (x + offset.dx)]);
+        const xx = x + offset.dx;
+        const yy = y + offset.dy;
+        if (xx < 0 || yy < 0 || xx >= width || yy >= height) {
+          continue;
+        }
+        const sample = Number(values[yy * width + xx]);
         if (!Number.isFinite(sample)) {
           continue;
         }
@@ -910,7 +1204,7 @@ function detectPressureCenters(values, rawValues, width, height, style) {
         ringCount += 1;
       }
 
-      if (ringCount < 8) {
+      if (discCount < discQuorum || ringCount < 8) {
         continue;
       }
       const ringMean = ringSum / ringCount;
@@ -943,75 +1237,735 @@ function detectPressureCenters(values, rawValues, width, height, style) {
     }
   }
 
-  includeGlobalPressureExtrema(values, width, height, candidates);
+  rescoreCandidatesBySynopticMerit(candidates, values, width, height, cellKm, ring);
 
-  const highs = selectDistinctCenters(
-    candidates.filter((entry) => entry.kind === "high"),
-    width,
-    height,
-    style,
-  ).map((entry) => alignCenterValues(entry, values, rawValues, width, height, "high"));
-  const lows = selectDistinctCenters(
-    candidates.filter((entry) => entry.kind === "low"),
-    width,
-    height,
-    style,
-  ).map((entry) => alignCenterValues(entry, values, rawValues, width, height, "low"));
-
-  const resolved = resolveOpposingCenterOverlaps(highs, lows, width, height);
-  return [...resolved.highs, ...resolved.lows];
+  // Marker curation (same-kind spacing, opposing-overlap suppression) is a
+  // detection-scale concern, so it runs on detection-grid positions BEFORE
+  // refinement; sub-cell position refinement must not flip curation decisions.
+  // Deliberate consequence: separation is enforced at detection positions, so
+  // two same-kind markers can RENDER closer than the minimum after refinement.
+  const resolved = resolveOpposingCenterOverlaps(
+    selectDistinctCenters(
+      candidates.filter((entry) => entry.kind === "high"),
+      style,
+      cellKm,
+    ),
+    selectDistinctCenters(
+      candidates.filter((entry) => entry.kind === "low"),
+      style,
+      cellKm,
+    ),
+    cellKm,
+  );
+  const annotateRowAwareValidation = (entry) => {
+    if (validationContext?.mode !== "row-aware-diagnostic" || !validationContext?.bounds) {
+      return entry;
+    }
+    const rowAwareValidation = validateCenterCandidateRowAware({
+      values,
+      width,
+      height,
+      bounds: validationContext.bounds,
+      candidate: entry,
+      prominenceThreshold,
+    });
+    return rowAwareValidation
+      ? {
+          ...entry,
+          rowAwareValidation,
+        }
+      : entry;
+  };
+  let highs = dedupeRefinedCenters(
+    resolved.highs.map(annotateRowAwareValidation).map((entry) => refineCenterAgainstField(entry, refinement, "high")),
+    refinement,
+  );
+  let lows = dedupeRefinedCenters(
+    resolved.lows.map(annotateRowAwareValidation).map((entry) => refineCenterAgainstField(entry, refinement, "low")),
+    refinement,
+  );
+  if (validationContext?.mode === "row-aware-diagnostic" && validationContext?.bounds) {
+    const rowAwareRosterDistances = validateCenterRosterDistancesRowAware({
+      highs,
+      lows,
+      width,
+      height,
+      bounds: validationContext.bounds,
+    });
+    const attachRosterValidation = (entry) => {
+      if (!entry?.rowAwareValidation) {
+        return entry;
+      }
+      const rosterValidation = rowAwareRosterDistances.get(entry) || {};
+      return {
+        ...entry,
+        rowAwareValidation: {
+          ...entry.rowAwareValidation,
+          rosterEvaluatedAt: "final refined emitted roster",
+          ...rosterValidation,
+          passesAllChecks: entry.rowAwareValidation.passesAllChecks && rosterValidation.rosterSeparationPass !== false,
+        },
+      };
+    };
+    highs = highs.map(attachRosterValidation);
+    lows = lows.map(attachRosterValidation);
+  }
+  return [...highs, ...lows];
 }
 
-function refineCenterToRawGrid(center, rawValues, width, height, kind) {
-  if (!Array.isArray(rawValues) && !(rawValues instanceof Float32Array) && !(rawValues instanceof Float64Array)) {
-    return center;
+// Independent diagnostic for the latitude/row approximation used by the hot
+// detection path. It samples the retained candidate against the same smoothed
+// field, but distance membership is determined with great-circle kilometres
+// for every analysis-grid row. Results are attached only in the explicit
+// prototype mode and are never consumed by selection or curation.
+function validateCenterCandidateRowAware({
+  values,
+  width,
+  height,
+  bounds,
+  candidate,
+  prominenceThreshold = DEFAULT_CENTER_PROMINENCE_MIN_HPA,
+}) {
+  if (
+    !values ||
+    !bounds ||
+    !(width >= 2) ||
+    !(height >= 2) ||
+    !candidate ||
+    (candidate.kind !== "high" && candidate.kind !== "low")
+  ) {
+    return null;
   }
-  const radius = 2;
-  let bestX = center.x;
-  let bestY = center.y;
-  let bestValue = Number(rawValues[center.y * width + center.x]);
-  if (!Number.isFinite(bestValue)) {
-    bestValue = center.value;
+  const centerValue = Number(candidate.value);
+  const [centerLat, centerLon] = toLatLon(candidate.x, candidate.y, width, height, bounds);
+  if (!Number.isFinite(centerValue) || !Number.isFinite(centerLat) || !Number.isFinite(centerLon)) {
+    return null;
   }
 
-  for (let dy = -radius; dy <= radius; dy += 1) {
-    for (let dx = -radius; dx <= radius; dx += 1) {
-      const x = center.x + dx;
-      const y = center.y + dy;
-      if (x < 0 || y < 0 || x >= width || y >= height) {
+  const extremumEpsilon = 0.03;
+  const contrastEpsilon = 0.04;
+  let localExtremum = true;
+  let contrastObserved = false;
+  let finiteLocalSamples = 0;
+  let finiteAnnulusSamples = 0;
+  let annulusSum = 0;
+  const lonSpan = Number(bounds.east) - Number(bounds.west);
+  for (let y = 0; y < height; y += 1) {
+    const lat = rowToLatMercator(y, height, bounds);
+    if (!Number.isFinite(lat)) {
+      continue;
+    }
+    for (let x = 0; x < width; x += 1) {
+      const value = Number(values[y * width + x]);
+      if (!Number.isFinite(value)) {
         continue;
       }
-      const candidate = Number(rawValues[y * width + x]);
-      if (!Number.isFinite(candidate)) {
+      const lon = Number(bounds.west) + (x / Math.max(1, width - 1)) * lonSpan;
+      const distanceKm = greatCircleDistanceKm(centerLat, centerLon, lat, lon);
+      if (!Number.isFinite(distanceKm) || distanceKm < 1e-6) {
         continue;
       }
-      if (kind === "low") {
-        if (candidate < bestValue) {
-          bestValue = candidate;
-          bestX = x;
-          bestY = y;
+      if (distanceKm <= CENTER_DETECTION_RADIUS_KM) {
+        finiteLocalSamples += 1;
+        if (candidate.kind === "high") {
+          if (value > centerValue + extremumEpsilon) {
+            localExtremum = false;
+          }
+          if (value < centerValue - contrastEpsilon) {
+            contrastObserved = true;
+          }
+        } else {
+          if (value < centerValue - extremumEpsilon) {
+            localExtremum = false;
+          }
+          if (value > centerValue + contrastEpsilon) {
+            contrastObserved = true;
+          }
         }
-      } else if (candidate > bestValue) {
-        bestValue = candidate;
-        bestX = x;
-        bestY = y;
+      }
+      if (distanceKm >= CENTER_RING_INNER_KM && distanceKm <= CENTER_RING_OUTER_KM) {
+        finiteAnnulusSamples += 1;
+        annulusSum += value;
       }
     }
   }
 
+  const annularProminence =
+    finiteAnnulusSamples > 0
+      ? (candidate.kind === "high" ? 1 : -1) * (centerValue - annulusSum / finiteAnnulusSamples)
+      : Number.NaN;
+  const expectedFullLocalSamples = expectedRowAwareLocalSampleCount({
+    width,
+    height,
+    bounds,
+    candidate,
+    centerLat,
+    centerLon,
+  });
+  const localCoverageFraction =
+    expectedFullLocalSamples > 0 ? Math.min(1, finiteLocalSamples / expectedFullLocalSamples) : 0;
+  const localCoverageMeets60Pct = localCoverageFraction >= 0.6;
+  const threshold = Number.isFinite(Number(prominenceThreshold))
+    ? Number(prominenceThreshold)
+    : DEFAULT_CENTER_PROMINENCE_MIN_HPA;
+  const meetsProminenceThreshold =
+    finiteAnnulusSamples >= 8 && Number.isFinite(annularProminence) && annularProminence >= threshold;
+  const distanceToDomainEdgeKm = Math.min(
+    greatCircleDistanceKm(centerLat, centerLon, centerLat, Number(bounds.west)),
+    greatCircleDistanceKm(centerLat, centerLon, centerLat, Number(bounds.east)),
+    greatCircleDistanceKm(centerLat, centerLon, Number(bounds.south), centerLon),
+    greatCircleDistanceKm(centerLat, centerLon, Number(bounds.north), centerLon),
+  );
   return {
-    ...center,
-    x: bestX,
-    y: bestY,
-    value: Number.isFinite(bestValue) ? bestValue : center.value,
+    methodVersion: ROW_AWARE_CENTER_VALIDATION_METHOD_VERSION,
+    diagnosticOnly: true,
+    evaluatedAt: "pre-refinement detection-grid candidate",
+    localityRadiusKm: CENTER_DETECTION_RADIUS_KM,
+    prominenceAnnulusKm: [CENTER_RING_INNER_KM, CENTER_RING_OUTER_KM],
+    finiteLocalSamples,
+    expectedFullLocalSamples,
+    localCoverageFraction: Number(localCoverageFraction.toFixed(3)),
+    localCoverageMeets60Pct,
+    finiteAnnulusSamples,
+    localExtremum,
+    contrastObserved,
+    annularProminenceHpa: Number.isFinite(annularProminence) ? Number(annularProminence.toFixed(2)) : null,
+    meetsProminenceThreshold,
+    passesAllChecks: localCoverageMeets60Pct && localExtremum && contrastObserved && meetsProminenceThreshold,
+    domainTruncatedWithin500Km:
+      Number.isFinite(distanceToDomainEdgeKm) && distanceToDomainEdgeKm < CENTER_RING_OUTER_KM,
   };
 }
 
-function selectDistinctCenters(candidates, width, height, style) {
+function expectedRowAwareLocalSampleCount({ width, height, bounds, candidate, centerLat, centerLon }) {
+  const lonStepDeg = Math.abs(Number(bounds.east) - Number(bounds.west)) / Math.max(1, width - 1);
+  const row = Math.max(0, Math.min(height - 1, Math.round(Number(candidate.y))));
+  const neighborLats = [];
+  if (row > 0) {
+    neighborLats.push(rowToLatMercator(row - 1, height, bounds));
+  }
+  if (row < height - 1) {
+    neighborLats.push(rowToLatMercator(row + 1, height, bounds));
+  }
+  const latStepDeg =
+    neighborLats
+      .map((lat) => Math.abs(Number(lat) - centerLat))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .reduce((sum, value, _index, values) => sum + value / values.length, 0) ||
+    Math.abs(Number(bounds.north) - Number(bounds.south)) / Math.max(1, height - 1);
+  const xStepKm = greatCircleDistanceKm(centerLat, centerLon, centerLat, centerLon + lonStepDeg);
+  const yStepKm = greatCircleDistanceKm(centerLat, centerLon, centerLat + latStepDeg, centerLon);
+  if (!(xStepKm > 0) || !(yStepKm > 0)) {
+    return 0;
+  }
+  const maxDx = Math.ceil(CENTER_DETECTION_RADIUS_KM / xStepKm) + 1;
+  const maxDy = Math.ceil(CENTER_DETECTION_RADIUS_KM / yStepKm) + 1;
+  let count = 0;
+  for (let dy = -maxDy; dy <= maxDy; dy += 1) {
+    for (let dx = -maxDx; dx <= maxDx; dx += 1) {
+      if (dx === 0 && dy === 0) {
+        continue;
+      }
+      const virtualLat = centerLat - dy * latStepDeg;
+      const virtualLon = centerLon + dx * lonStepDeg;
+      const distanceKm = greatCircleDistanceKm(centerLat, centerLon, virtualLat, virtualLon);
+      if (Number.isFinite(distanceKm) && distanceKm <= CENTER_DETECTION_RADIUS_KM) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+function greatCircleDistanceKm(lat1, lon1, lat2, lon2) {
+  const phi1 = (Number(lat1) * Math.PI) / 180;
+  const phi2 = (Number(lat2) * Math.PI) / 180;
+  const deltaPhi = ((Number(lat2) - Number(lat1)) * Math.PI) / 180;
+  const deltaLambda = ((Number(lon2) - Number(lon1)) * Math.PI) / 180;
+  if (![phi1, phi2, deltaPhi, deltaLambda].every(Number.isFinite)) {
+    return Number.NaN;
+  }
+  const sinLat = Math.sin(deltaPhi / 2);
+  const sinLon = Math.sin(deltaLambda / 2);
+  const a = sinLat * sinLat + Math.cos(phi1) * Math.cos(phi2) * sinLon * sinLon;
+  return 6371.0088 * 2 * Math.atan2(Math.sqrt(Math.max(0, a)), Math.sqrt(Math.max(0, 1 - a)));
+}
+
+function validateCenterRosterDistancesRowAware({ highs, lows, width, height, bounds }) {
+  const highEntries = Array.isArray(highs) ? highs : [];
+  const lowEntries = Array.isArray(lows) ? lows : [];
+  const all = [
+    ...highEntries.map((entry) => ({ entry, kind: "high" })),
+    ...lowEntries.map((entry) => ({ entry, kind: "low" })),
+  ];
+  const locations = new Map(all.map(({ entry }) => [entry, toLatLon(entry.x, entry.y, width, height, bounds)]));
+  const out = new Map();
+  for (const current of all) {
+    const location = locations.get(current.entry);
+    let nearestSameKindKm = Number.POSITIVE_INFINITY;
+    let nearestOpposingKindKm = Number.POSITIVE_INFINITY;
+    for (const other of all) {
+      if (other.entry === current.entry) {
+        continue;
+      }
+      const otherLocation = locations.get(other.entry);
+      const distanceKm = greatCircleDistanceKm(location?.[0], location?.[1], otherLocation?.[0], otherLocation?.[1]);
+      if (!Number.isFinite(distanceKm)) {
+        continue;
+      }
+      if (other.kind === current.kind) {
+        nearestSameKindKm = Math.min(nearestSameKindKm, distanceKm);
+      } else {
+        nearestOpposingKindKm = Math.min(nearestOpposingKindKm, distanceKm);
+      }
+    }
+    out.set(current.entry, {
+      nearestSameKindKm: Number.isFinite(nearestSameKindKm) ? Number(nearestSameKindKm.toFixed(1)) : null,
+      sameKindSeparationAtLeast450Km:
+        !Number.isFinite(nearestSameKindKm) || nearestSameKindKm >= CENTER_SAME_KIND_MIN_KM,
+      nearestOpposingKindKm: Number.isFinite(nearestOpposingKindKm) ? Number(nearestOpposingKindKm.toFixed(1)) : null,
+      opposingSeparationAtLeast300Km:
+        !Number.isFinite(nearestOpposingKindKm) || nearestOpposingKindKm >= CENTER_OPPOSING_MIN_KM,
+      rosterSeparationPass:
+        (!Number.isFinite(nearestSameKindKm) || nearestSameKindKm >= CENTER_SAME_KIND_MIN_KM) &&
+        (!Number.isFinite(nearestOpposingKindKm) || nearestOpposingKindKm >= CENTER_OPPOSING_MIN_KM),
+    });
+  }
+  return out;
+}
+
+// Roster ranking by synoptic-scale prominence (met review 2026-07-10):
+// mesoscale terrain-reduction bullseyes (e.g. nocturnal Great Basin highs)
+// carry raw annulus prominences that crowd real broad systems out of the
+// capped, score-ordered roster. Re-measure each candidate's prominence on a
+// SYNOPTIC_MERIT_SIGMA_KM-smoothed copy of the field — bullseyes collapse
+// there, real closed systems survive — and rank by that. The 1.8 hPa
+// detection GATE and emitted prominenceHpa stay on the once-smoothed detection
+// field (rather than the additionally smoothed merit-ranking field).
+function rescoreCandidatesBySynopticMerit(candidates, values, width, height, spacingKm, ringOffsets) {
+  if (!candidates.length) {
+    return;
+  }
+  const sigmaCells = SYNOPTIC_MERIT_SIGMA_KM / Math.max(1e-6, spacingKm);
+  if (sigmaCells < 0.6) {
+    // The grid's cells are already coarser than bullseye scale (simple mode):
+    // the raw score is already synoptic-scale.
+    return;
+  }
+  const smoothedField = gaussianBlur(values, width, height, Math.min(sigmaCells, 12));
+  for (const candidate of candidates) {
+    const centerValue = Number(smoothedField[candidate.y * width + candidate.x]);
+    if (!Number.isFinite(centerValue)) {
+      continue;
+    }
+    let ringSum = 0;
+    let ringCount = 0;
+    for (const offset of ringOffsets) {
+      const xx = candidate.x + offset.dx;
+      const yy = candidate.y + offset.dy;
+      if (xx < 0 || yy < 0 || xx >= width || yy >= height) {
+        continue;
+      }
+      const sample = Number(smoothedField[yy * width + xx]);
+      if (!Number.isFinite(sample)) {
+        continue;
+      }
+      ringSum += sample;
+      ringCount += 1;
+    }
+    if (ringCount < 8) {
+      continue;
+    }
+    const sign = candidate.kind === "high" ? 1 : -1;
+    const synopticProminence = Math.max(0, sign * (centerValue - ringSum / ringCount));
+    candidate.score = synopticProminence + Math.max(0, sign * (candidate.value - 1013.25) * 0.12);
+  }
+}
+
+// ── Full-resolution center refinement (Task 4.5, owner-blessed, spec §8a.6) ──
+//
+// Detection runs on the smoothed center-analysis grid, which quantizes each
+// center to a grid node. Coarse interpolation can sample off the true core and
+// report a less-extreme value than the display field (mean ~1 hPa, max 6.7
+// hPa; mean 46 km displaced in the 2026-07-07 audit). Refinement walks each
+// candidate to the true extremum of the display-resolution MSLP field:
+//
+// 1. Hill-climb on a lightly pre-smoothed copy of the display field. NAM3km
+//    MSLP carries grid-scale (~3-9 km) terrain-reduction artifacts; a 6 km
+//    Gaussian (~2 native grid lengths) suppresses single-pixel noise pockets
+//    while leaving synoptic cores (>=100 km scale) unattenuated, so the climb
+//    settles on the physical core rather than a noise pixel.
+// 2. Travel budget: detection quantizes position by up to half a detection
+//    cell (diagonal ~0.71 cell) and Gaussian smoothing displaces an asymmetric
+//    extremum by O(sigma), so the climb may travel one detection cell plus
+//    2*sigma, floored at 120 km. Containment: the climb only ever moves to a
+//    strictly better value within a 5x5 neighborhood (step = 2), so regardless
+//    of budget it cannot cross a col/saddle wider than ~2 display pixels
+//    (~7 km at CONUS display resolution) into a neighboring system. Narrower
+//    cols are below the artifact scale that the sigma=6 km pre-smooth (step 1)
+//    declares noise, so hopping them is intended noise-rejection, not a
+//    containment defect.
+// 3. Snap the emitted value AND position to the raw display-field extremum
+//    within ~2 pre-smoothing sigmas of the settled core, so the marker agrees
+//    with what hover inspection of the field reports. Values keep full
+//    precision here; rounding happens once, at payload emit.
+const CENTER_CLIMB_PRESMOOTH_SIGMA_KM = 6;
+const CENTER_MIN_TRAVEL_KM = 120;
+const CENTER_SAME_EXTREMUM_KM = 25;
+// Native grid spacing per model (km): refinement must not report positions
+// sharper than the source physics. Presmooth σ scales with native spacing so
+// GFS (0.25° ≈ 27 km) centers stop resolving bilinear-upsample ripples at
+// ~4 km false precision; the 3 km nests keep the tuned behavior.
+const MODEL_NATIVE_SPACING_KM = { gfs: 27, nam: 12, nam3km: 3, hrrr: 3 };
+const CLIMB_FIELD_CACHE = new WeakMap();
+// Per-candidate climb patches (audit 2026-07-17, backlog #43): every climb-
+// field read in refineCenterAgainstField stays inside the closed Euclidean
+// disc of radius travelPx around the candidate's clamped seed — the seed tap,
+// the no-data rescue ring scan (distSq <= limit^2, limit = travelPx), and the
+// hill-climb neighborhood (travelSq = travelPx^2) — so the Gaussian + NaN
+// re-mask only has to exist inside that disc. The blur kernel radius is
+// max(1, ceil(sigmaPx * 2.6)) (buildGaussianKernel); a patch padded by that
+// radius plus CLIMB_PATCH_SAFETY_PX beyond the disc is bit-identical to the
+// full-grid blur across the whole disc: out-of-patch kernel taps are skipped
+// (weights renormalized) exactly like out-of-grid taps, and the blit into the
+// shared scratch field is shrunk by the radius on every side that does not
+// coincide with the grid edge. Candidates whose patches would tile half the
+// grid are cheaper as one full blur — identical bytes either way — so the
+// path falls back. Patches bypass CLIMB_FIELD_CACHE: patch state lives on the
+// per-grid context (rebuilt every render), so it can never serve values
+// across grids; the full-blur fallback keeps the WeakMap and its guard.
+const CLIMB_PATCH_SAFETY_PX = 2;
+const CLIMB_PATCH_FULL_BLUR_FRACTION = 0.5;
+
+function buildCenterRefinementContext({ grid, bounds, modelKey, style, detectionCols, detectionRows }) {
+  if (!grid || !grid.values || !(grid.cols >= 2) || !(grid.rows >= 2)) {
+    return null;
+  }
+  const resolvedStyle = style || loadSynopticStyle();
+  const detectionSpacingKm = estimateGridSpacingKm(bounds, detectionCols, detectionRows);
+  const spacingKm = estimateGridSpacingKm(bounds, grid.cols, grid.rows);
+  const sigmaKm = resolveMslpSigmaKm(modelKey, resolvedStyle);
+  const travelKm = Math.max(detectionSpacingKm + 2 * Math.max(0, sigmaKm), CENTER_MIN_TRAVEL_KM);
+  const travelPx = Math.max(1, Math.round(travelKm / Math.max(1e-6, spacingKm)));
+  // Half the model's native spacing floors the pre-smooth (see
+  // MODEL_NATIVE_SPACING_KM); the artifact-scale 6 km sigma remains the
+  // minimum, so the 3 km nests keep the tuned behavior. The snap radius below
+  // derives from this sigma (~2 sigma), so it follows the native scale too.
+  const presmoothSigmaKm = Math.max(CENTER_CLIMB_PRESMOOTH_SIGMA_KM, (MODEL_NATIVE_SPACING_KM[modelKey] ?? 6) / 2);
+  const presmoothSigmaPx = clamp(presmoothSigmaKm / Math.max(1e-6, spacingKm), 0, 3);
+  // The climb field (Gaussian + NaN re-mask) is the most expensive piece of
+  // H/L analysis, so nothing builds it up front: detection never samples it,
+  // and a frame whose detection finds no candidates skips the blur entirely.
+  // refineCenterAgainstField resolves it per seed as padded patches (see
+  // CLIMB_PATCH_SAFETY_PX); the climbValues getter keeps the full-grid build
+  // as the fallback path and this context's public contract. gaussianBlur
+  // always returns a fresh array, so snapRadiusPx keys off whether the
+  // pre-smooth applies, not field identity.
+  const appliesPresmooth = presmoothSigmaPx >= 0.45;
+  const context = {
+    values: grid.values,
+    get climbValues() {
+      return resolveFullClimbField(context);
+    },
+    cols: grid.cols,
+    rows: grid.rows,
+    travelPx,
+    snapRadiusPx: appliesPresmooth ? Math.max(1, Math.round(presmoothSigmaPx * 2)) : 0,
+    detectionCols,
+    detectionRows,
+    detectionSpacingKm,
+    climbSigmaPx: appliesPresmooth ? presmoothSigmaPx : 0,
+    climbPatchState: null,
+    climbBuildStats: { fullBuilds: 0, patchBuilds: 0, patchedCells: 0 },
+  };
+  return context;
+}
+
+function resolveFullClimbField(refinement) {
+  if (!(refinement.climbSigmaPx > 0)) {
+    return refinement.values;
+  }
+  const state = ensureClimbPatchState(refinement);
+  if (!state.full) {
+    state.full = resolveClimbField(
+      { values: refinement.values, cols: refinement.cols, rows: refinement.rows },
+      refinement.climbSigmaPx,
+    );
+    refinement.climbBuildStats.fullBuilds += 1;
+  }
+  return state.full;
+}
+
+function ensureClimbPatchState(refinement) {
+  if (!refinement.climbPatchState) {
+    refinement.climbPatchState = { full: null, field: null, rects: [] };
+  }
+  return refinement.climbPatchState;
+}
+
+// Climb field for one candidate, blurred only over the padded patch around
+// its seed. Reads never leave the travelPx disc (see CLIMB_PATCH_SAFETY_PX),
+// and the patch is bit-identical to the full-grid blur across that disc.
+function resolveClimbFieldForSeed(refinement, seedX, seedY) {
+  if (!(refinement.climbSigmaPx > 0)) {
+    return refinement.values;
+  }
+  const { cols, rows, travelPx } = refinement;
+  const state = ensureClimbPatchState(refinement);
+  if (state.full) {
+    return state.full;
+  }
+  const read = {
+    x0: Math.max(0, seedX - travelPx),
+    x1: Math.min(cols - 1, seedX + travelPx),
+    y0: Math.max(0, seedY - travelPx),
+    y1: Math.min(rows - 1, seedY + travelPx),
+  };
+  if (state.field) {
+    for (const rect of state.rects) {
+      if (rect.x0 <= read.x0 && rect.x1 >= read.x1 && rect.y0 <= read.y0 && rect.y1 >= read.y1) {
+        return state.field;
+      }
+    }
+  }
+  const radiusPx = Math.max(1, Math.ceil(refinement.climbSigmaPx * 2.6));
+  const pad = travelPx + radiusPx + CLIMB_PATCH_SAFETY_PX;
+  const patch = {
+    x0: Math.max(0, seedX - pad),
+    x1: Math.min(cols - 1, seedX + pad),
+    y0: Math.max(0, seedY - pad),
+    y1: Math.min(rows - 1, seedY + pad),
+  };
+  const patchCells = (patch.x1 - patch.x0 + 1) * (patch.y1 - patch.y0 + 1);
+  if ((refinement.climbBuildStats.patchedCells + patchCells) / (cols * rows) >= CLIMB_PATCH_FULL_BLUR_FRACTION) {
+    return resolveFullClimbField(refinement);
+  }
+  if (!state.field) {
+    state.field = new Float32Array(cols * rows).fill(Number.NaN);
+  }
+  const patchCols = patch.x1 - patch.x0 + 1;
+  const patchRows = patch.y1 - patch.y0 + 1;
+  const patchValues = new Float32Array(patchCols * patchRows);
+  for (let y = 0; y < patchRows; y += 1) {
+    for (let x = 0; x < patchCols; x += 1) {
+      patchValues[y * patchCols + x] = refinement.values[(patch.y0 + y) * cols + patch.x0 + x];
+    }
+  }
+  const blurred = gaussianBlur(patchValues, patchCols, patchRows, refinement.climbSigmaPx);
+  // Valid region: shrink the patch by the kernel radius on every side that
+  // does not coincide with the grid edge; inside it the patch blur matches
+  // the full-grid blur bit for bit. Apply the same NaN re-mask as
+  // resolveClimbField while blitting into the shared scratch field.
+  const bx0 = patch.x0 === 0 ? 0 : radiusPx;
+  const by0 = patch.y0 === 0 ? 0 : radiusPx;
+  const bx1 = patch.x1 === cols - 1 ? patchCols - 1 : patchCols - 1 - radiusPx;
+  const by1 = patch.y1 === rows - 1 ? patchRows - 1 : patchRows - 1 - radiusPx;
+  for (let y = by0; y <= by1; y += 1) {
+    for (let x = bx0; x <= bx1; x += 1) {
+      const patchIndex = y * patchCols + x;
+      state.field[(patch.y0 + y) * cols + patch.x0 + x] = Number.isFinite(Number(patchValues[patchIndex]))
+        ? blurred[patchIndex]
+        : Number.NaN;
+    }
+  }
+  state.rects.push({ x0: patch.x0 + bx0, x1: patch.x0 + bx1, y0: patch.y0 + by0, y1: patch.y0 + by1 });
+  refinement.climbBuildStats.patchBuilds += 1;
+  refinement.climbBuildStats.patchedCells += patchCells;
+  return state.field;
+}
+
+function resolveClimbField(grid, sigmaPx) {
+  const key = grid.values;
+  const cached = typeof key === "object" && key !== null ? CLIMB_FIELD_CACHE.get(key) : null;
+  if (cached && cached.cols === grid.cols && cached.rows === grid.rows && cached.sigmaPx === sigmaPx) {
+    return cached.values;
+  }
+  const blurred = gaussianBlur(grid.values, grid.cols, grid.rows, sigmaPx);
+  // The blur extrapolates a few pixels into no-data regions (the native model
+  // domain can end inside the view, e.g. NAM3km in the SE Atlantic corner of
+  // the CONUS frame). Mask those back to NaN so the climb cannot leave the
+  // physical field and every emitted center has a raw, hover-readable value.
+  for (let index = 0; index < blurred.length; index += 1) {
+    if (!Number.isFinite(Number(grid.values[index]))) {
+      blurred[index] = Number.NaN;
+    }
+  }
+  if (typeof key === "object" && key !== null) {
+    CLIMB_FIELD_CACHE.set(key, { cols: grid.cols, rows: grid.rows, sigmaPx, values: blurred });
+  }
+  return blurred;
+}
+
+function refineCenterAgainstField(center, refinement, kind = center?.kind) {
+  if (!refinement) {
+    return center;
+  }
+  const { values, cols, rows, travelPx, snapRadiusPx, detectionCols, detectionRows } = refinement;
+  const scaleX = (cols - 1) / Math.max(1, detectionCols - 1);
+  const scaleY = (rows - 1) / Math.max(1, detectionRows - 1);
+  const seedX = clampInt(Math.round(center.x * scaleX), 0, cols - 1, 0);
+  const seedY = clampInt(Math.round(center.y * scaleY), 0, rows - 1, 0);
+  const climbValues = resolveClimbFieldForSeed(refinement, seedX, seedY);
+  const sign = kind === "low" ? -1 : 1;
+  const budgetPx = travelPx;
+  let cx = seedX;
+  let cy = seedY;
+  let currentValue = Number(climbValues[cy * cols + cx]);
+  if (!Number.isFinite(currentValue)) {
+    // Detection grids extend into no-data zones through partial bilinear taps
+    // and NaN-skipping smoothing, so a candidate can seed where the display
+    // field is undefined (native model domain ending inside the view). Rescue
+    // to the nearest real-data pixel so the marker reports the field's actual
+    // edge extremum instead of an extrapolated value at an undefined position.
+    const rescued = findNearestFinitePixel(climbValues, cols, rows, seedX, seedY, budgetPx);
+    if (!rescued) {
+      return center;
+    }
+    cx = rescued.x;
+    cy = rescued.y;
+    currentValue = rescued.value;
+  }
+
+  const travelSq = budgetPx * budgetPx;
+  const step = 2;
+  for (let iteration = 0; iteration < 4096; iteration += 1) {
+    let bestX = cx;
+    let bestY = cy;
+    let bestValue = currentValue;
+    for (let dy = -step; dy <= step; dy += 1) {
+      for (let dx = -step; dx <= step; dx += 1) {
+        if (dx === 0 && dy === 0) {
+          continue;
+        }
+        const x = cx + dx;
+        const y = cy + dy;
+        if (x < 0 || y < 0 || x >= cols || y >= rows) {
+          continue;
+        }
+        const travelX = x - seedX;
+        const travelY = y - seedY;
+        if (travelX * travelX + travelY * travelY > travelSq) {
+          continue;
+        }
+        const sample = Number(climbValues[y * cols + x]);
+        if (!Number.isFinite(sample)) {
+          continue;
+        }
+        if (sign * (sample - bestValue) > 0) {
+          bestValue = sample;
+          bestX = x;
+          bestY = y;
+        }
+      }
+    }
+    if (bestX === cx && bestY === cy) {
+      break;
+    }
+    cx = bestX;
+    cy = bestY;
+    currentValue = bestValue;
+  }
+
+  let outX = cx;
+  let outY = cy;
+  let outValue = Number(values[cy * cols + cx]);
+  for (let dy = -snapRadiusPx; dy <= snapRadiusPx; dy += 1) {
+    for (let dx = -snapRadiusPx; dx <= snapRadiusPx; dx += 1) {
+      const x = cx + dx;
+      const y = cy + dy;
+      if (x < 0 || y < 0 || x >= cols || y >= rows) {
+        continue;
+      }
+      const sample = Number(values[y * cols + x]);
+      if (!Number.isFinite(sample)) {
+        continue;
+      }
+      if (!Number.isFinite(outValue) || sign * (sample - outValue) > 0) {
+        outValue = sample;
+        outX = x;
+        outY = y;
+      }
+    }
+  }
+  if (!Number.isFinite(outValue)) {
+    outValue = currentValue;
+    outX = cx;
+    outY = cy;
+  }
+
+  return {
+    ...center,
+    x: outX / scaleX,
+    y: outY / scaleY,
+    value: outValue,
+  };
+}
+
+function findNearestFinitePixel(values, cols, rows, seedX, seedY, maxRadiusPx) {
+  const limit = Math.max(1, Math.round(maxRadiusPx));
+  let best = null;
+  for (let ring = 1; ring <= limit; ring += 1) {
+    for (let dy = -ring; dy <= ring; dy += 1) {
+      const onVerticalEdge = Math.abs(dy) === ring;
+      const stepX = onVerticalEdge ? 1 : 2 * ring;
+      for (let dx = -ring; dx <= ring; dx += stepX) {
+        const x = seedX + dx;
+        const y = seedY + dy;
+        if (x < 0 || y < 0 || x >= cols || y >= rows) {
+          continue;
+        }
+        const distSq = dx * dx + dy * dy;
+        if (distSq > limit * limit || (best && distSq >= best.distSq)) {
+          continue;
+        }
+        const value = Number(values[y * cols + x]);
+        if (!Number.isFinite(value)) {
+          continue;
+        }
+        best = { x, y, value, distSq };
+      }
+    }
+    // A pixel at Chebyshev ring r can be beaten (in Euclidean distance) only
+    // by rings up to its Euclidean distance; once found, scan that far and stop.
+    if (best && ring >= Math.ceil(Math.sqrt(best.distSq))) {
+      break;
+    }
+  }
+  return best;
+}
+
+// Refinement can walk two detection candidates onto the same physical
+// extremum; collapse same-kind centers closer than ~CENTER_SAME_EXTREMUM_KM
+// (input is score-ordered, so the stronger candidate survives).
+function dedupeRefinedCenters(centers, refinement) {
+  if (!refinement || !Array.isArray(centers) || centers.length <= 1) {
+    return centers;
+  }
+  const thresholdCells = CENTER_SAME_EXTREMUM_KM / Math.max(1e-6, refinement.detectionSpacingKm);
+  const thresholdSq = thresholdCells * thresholdCells;
+  const out = [];
+  for (const center of centers) {
+    let duplicate = false;
+    for (const existing of out) {
+      const dx = existing.x - center.x;
+      const dy = existing.y - center.y;
+      if (dx * dx + dy * dy <= thresholdSq) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (!duplicate) {
+      out.push(center);
+    }
+  }
+  return out;
+}
+
+function selectDistinctCenters(candidates, style, spacingKm) {
   const sorted = [...candidates].sort((left, right) => right.score - left.score);
   const out = [];
   const maxMarkers = Number(style?.centers?.maxMarkersByBucket?.z4_6 || 18);
-  const minDistance = Math.max(6, Math.floor(Math.min(width, height) * 0.075));
+  const minDistance = Math.max(2, Math.round(CENTER_SAME_KIND_MIN_KM / spacingKm));
   const minDistanceSq = minDistance * minDistance;
   for (const candidate of sorted) {
     if (out.length >= maxMarkers) {
@@ -1033,58 +1987,10 @@ function selectDistinctCenters(candidates, width, height, style) {
   return out;
 }
 
-function alignCenterValues(center, smoothedValues, rawValues, width, height, kind) {
-  const refined = refineCenterToRawGrid(center, rawValues, width, height, kind);
-  const smoothedValue = Number(smoothedValues[refined.y * width + refined.x]);
-  const rawValue = Number(rawValues[refined.y * width + refined.x]);
-  const chosen = Number.isFinite(rawValue) ? rawValue : smoothedValue;
-
-  return {
-    ...refined,
-    value: Number.isFinite(chosen) ? chosen : refined.value,
-  };
-}
-
-function includeGlobalPressureExtrema(values, width, height, candidates) {
-  const margin = clamp(Math.round(Math.min(width, height) / 28), 2, 8);
-  let globalMin = null;
-  let globalMax = null;
-  for (let y = margin; y < height - margin; y += 1) {
-    for (let x = margin; x < width - margin; x += 1) {
-      const value = Number(values[y * width + x]);
-      if (!Number.isFinite(value)) {
-        continue;
-      }
-      if (!globalMin || value < globalMin.value) {
-        globalMin = { x, y, value };
-      }
-      if (!globalMax || value > globalMax.value) {
-        globalMax = { x, y, value };
-      }
-    }
-  }
-  if (globalMax) {
-    candidates.push({
-      kind: "high",
-      ...globalMax,
-      prominence: Number.POSITIVE_INFINITY,
-      score: Number.POSITIVE_INFINITY,
-    });
-  }
-  if (globalMin) {
-    candidates.push({
-      kind: "low",
-      ...globalMin,
-      prominence: Number.POSITIVE_INFINITY,
-      score: Number.POSITIVE_INFINITY,
-    });
-  }
-}
-
-function resolveOpposingCenterOverlaps(highs, lows, width, height) {
+function resolveOpposingCenterOverlaps(highs, lows, spacingKm) {
   const keptHighs = [...highs];
   const keptLows = [...lows];
-  const minDistance = Math.max(4, Math.floor(Math.min(width, height) * 0.052));
+  const minDistance = Math.max(2, Math.round(CENTER_OPPOSING_MIN_KM / spacingKm));
   const minDistanceSq = minDistance * minDistance;
 
   for (let hi = keptHighs.length - 1; hi >= 0; hi -= 1) {
@@ -1111,8 +2017,14 @@ function resolveOpposingCenterOverlaps(highs, lows, width, height) {
 
 const OFFSET_CACHE = new Map();
 
-function offsetsWithinRadius(radius, excludeCenter = false) {
-  const key = `disc:${radius}:${excludeCenter ? 1 : 0}`;
+// stride > 1 keeps only offsets on the stride lattice (dx and dy both
+// multiples of stride) — the detection perf guard for km-sized discs. The
+// eight ±1-ring offsets are always retained regardless of stride: adjacent
+// cells are what disqualify a near-extremum cell, so the strict-extremum
+// property stays stride-independent (a cell beside a higher/lower cell can
+// never pass, with no reliance on the field having been pre-smoothed).
+function offsetsWithinRadius(radius, excludeCenter = false, stride = 1) {
+  const key = `disc:${radius}:${excludeCenter ? 1 : 0}:${stride}`;
   const cached = OFFSET_CACHE.get(key);
   if (cached) {
     return cached;
@@ -1124,6 +2036,10 @@ function offsetsWithinRadius(radius, excludeCenter = false) {
       if (excludeCenter && dx === 0 && dy === 0) {
         continue;
       }
+      const inAdjacentRing = Math.max(Math.abs(dx), Math.abs(dy)) === 1;
+      if (stride > 1 && !inAdjacentRing && (dx % stride || dy % stride)) {
+        continue;
+      }
       if (dx * dx + dy * dy <= radiusSq) {
         out.push({ dx, dy });
       }
@@ -1133,8 +2049,8 @@ function offsetsWithinRadius(radius, excludeCenter = false) {
   return out;
 }
 
-function offsetsInAnnulus(innerRadius, outerRadius) {
-  const key = `annulus:${innerRadius}:${outerRadius}`;
+function offsetsInAnnulus(innerRadius, outerRadius, stride = 1) {
+  const key = `annulus:${innerRadius}:${outerRadius}:${stride}`;
   const cached = OFFSET_CACHE.get(key);
   if (cached) {
     return cached;
@@ -1144,6 +2060,9 @@ function offsetsInAnnulus(innerRadius, outerRadius) {
   const outerSq = outerRadius * outerRadius;
   for (let dy = -outerRadius; dy <= outerRadius; dy += 1) {
     for (let dx = -outerRadius; dx <= outerRadius; dx += 1) {
+      if (stride > 1 && (dx % stride || dy % stride)) {
+        continue;
+      }
       const distSq = dx * dx + dy * dy;
       if (distSq >= innerSq && distSq <= outerSq) {
         out.push({ dx, dy });
@@ -1189,72 +2108,64 @@ function drawPolyline(buffer, width, height, contour, cols, rows, { rgba, widthP
   for (let i = 1; i < contour.length; i += 1) {
     const a = contour[i - 1];
     const b = contour[i];
-    const x0 = scaleX(a.x, cols, width);
-    const y0 = scaleY(a.y, rows, height);
+    // Direct rasterization (backlog #22): the Bresenham walk below is the old
+    // rasterizeSegment fused with the stamp loop — same pixel sequence, same
+    // per-segment dash state machine, same painted count — without the
+    // per-segment pixel {x,y} arrays.
+    let cx = scaleX(a.x, cols, width);
+    let cy = scaleY(a.y, rows, height);
     const x1 = scaleX(b.x, cols, width);
     const y1 = scaleY(b.y, rows, height);
-    const pixels = rasterizeSegment(x0, y0, x1, y1, dashPattern);
-    for (const pixel of pixels) {
-      for (let oy = -radius; oy <= radius; oy += 1) {
-        for (let ox = -radius; ox <= radius; ox += 1) {
-          const px = pixel.x + ox;
-          const py = pixel.y + oy;
-          if (px < 0 || py < 0 || px >= width || py >= height) {
-            continue;
+    const dx = Math.abs(x1 - cx);
+    const sx = cx < x1 ? 1 : -1;
+    const dy = -Math.abs(y1 - cy);
+    const sy = cy < y1 ? 1 : -1;
+    let err = dx + dy;
+
+    let dashIndex = 0;
+    let dashRemaining = dashPattern && dashPattern.length > 0 ? dashPattern[0] : Number.POSITIVE_INFINITY;
+    let draw = true;
+
+    while (true) {
+      if (draw) {
+        for (let oy = -radius; oy <= radius; oy += 1) {
+          for (let ox = -radius; ox <= radius; ox += 1) {
+            const px = cx + ox;
+            const py = cy + oy;
+            if (px < 0 || py < 0 || px >= width || py >= height) {
+              continue;
+            }
+            const idx = (py * width + px) * 4;
+            buffer[idx] = rgba[0];
+            buffer[idx + 1] = rgba[1];
+            buffer[idx + 2] = rgba[2];
+            buffer[idx + 3] = rgba[3];
+            painted += 1;
           }
-          const idx = (py * width + px) * 4;
-          buffer[idx] = rgba[0];
-          buffer[idx + 1] = rgba[1];
-          buffer[idx + 2] = rgba[2];
-          buffer[idx + 3] = rgba[3];
-          painted += 1;
         }
+      }
+      dashRemaining -= 1;
+      if (dashPattern && dashRemaining <= 0) {
+        dashIndex = (dashIndex + 1) % dashPattern.length;
+        dashRemaining = dashPattern[dashIndex];
+        draw = !draw;
+      }
+
+      if (cx === x1 && cy === y1) {
+        break;
+      }
+      const e2 = 2 * err;
+      if (e2 >= dy) {
+        err += dy;
+        cx += sx;
+      }
+      if (e2 <= dx) {
+        err += dx;
+        cy += sy;
       }
     }
   }
   return painted;
-}
-
-function rasterizeSegment(x0, y0, x1, y1, dashPattern) {
-  const out = [];
-  let cx = x0;
-  let cy = y0;
-  const dx = Math.abs(x1 - x0);
-  const sx = x0 < x1 ? 1 : -1;
-  const dy = -Math.abs(y1 - y0);
-  const sy = y0 < y1 ? 1 : -1;
-  let err = dx + dy;
-
-  let dashIndex = 0;
-  let dashRemaining = dashPattern && dashPattern.length > 0 ? dashPattern[0] : Number.POSITIVE_INFINITY;
-  let draw = true;
-
-  while (true) {
-    if (draw) {
-      out.push({ x: cx, y: cy });
-    }
-    dashRemaining -= 1;
-    if (dashPattern && dashRemaining <= 0) {
-      dashIndex = (dashIndex + 1) % dashPattern.length;
-      dashRemaining = dashPattern[dashIndex];
-      draw = !draw;
-    }
-
-    if (cx === x1 && cy === y1) {
-      break;
-    }
-    const e2 = 2 * err;
-    if (e2 >= dy) {
-      err += dy;
-      cx += sx;
-    }
-    if (e2 <= dx) {
-      err += dx;
-      cy += sy;
-    }
-  }
-
-  return out;
 }
 
 function segmentsToPolylines(segments) {
@@ -1337,22 +2248,31 @@ function segmentsToPolylines(segments) {
 }
 
 function mergeChains(first, second, firstAtHead, secondAtHead) {
-  const a = [...first];
-  const b = [...second];
+  // Same point sequence as the legacy spread merge ([...a, ...b] etc.); one
+  // parent array is extended in place instead of spreading both chains into a
+  // fresh array per merge (backlog #22 — 2,132 merges / ~314k copied point
+  // refs on a CONUS detailed frame).
+  const a = first;
+  const b = second;
   if (firstAtHead && secondAtHead) {
-    return [...reversePoints(b), ...a];
+    b.reverse();
+    return appendChainPoints(b, a);
   }
   if (firstAtHead && !secondAtHead) {
-    return [...b, ...a];
+    return appendChainPoints(b, a);
   }
   if (!firstAtHead && secondAtHead) {
-    return [...a, ...b];
+    return appendChainPoints(a, b);
   }
-  return [...a, ...reversePoints(b)];
+  b.reverse();
+  return appendChainPoints(a, b);
 }
 
-function reversePoints(points) {
-  return [...points].reverse();
+function appendChainPoints(destination, source) {
+  for (const point of source) {
+    destination.push(point);
+  }
+  return destination;
 }
 
 function dedupeConsecutivePoints(points) {
@@ -1389,6 +2309,18 @@ function toLatLon(x, y, cols, rows, bounds) {
   const lat = rowToLatMercator(y, rows, bounds);
   const lon = bounds.west + (x / Math.max(1, cols - 1)) * (bounds.east - bounds.west);
   return [lat, lon];
+}
+
+// Projector for encodeVectorLineProjected: writes the same [lat, lon] doubles
+// toLatLon computes into the encoder's scratch pair, so encoded bytes match
+// the previous contour.map(toLatLon) + encodeVectorLine path exactly.
+function projectGridLatLon(cols, rows, bounds) {
+  const lonSpan = bounds.east - bounds.west;
+  const lonScale = Math.max(1, cols - 1);
+  return (point, out) => {
+    out[0] = rowToLatMercator(point.y, rows, bounds);
+    out[1] = bounds.west + (point.x / lonScale) * lonSpan;
+  };
 }
 
 function scaleX(x, cols, width) {
@@ -1594,7 +2526,7 @@ function appendMarchingSquaresCellSegments(segments, level, a, b, c, d, x, y) {
     interp(level, d, c, x, y + 1, x + 1, y + 1),
     interp(level, a, d, x, y, x, y + 1),
   ];
-  const centerAbove = (a + b + c + d) / 4 >= level;
+  const centerAbove = resolveAmbiguousCellCenterAbove(caseId, level, a, b, c, d);
   const pairs = pairing(caseId, centerAbove);
   for (const pair of pairs) {
     const p0 = edges[pair[0]];
@@ -1604,6 +2536,30 @@ function appendMarchingSquaresCellSegments(segments, level, a, b, c, d, x, y) {
     }
     segments.push({ x0: p0.x, y0: p0.y, x1: p1.x, y1: p1.y });
   }
+}
+
+// Cases 5 and 10 are bilinear saddles. The arithmetic cell-center average is
+// not topology preserving: it can connect the wrong pair of contour arms when
+// one diagonal's magnitudes are asymmetric. The asymptotic decider evaluates
+// the bilinear saddle determinant relative to the contour level. An exactly
+// (or numerically near) degenerate saddle has no preferred topology, so retain
+// the stable arithmetic-center tie-break used by older artifacts.
+function resolveAmbiguousCellCenterAbove(caseId, level, a, b, c, d) {
+  if (caseId !== 5 && caseId !== 10) {
+    return false;
+  }
+  const av = a - level;
+  const bv = b - level;
+  const cv = c - level;
+  const dv = d - level;
+  const positiveDiagonal = av * cv;
+  const negativeDiagonal = bv * dv;
+  const determinant = positiveDiagonal - negativeDiagonal;
+  const determinantScale = Math.max(1, Math.abs(positiveDiagonal), Math.abs(negativeDiagonal));
+  if (Math.abs(determinant) <= Number.EPSILON * 64 * determinantScale) {
+    return (a + b + c + d) / 4 >= level;
+  }
+  return caseId === 5 ? determinant > 0 : determinant < 0;
 }
 
 function lowerBound(values, target) {
@@ -1711,4 +2667,46 @@ module.exports = {
   marchingSquaresMany,
   renderHeightContourArtifacts,
   renderSynopticArtifacts,
+  _testCenterRefinement: {
+    buildCenterRefinementContext,
+    refineCenterAgainstField,
+    dedupeRefinedCenters,
+    resolveClimbFieldForSeed,
+  },
+  _testCenterDetection: {
+    defaultProminenceMinHpa: DEFAULT_CENTER_PROMINENCE_MIN_HPA,
+    detectPressureCenters,
+    estimateGridSpacingKm,
+    offsetsWithinRadius,
+    resolveCenterProminenceThreshold,
+  },
+  _testCenterValidation: {
+    expectedRowAwareLocalSampleCount,
+    greatCircleDistanceKm,
+    methodVersion: ROW_AWARE_CENTER_VALIDATION_METHOD_VERSION,
+    validateCenterCandidateRowAware,
+    validateCenterRosterDistancesRowAware,
+  },
+  _testCenterAnalysis: {
+    prepareCenterAnalysisGrid,
+    resolveCenterAnalysisGridSize,
+    targetSpacingKm: CENTER_ANALYSIS_TARGET_SPACING_KM,
+    maxCols: CENTER_ANALYSIS_MAX_COLS,
+    maxRows: CENTER_ANALYSIS_MAX_ROWS,
+  },
+  _testSmoothing: {
+    smoothPressureField,
+    smoothHeightContourField,
+  },
+  _testContours: {
+    drawPolyline,
+    postProcessContours,
+    projectGridLatLon,
+    segmentsToPolylines,
+    toLatLon,
+  },
+  _testLevels: {
+    buildSteppedLevels,
+  },
+  _testResampleGridBilinear: resampleGridBilinear,
 };

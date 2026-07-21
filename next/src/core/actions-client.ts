@@ -5,9 +5,11 @@ import { appendQueryParams, getArtifactBaseUrl } from "./artifact-url";
 
 // One run manifest already built locally (server: listRunManifests). `run` is
 // the run id string (e.g. "20260703-1200Z"); server sorts built newest-first.
-// `upstreamFrameCount` is how many frames NOAA has published for the run
-// (null when the probe failed or the run expired upstream) — more than
-// `frameCount` means a re-render would pick up additional frames.
+// `upstreamSourceFrameCount` is how many source-cadence frames NOAA has
+// published for the run (null when the probe failed or the run expired).
+// For GFS that is the optional 209-frame hourly-through-F120 cadence;
+// `upstreamDefaultRenderFrameCount` is the 129-frame 3-hourly subset selected
+// by default. `upstreamFrameCount` remains the legacy source-count alias.
 export type BuiltRun = {
   run: string;
   model: string;
@@ -18,12 +20,24 @@ export type BuiltRun = {
   complete: boolean;
   latest: boolean;
   upstreamFrameCount: number | null;
+  upstreamSourceFrameCount?: number | null;
+  upstreamDefaultRenderFrameCount?: number | null;
 };
 
 // One NOAA-published cycle candidate (server: probeUpstreamRunsDefault). The
 // run id lives under `runId` (`${date}-${cycle}00Z`), not `run`. `frameCount`
-// is the probed published-frame count (null when the probe failed).
-export type UpstreamRun = { runId: string; date: string; cycle: string; frameCount: number | null };
+// is the legacy source-cadence count (null when the probe failed). GFS carries
+// the default 3-hourly render count separately to avoid conflating 129 default
+// frames with its 209-frame optional source cadence.
+export type UpstreamRun = {
+  runId: string;
+  date: string;
+  cycle: string;
+  frameCount: number | null;
+  sourceFrameCount?: number | null;
+  defaultRenderFrameCount?: number | null;
+  maxHour?: number | null;
+};
 
 // One spawned build (server groups models by picked run; one job per group).
 export type RenderJobHandle = { jobId: string; models: ModelKey[]; run: string };
@@ -115,6 +129,58 @@ export async function postPrefetchSoundingsAction(body: {
   return { jobs: normalizeJobHandles(payload, [...body.models]), skipped };
 }
 
+export async function postCancelJob(jobId: string): Promise<{ ok: boolean; status: string }> {
+  return postJson<{ ok: boolean; status: string }>(actionsUrl(`cancel/${encodeURIComponent(jobId)}`), {});
+}
+
+// ── Cache management (/actions/cache-*) ────────────────────────────────────
+
+export type CacheRunStat = { runId: string; bytes: number; latest: boolean };
+export type CacheModelStat = { model: string; totalBytes: number; runs: CacheRunStat[] };
+export type CacheStats = {
+  cacheRoot: string;
+  computedAt: string;
+  totalBytes: number;
+  artifactsBytes: number;
+  rawBytes: number;
+  models: CacheModelStat[];
+};
+
+export async function fetchCacheStats(options?: { refresh?: boolean }): Promise<CacheStats> {
+  const url = appendQueryParams(actionsUrl("cache-stats"), {
+    ...(options?.refresh ? { refresh: "1" } : {}),
+    t: String(Date.now()),
+  });
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Cache stats request failed (${response.status})`);
+  }
+  return (await response.json()) as CacheStats;
+}
+
+export type CachePruneDeletion = { path: string; bytes: number; runId: string; model: string; kind: string };
+export type CachePruneResult = {
+  dryRun: boolean;
+  removedBytes: number;
+  projectedBytes: number;
+  budgetUnmet: boolean;
+  deletions: CachePruneDeletion[];
+};
+
+export async function postCachePrune(body: {
+  dryRun: boolean;
+  keep?: number;
+  budgetGb?: number;
+}): Promise<CachePruneResult> {
+  return postJson<CachePruneResult>(actionsUrl("cache/prune"), body);
+}
+
+// The typed token is deliberately threaded from the UI's confirm field — this
+// client never fabricates it.
+export async function postCacheClear(confirm: string): Promise<{ ok: boolean; removedBytes: number }> {
+  return postJson<{ ok: boolean; removedBytes: number }>(actionsUrl("cache/clear"), { confirm });
+}
+
 // Thrown by fetchJobStatus so pollers can tell "job vanished" (404 — the
 // in-memory registry was lost to a server restart) from a transient failure.
 export class JobStatusError extends Error {
@@ -181,6 +247,15 @@ export async function fetchAvailableRuns(models: ModelKey[], view: ViewKey): Pro
                 typeof record.upstreamFrameCount === "number" && Number.isFinite(record.upstreamFrameCount)
                   ? record.upstreamFrameCount
                   : null,
+              upstreamSourceFrameCount:
+                typeof record.upstreamSourceFrameCount === "number" && Number.isFinite(record.upstreamSourceFrameCount)
+                  ? record.upstreamSourceFrameCount
+                  : null,
+              upstreamDefaultRenderFrameCount:
+                typeof record.upstreamDefaultRenderFrameCount === "number" &&
+                Number.isFinite(record.upstreamDefaultRenderFrameCount)
+                  ? record.upstreamDefaultRenderFrameCount
+                  : null,
             };
           })
           .filter((run) => run.run)
@@ -195,6 +270,15 @@ export async function fetchAvailableRuns(models: ModelKey[], view: ViewKey): Pro
               cycle: String(record.cycle || ""),
               frameCount:
                 typeof record.frameCount === "number" && Number.isFinite(record.frameCount) ? record.frameCount : null,
+              sourceFrameCount:
+                typeof record.sourceFrameCount === "number" && Number.isFinite(record.sourceFrameCount)
+                  ? record.sourceFrameCount
+                  : null,
+              defaultRenderFrameCount:
+                typeof record.defaultRenderFrameCount === "number" && Number.isFinite(record.defaultRenderFrameCount)
+                  ? record.defaultRenderFrameCount
+                  : null,
+              maxHour: typeof record.maxHour === "number" && Number.isFinite(record.maxHour) ? record.maxHour : null,
             };
           })
           .filter((run) => run.runId)

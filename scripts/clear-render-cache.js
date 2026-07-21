@@ -21,13 +21,7 @@ const OPTIONAL_TARGETS = [
     path: path.join(OUTPUT_DIR, "noaa-beta-tools"),
   },
 ];
-const NOAA_TEMP_PREFIXES = [
-  "noaa-gfs-",
-  "noaa-nam-",
-  "noaa-nam3km-",
-  "noaa-hrrr-",
-  "noaa-selected-",
-];
+const NOAA_TEMP_PREFIXES = ["noaa-gfs-", "noaa-nam-", "noaa-nam3km-", "noaa-hrrr-", "noaa-selected-"];
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));

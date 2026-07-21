@@ -1,4 +1,4 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 async function openRenderMenu(page) {
   await page.getByRole("button", { name: "Render", exact: true }).click();
@@ -108,7 +108,7 @@ test("done-time refresh targets the submitted models even if the selection chang
 
   // Mid-job: drop HRRR from the live selection. The submitted job still built
   // HRRR artifacts, so the done-time force-refresh must still target it.
-  await drawer.getByRole("checkbox", { name: "HRRR" }).uncheck();
+  await drawer.getByRole("checkbox", { name: "HRRR", exact: true }).uncheck();
 
   const baseline = hrrrLatestFetches;
   allowDone = true;

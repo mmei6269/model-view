@@ -1,7 +1,7 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 const ONE_BY_ONE =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s0NkgAAAABJRU5ErkJggg==";
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNoaGj4DwAFhAKAfr3l1AAAAABJRU5ErkJggg==";
 
 // Frames at caller-picked hour offsets from now (same shape as timeline-playback.spec.js).
 // Frame labels are F000, F006, F012, ... regardless of the offsets.
@@ -88,7 +88,7 @@ function drawerCloseButton(page) {
 }
 
 async function openSoundingDrawer(page) {
-  await page.locator(".leaflet-container").first().dblclick();
+  await page.locator('[data-testid="map-canvas-host"]').first().dblclick();
   await expect(drawerCloseButton(page)).toBeVisible({ timeout: 15000 });
 }
 
@@ -211,4 +211,135 @@ test("? toggles the help popover", async ({ page }) => {
   await expect(page.getByTestId("help-popover")).toBeVisible();
   await page.keyboard.press("?");
   await expect(page.getByTestId("help-popover")).toHaveCount(0);
+});
+
+// ── Map-focused keyboard guard (Task 4.4 regression) ─────────────────────────
+// Invariant: while focus is inside the map host, arrow keys navigate the MAP
+// and must never also reach the app's window-level frame-step shortcut
+// (useKeyboardShortcuts). MapLibre's KeyboardHandler lets handled keydowns
+// bubble, so the engine adds a host-level keydown guard (maplibre-engine.ts
+// create()) that swallows MAP_NAV_KEYS. These specs pin that contract: if
+// the guard were dropped, or the app shortcut listener moved to capture
+// phase (ahead of the guard), ArrowRight on a focused map would double-fire
+// (pan + frame step) and the first spec below fails.
+
+function mapHost(page) {
+  return page.locator('[data-testid="map-canvas-host"]').first();
+}
+
+function readViewport(page) {
+  return page.evaluate(() => {
+    const bridge = window.__wx;
+    if (!bridge || bridge.panels().length === 0) {
+      return null;
+    }
+    return bridge.getViewport(bridge.panels()[0]);
+  });
+}
+
+// Click-focus the map (the canvas is tabindex 0 and takes focus natively on
+// mousedown), then confirm focus really is inside the host — the whole guard
+// contract is scoped to keys targeted inside it.
+async function focusMap(page) {
+  await mapHost(page).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const host = document.querySelector('[data-testid="map-canvas-host"]');
+        return host ? host.contains(document.activeElement) : false;
+      }),
+    )
+    .toBe(true);
+}
+
+// Zoom in until maxBounds stops pinning the camera: at the default fit view
+// the engine clamps keyboard pans to a zero offset (its instant maxBounds
+// constraint — see the recenter spec in sounding-liveness.spec.js), so
+// camera-delta assertions need panning freedom first. The trailing wait lets
+// the last zoom easing settle so the pan baseline read afterwards is stable.
+async function zoomInForPanFreedom(page) {
+  const zoomIn = page.getByTestId("map-zoom-in").first();
+  for (let i = 0; i < 3; i += 1) {
+    await zoomIn.click();
+    await page.waitForTimeout(150);
+  }
+  await page.waitForTimeout(500);
+}
+
+test("ArrowRight with the map focused pans the camera and does not step the frame", async ({ page }) => {
+  const valids = frameSetAt([-6, 0, 6, 12]);
+  await routeGfs(page, valids);
+  await page.goto(`/?hour=${encodeURIComponent(valids[1])}`);
+  await waitForLabel(page, "F006");
+
+  await zoomInForPanFreedom(page);
+  await focusMap(page);
+  const before = await readViewport(page);
+  expect(before).not.toBeNull();
+
+  await page.keyboard.press("ArrowRight");
+
+  // The camera panned east (keyboard pans are animated on both engines, so
+  // poll until the easing shows).
+  await expect
+    .poll(async () => {
+      const now = await readViewport(page);
+      return now ? now.lon - before.lon : 0;
+    })
+    .toBeGreaterThan(0);
+  // ...and the frame-step shortcut never fired (negative assertion: give a
+  // would-be step time to land, then confirm the label is unchanged).
+  await page.waitForTimeout(300);
+  await expect(frameLabel(page)).toHaveText("F006");
+});
+
+test("ArrowRight with focus outside the map steps the frame and leaves the camera alone", async ({ page }) => {
+  const valids = frameSetAt([-6, 0, 6, 12]);
+  await routeGfs(page, valids);
+  await page.goto(`/?hour=${encodeURIComponent(valids[1])}`);
+  await waitForLabel(page, "F006");
+
+  // Same panning freedom as the focused-map spec, so "camera did not move"
+  // is a real assertion rather than a maxBounds pin.
+  await zoomInForPanFreedom(page);
+  // Drop focus from the zoom button back to body.
+  await page.evaluate(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) {
+      active.blur();
+    }
+  });
+  const before = await readViewport(page);
+  expect(before).not.toBeNull();
+
+  await page.keyboard.press("ArrowRight");
+  await waitForLabel(page, "F012");
+
+  // Any keyboard pan would still be easing at this point; give it time to
+  // show, then confirm the camera never moved.
+  await page.waitForTimeout(500);
+  const after = await readViewport(page);
+  expect(after).toEqual(before);
+});
+
+test("Shift+ArrowRight with the map focused never reaches the frame-step shortcut", async ({ page }) => {
+  const valids = frameSetAt([-6, 0, 6, 12]);
+  await routeGfs(page, valids);
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
+  await page.goto(`/?hour=${encodeURIComponent(valids[1])}`);
+  await waitForLabel(page, "F006");
+
+  await zoomInForPanFreedom(page);
+  await focusMap(page);
+  await page.keyboard.press("Shift+ArrowRight");
+
+  // Shift+arrow is MapLibre's rotation binding, disabled via
+  // keyboard.disableRotation() in this 2D app, so no camera action results.
+  // The invariant is that the key stays inside the map: the app shortcut
+  // treats shift+arrow as a bare arrow (only meta/ctrl/alt are exempt), so
+  // any leak would step the frame.
+  await page.waitForTimeout(300);
+  await expect(frameLabel(page)).toHaveText("F006");
+  expect(pageErrors).toEqual([]);
 });

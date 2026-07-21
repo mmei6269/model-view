@@ -3,6 +3,13 @@
 const { Worker } = require("worker_threads");
 const { clampInt } = require("./local-artifact-options");
 
+// Capacity of the frame worker's hydrated-metadata LRU. The pool maintains
+// a per-worker mirror of that LRU (same insert/refresh/evict transitions on
+// the same ordered message stream), so both sides always agree on which
+// keys the worker still holds; a desynced set would strip payloads whose
+// metadata the worker already evicted.
+const WORKER_METADATA_LRU_MAX_ENTRIES = 8;
+
 async function runWithConcurrency(items, concurrency, worker) {
   if (!Array.isArray(items) || items.length === 0) {
     return;
@@ -78,6 +85,9 @@ class FrameWorkerPool {
       busy: false,
       activeJob: null,
       dead: false,
+      // LRU mirror of the worker's hydrated-metadata cache; a fresh
+      // respawned worker starts empty so it is re-hydrated.
+      sentMetadataKeys: new Map(),
     };
     worker.on("message", (message) => this.handleMessage(state, message));
     worker.on("error", (error) => this.handleWorkerDeath(state, error));
@@ -120,12 +130,37 @@ class FrameWorkerPool {
       }
       state.busy = true;
       state.activeJob = next;
-      state.worker.postMessage({
-        type: "render-frame",
-        id: next.id,
-        payload: next.payload,
-      });
+      state.worker.postMessage(this.buildJobMessage(state, next));
     }
+  }
+
+  buildJobMessage(state, job) {
+    const payload = job.payload;
+    const metadataKey = payload?.latestMetadataKey;
+    // Run-constant latestMetadata is structured-cloned to each worker once
+    // per identity key instead of once per frame; the worker caches it by
+    // key in an LRU that this mirror replays transition-for-transition on
+    // the same ordered message stream. Message ordering per worker
+    // guarantees the hydrating message is processed before any message
+    // that omits the metadata. Retried jobs re-enter via run() with their
+    // full payload, so a respawned worker (fresh mirror) is re-hydrated.
+    if (!metadataKey || !payload?.latestMetadata) {
+      return { type: "render-frame", id: job.id, payload };
+    }
+    const mirror = state.sentMetadataKeys;
+    if (mirror.has(metadataKey)) {
+      // Matches the worker's refresh-on-use so eviction order stays aligned.
+      mirror.delete(metadataKey);
+      mirror.set(metadataKey, true);
+      const { latestMetadata, ...rest } = payload;
+      void latestMetadata;
+      return { type: "render-frame", id: job.id, payload: rest };
+    }
+    mirror.set(metadataKey, true);
+    while (mirror.size > WORKER_METADATA_LRU_MAX_ENTRIES) {
+      mirror.delete(mirror.keys().next().value);
+    }
+    return { type: "render-frame", id: job.id, payload };
   }
 
   handleMessage(state, message) {
@@ -283,6 +318,7 @@ function reviveBodyBuffer(body) {
 module.exports = {
   AsyncSemaphore,
   FrameWorkerPool,
+  WORKER_METADATA_LRU_MAX_ENTRIES,
   reviveFrameArtifacts,
   runWithConcurrency,
 };

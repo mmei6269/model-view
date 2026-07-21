@@ -1,7 +1,7 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 const ONE_BY_ONE =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s0NkgAAAABJRU5ErkJggg==";
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNoaGj4DwAFhAKAfr3l1AAAAABJRU5ErkJggg==";
 
 function latestPointer(run, manifestKey) {
   return {
@@ -139,7 +139,7 @@ test("schema v2 manifest fields are consumed", async ({ page }) => {
 
   const framesButton = page.getByRole("button", { name: /Frames/ }).first();
   await framesButton.click();
-  await expect(page.getByRole("button", { name: "001" }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: /^Forecast hour 1:/ })).toBeDisabled();
 });
 
 test("model switch preserves nearest valid time", async ({ page }) => {

@@ -1,58 +1,70 @@
-import { useEffect, type RefObject } from "react";
-import L, { type Map as LeafletMap } from "leaflet";
-import {
-  DYNAMIC_PARAMETER_PANE,
-  WEATHER_OVERLAY_CLASS,
-  getLayerPane,
-  getLayerZIndex,
-  shouldUseRawPixelRendering,
-} from "../../config/layers";
+import { useEffect, useRef, type RefObject } from "react";
+import { shouldUseRawPixelRendering } from "../../config/layers";
 import { resolveLayerUrl } from "../../core/artifact-client";
 import { markFrameLayerLoaded } from "../../core/frame-prefetch";
+import type { MapEngine } from "../../core/map-engine/types";
 import type { FrameRecord, LayerKey, ReflectivityGateDbz, SynopticVectorPayload } from "../../types";
 
 interface UseWeatherOverlaysArgs {
   activeLayers: Set<LayerKey>;
   frame: FrameRecord | null;
   mapReady: boolean;
-  mapRef: RefObject<LeafletMap | null>;
-  overlayRef: RefObject<Map<LayerKey, L.ImageOverlay>>;
+  engineRef: RefObject<MapEngine | null>;
   reflectivityGate: ReflectivityGateDbz;
   contourVectorLayerKeys?: Set<LayerKey>;
   synopticVector: SynopticVectorPayload | null;
+  allowSynopticRasterFallback?: boolean;
 }
 
+// The hook decides WHICH weather rasters exist (active layers minus
+// vector-rendered ones), which frame/URL each shows, and their opacity; the
+// engine owns the overlays themselves. setWeatherImage is called for every
+// desired layer on every pass, in stacking order — the engine derives the
+// dynamic z-ordering from that call order.
 export function useWeatherOverlays({
   activeLayers,
   frame,
   mapReady,
-  mapRef,
-  overlayRef,
+  engineRef,
   reflectivityGate,
   contourVectorLayerKeys,
   synopticVector,
+  allowSynopticRasterFallback = true,
 }: UseWeatherOverlaysArgs): void {
+  // Keys currently pushed to the engine, for the eviction sweep, plus each
+  // key's load-listener unsubscribe so every pass can re-arm markLoaded with
+  // that pass's frame (the engine-verb equivalent of the old
+  // off("load")/once("load", markLoaded) pair).
+  const engineKeysRef = useRef<Set<LayerKey>>(new Set());
+  const loadUnsubsRef = useRef<Map<LayerKey, () => void>>(new Map());
+
   useEffect(() => {
     if (!mapReady) {
       return;
     }
-    const map = mapRef.current;
-    if (!map) {
+    const engine = engineRef.current;
+    if (!engine) {
       return;
     }
 
-    const bounds = frame
-      ? L.latLngBounds([frame.bounds.south, frame.bounds.west], [frame.bounds.north, frame.bounds.east])
-      : null;
+    const bounds = frame ? frame.bounds : null;
     const desired = new Set<LayerKey>();
     const hasVectorSynoptic = Boolean(synopticVector && activeLayers.has("synoptic"));
     const orderedLayers = Array.from(activeLayers);
 
-    orderedLayers.forEach((layerKey, index) => {
+    orderedLayers.forEach((layerKey) => {
       if (!activeLayers.has(layerKey)) {
         return;
       }
       if (layerKey === "synoptic" && hasVectorSynoptic) {
+        return;
+      }
+      // The legacy synoptic PNG combines isobars and thickness. It is an
+      // honest fallback only when both line components are requested; with a
+      // single component selected, hide it rather than draw unrequested
+      // meteorological guidance while the independently toggleable vector
+      // payload loads or fails.
+      if (layerKey === "synoptic" && !allowSynopticRasterFallback) {
         return;
       }
       if (contourVectorLayerKeys?.has(layerKey)) {
@@ -63,40 +75,34 @@ export function useWeatherOverlays({
         return;
       }
       desired.add(layerKey);
-      const existing = overlayRef.current.get(layerKey);
-      const pane = layerKey === "synoptic" ? getLayerPane(layerKey) : DYNAMIC_PARAMETER_PANE;
-      const zIndex = layerKey === "synoptic" ? getLayerZIndex(layerKey) : getLayerZIndex("__dynamic__", index);
-      const opacity = layerKey === "synoptic" ? 0.9 : 0.92;
       const markLoaded = () => markFrameLayerLoaded(frame, layerKey, reflectivityGate);
-      if (!existing) {
-        const overlay = L.imageOverlay(url, bounds, {
-          opacity,
-          interactive: false,
-          pane,
-          zIndex,
-          className: shouldUseRawPixelRendering(layerKey)
-            ? `${WEATHER_OVERLAY_CLASS} wx-overlay-${layerKey}`
-            : `wx-overlay-${layerKey}`,
-        });
-        overlay.once("load", markLoaded);
-        overlay.addTo(map);
-        overlayRef.current.set(layerKey, overlay);
-      } else {
-        existing.off("load");
-        existing.once("load", markLoaded);
-        existing.setUrl(url);
-        existing.setBounds(bounds);
-        existing.setZIndex(zIndex);
-      }
+      // Swap the registered load callback BEFORE the URL is set, so the
+      // decode that completes for this URL marks this frame loaded.
+      loadUnsubsRef.current.get(layerKey)?.();
+      loadUnsubsRef.current.set(layerKey, engine.onWeatherImageLoaded(layerKey, markLoaded));
+      engine.setWeatherImage(layerKey, url, bounds, {
+        opacity: layerKey === "synoptic" ? 0.9 : 0.92,
+        pixelated: shouldUseRawPixelRendering(layerKey),
+      });
     });
 
-    for (const [key, overlay] of overlayRef.current.entries()) {
+    for (const key of engineKeysRef.current) {
       if (desired.has(key)) {
         continue;
       }
-      overlay.off("load");
-      map.removeLayer(overlay);
-      overlayRef.current.delete(key);
+      loadUnsubsRef.current.get(key)?.();
+      loadUnsubsRef.current.delete(key);
+      engine.removeWeatherImage(key);
     }
-  }, [activeLayers, contourVectorLayerKeys, frame, mapReady, mapRef, overlayRef, reflectivityGate, synopticVector]);
+    engineKeysRef.current = desired;
+  }, [
+    activeLayers,
+    allowSynopticRasterFallback,
+    contourVectorLayerKeys,
+    engineRef,
+    frame,
+    mapReady,
+    reflectivityGate,
+    synopticVector,
+  ]);
 }

@@ -45,6 +45,18 @@ async function pathExists(p) {
   }
 }
 
+// A vanished entry sizes as 0: builders create/rename temp files while these
+// walks run (cache stats, prune planning), so a file deleted between readdir
+// and stat must never fail the whole scan.
+async function statSizeSafe(target) {
+  try {
+    return (await fs.promises.stat(target)).size;
+  } catch (error) {
+    if (error?.code === "ENOENT") return 0;
+    throw error;
+  }
+}
+
 async function dirSize(target) {
   let total = 0;
   let entries;
@@ -53,14 +65,13 @@ async function dirSize(target) {
   } catch (error) {
     if (error?.code === "ENOENT") return 0;
     if (error?.code === "ENOTDIR") {
-      const stat = await fs.promises.stat(target);
-      return stat.size;
+      return statSizeSafe(target);
     }
     throw error;
   }
   for (const entry of entries) {
     const child = path.join(target, entry.name);
-    total += entry.isDirectory() ? await dirSize(child) : (await fs.promises.stat(child)).size;
+    total += entry.isDirectory() ? await dirSize(child) : await statSizeSafe(child);
   }
   return total;
 }
@@ -270,4 +281,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { planPrune, runPrune, parseArgs, RAW_SUBDIRS, KNOWN_FLAGS };
+module.exports = { planPrune, runPrune, parseArgs, dirSize, RAW_SUBDIRS, KNOWN_FLAGS };

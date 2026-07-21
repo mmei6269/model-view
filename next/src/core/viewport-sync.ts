@@ -1,24 +1,22 @@
-import type { Map as LeafletMap } from "leaflet";
+import type { EngineEvent, MapEngine } from "./map-engine/types";
 
-interface RegisteredMap {
-  map: LeafletMap;
+interface RegisteredEngine {
+  engine: MapEngine;
   detach: () => void;
 }
 
-const INTERNAL_EVENT_WINDOW_MS = 120;
 const MOVE_EPSILON_DEG = 0.0001;
 const ZOOM_EPSILON = 0.001;
 
 export interface ViewportSyncController {
-  register: (panelId: string, map: LeafletMap) => void;
+  register: (panelId: string, engine: MapEngine) => void;
   unregister: (panelId: string) => void;
   setEnabled: (enabled: boolean) => void;
-  invalidateAll: () => void;
+  alignAll: () => void;
 }
 
 export function createViewportSyncController(): ViewportSyncController {
-  const maps = new Map<string, RegisteredMap>();
-  const internalUntilByPanel = new Map<string, number>();
+  const engines = new Map<string, RegisteredEngine>();
   let enabled = true;
   let pendingSource: { id: string; includeZoom: boolean } | null = null;
   let rafId = 0;
@@ -39,86 +37,62 @@ export function createViewportSyncController(): ViewportSyncController {
     });
   }
 
-  function isInternalEvent(panelId: string): boolean {
-    return Date.now() <= (internalUntilByPanel.get(panelId) || 0);
-  }
-
-  function markInternal(panelId: string): void {
-    internalUntilByPanel.set(panelId, Date.now() + INTERNAL_EVENT_WINDOW_MS);
-  }
-
   function syncFrom(sourcePanelId: string, includeZoom: boolean): void {
-    const sourceEntry = maps.get(sourcePanelId);
+    const sourceEntry = engines.get(sourcePanelId);
     if (!sourceEntry) {
       return;
     }
-    const sourceCenter = sourceEntry.map.getCenter();
-    const sourceZoom = sourceEntry.map.getZoom();
+    const sourceCenter = sourceEntry.engine.getCenter();
+    const sourceZoom = sourceEntry.engine.getZoom();
 
-    for (const [panelId, target] of maps.entries()) {
+    for (const [panelId, target] of engines.entries()) {
       if (panelId === sourcePanelId) {
         continue;
       }
-      const currentCenter = target.map.getCenter();
-      const currentZoom = target.map.getZoom();
+      const currentCenter = target.engine.getCenter();
+      const currentZoom = target.engine.getZoom();
       const latDelta = Math.abs(currentCenter.lat - sourceCenter.lat);
-      const lonDelta = Math.abs(currentCenter.lng - sourceCenter.lng);
+      const lonDelta = Math.abs(currentCenter.lon - sourceCenter.lon);
       const zoomDelta = Math.abs(currentZoom - sourceZoom);
 
       if (latDelta < MOVE_EPSILON_DEG && lonDelta < MOVE_EPSILON_DEG && (!includeZoom || zoomDelta < ZOOM_EPSILON)) {
         continue;
       }
-      markInternal(panelId);
-      if (includeZoom) {
-        target.map.setView(sourceCenter, sourceZoom, { animate: false, noMoveStart: true });
-      } else {
-        target.map.setView(sourceCenter, currentZoom, { animate: false, noMoveStart: true });
-      }
+      // The engine stamps every event this jump fires with wxSync meta; the
+      // guards in register() drop those, so the sync never echoes back.
+      target.engine.jumpTo({ center: sourceCenter, zoom: includeZoom ? sourceZoom : currentZoom }, { wxSync: true });
     }
   }
 
-  function register(panelId: string, map: LeafletMap): void {
+  function register(panelId: string, engine: MapEngine): void {
     unregister(panelId);
-    const onMove = () => {
-      if (!enabled || isInternalEvent(panelId)) {
+    const guarded = (includeZoom: boolean) => (event: EngineEvent) => {
+      if (!enabled || event.meta?.wxSync) {
         return;
       }
-      scheduleSync(panelId, false);
+      scheduleSync(panelId, includeZoom);
     };
-    const onMoveEnd = () => {
-      if (!enabled || isInternalEvent(panelId)) {
-        return;
-      }
-      scheduleSync(panelId, true);
-    };
-    const onZoomEnd = () => {
-      if (!enabled || isInternalEvent(panelId)) {
-        return;
-      }
-      scheduleSync(panelId, true);
-    };
+    const offMove = engine.on("move", guarded(false));
+    const offMoveEnd = engine.on("moveend", guarded(true));
+    const offZoomEnd = engine.on("zoomend", guarded(true));
 
-    map.on("move", onMove);
-    map.on("moveend", onMoveEnd);
-    map.on("zoomend", onZoomEnd);
-    maps.set(panelId, {
-      map,
+    engines.set(panelId, {
+      engine,
       detach: () => {
-        map.off("move", onMove);
-        map.off("moveend", onMoveEnd);
-        map.off("zoomend", onZoomEnd);
+        offMove();
+        offMoveEnd();
+        offZoomEnd();
       },
     });
   }
 
   function unregister(panelId: string): void {
-    const existing = maps.get(panelId);
+    const existing = engines.get(panelId);
     if (!existing) {
       return;
     }
     existing.detach();
-    maps.delete(panelId);
-    internalUntilByPanel.delete(panelId);
+    engines.delete(panelId);
   }
 
   function setEnabled(next: boolean): void {
@@ -130,9 +104,17 @@ export function createViewportSyncController(): ViewportSyncController {
     }
   }
 
-  function invalidateAll(): void {
-    for (const entry of maps.values()) {
-      entry.map.invalidateSize({ pan: false, debounceMoveend: true });
+  // Snap every panel to the primary (oldest-registered) panel's viewport.
+  // Used when linking turns on after panels drifted apart while unlinked, and
+  // after layout changes — without it, relinking only converges on the next
+  // manual gesture, from whichever panel happens to move first.
+  function alignAll(): void {
+    if (!enabled || engines.size < 2) {
+      return;
+    }
+    const first = engines.keys().next();
+    if (!first.done) {
+      syncFrom(first.value, true);
     }
   }
 
@@ -140,6 +122,6 @@ export function createViewportSyncController(): ViewportSyncController {
     register,
     unregister,
     setEnabled,
-    invalidateAll,
+    alignAll,
   };
 }

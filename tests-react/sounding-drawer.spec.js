@@ -1,4 +1,4 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 // Point-sounding payload with enough real levels to satisfy the drawer's
 // loaded state (`levels.length > 0`) and give the Skew-T/hodograph plottable
@@ -17,7 +17,9 @@ function soundingPayload() {
   return {
     model: "gfs",
     modelLabel: "GFS",
-    runId: "20260214-0000Z",
+    run: "20260214-0000Z",
+    referenceTime: "2026-02-14T00:00:00Z",
+    methodVersion: "point-sounding-earth-winds-ceiling-datum-effective-scp-v2",
     forecastHour: 0,
     validTime: "2026-02-14T00:00:00Z",
     lat: 39.0,
@@ -27,7 +29,20 @@ function soundingPayload() {
     selectedRecordCount: 42,
     levels,
     parcelTrace: { type: "SFC", label: "Surface parcel", levels },
-    indices: { sbcapeJkg: 1500, bunkersRightDirDeg: 240, bunkersRightKt: 30 },
+    windReference: {
+      sourceFrame: "grid-relative",
+      outputFrame: "earth-relative",
+      projection: "lambert",
+      rotationApplied: true,
+      rotationAngleDeg: 2.5,
+    },
+    indices: {
+      sbcapeJkg: 1500,
+      bunkersRightDirDeg: 240,
+      bunkersRightKt: 30,
+      cloudCeilingState: "none",
+      cloudCeilingDatum: "AGL",
+    },
     warnings: [],
   };
 }
@@ -48,7 +63,7 @@ test("double-click opens the sounding drawer, shows the profile, and closes", as
   await expect(panel.locator("footer")).toContainText("Valid", { timeout: 60_000 });
   await expect(panel.locator("footer")).not.toContainText("Valid --", { timeout: 60_000 });
 
-  const mapContainer = panel.locator(".leaflet-container");
+  const mapContainer = panel.locator('[data-testid="map-canvas-host"]');
   const box = await mapContainer.boundingBox();
   if (!box) throw new Error("Map container bounding box is unavailable.");
   await mapContainer.dblclick({ position: { x: box.width / 2, y: box.height / 2 } });
@@ -61,7 +76,46 @@ test("double-click opens the sounding drawer, shows the profile, and closes", as
   await expect(drawer.getByText("Building point profile...")).toHaveCount(0);
   await expect(drawer.getByText("Hodograph")).toBeVisible();
   await expect(drawer.getByLabel("Sounding latitude")).toBeVisible();
+  await expect(drawer.getByTestId("sounding-provenance")).toContainText("run 20260214-0000Z");
+  await expect(drawer.getByTestId("sounding-provenance")).toContainText("request 39.00°N 95.00°W");
+  await expect(drawer.getByTestId("sounding-provenance")).toContainText(
+    "wind grid-relative -> earth-relative, lambert, rotation applied (2.50 deg)",
+  );
+  await expect(drawer.getByText("App Convective-Environment Heuristic")).toBeVisible();
+  await expect(drawer.getByText("N/A", { exact: true })).toBeVisible();
+  await expect(drawer.getByText(/no independent CIN veto/)).toBeVisible();
+  await expect(drawer.getByText(/Cloud ceiling: No ceiling/)).toBeVisible();
+  await expect(drawer.getByText(/Wind reference: grid-relative -> earth-relative/)).toBeVisible();
 
   await drawer.getByRole("button", { name: "Close sounding" }).click();
   await expect(panel.locator("aside")).toHaveCount(0);
+});
+
+test("the drawer exports the Skew-T + hodograph as a PNG download", async ({ page }) => {
+  await page.route("**/soundings/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(soundingPayload()),
+    });
+  });
+
+  await page.goto("/");
+  const panel = page.locator("article").first();
+  await expect(panel.locator("footer")).toContainText("Valid", { timeout: 60_000 });
+  await expect(panel.locator("footer")).not.toContainText("Valid --", { timeout: 60_000 });
+
+  const mapContainer = panel.locator('[data-testid="map-canvas-host"]');
+  const box = await mapContainer.boundingBox();
+  if (!box) throw new Error("Map container bounding box is unavailable.");
+  await mapContainer.dblclick({ position: { x: box.width / 2, y: box.height / 2 } });
+
+  const drawer = panel.locator("aside");
+  await expect(drawer.getByText("Hodograph")).toBeVisible();
+
+  const downloadPromise = page.waitForEvent("download");
+  await drawer.getByRole("button", { name: "PNG", exact: true }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^sounding_gfs_.+_f000_.+\.png$/);
+  await expect(page.getByTestId("toast").filter({ hasText: "Sounding PNG saved" })).toBeVisible();
 });

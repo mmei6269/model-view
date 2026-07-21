@@ -4,10 +4,18 @@ const fs = require("fs");
 const path = require("path");
 
 async function readJsonIfExists(filePath) {
-  if (!(await pathExists(filePath))) {
-    return null;
+  // No exists pre-check: cache prune/clear can delete the file between a
+  // check and the read, and access-denied must surface instead of reading
+  // as "missing". ENOENT is the only condition that means "not there".
+  let content;
+  try {
+    content = await fs.promises.readFile(filePath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
   }
-  const content = await fs.promises.readFile(filePath, "utf8");
   return JSON.parse(content);
 }
 
@@ -34,8 +42,16 @@ async function writeBufferAtomic(filePath, body, options = {}) {
     return;
   }
   const tempPath = `${filePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-  await fs.promises.writeFile(tempPath, buffer);
-  await fs.promises.rename(tempPath, filePath);
+  try {
+    await fs.promises.writeFile(tempPath, buffer);
+    await fs.promises.rename(tempPath, filePath);
+  } catch (error) {
+    // Manifests/pointers/markers are not best-effort, so the failure still
+    // propagates — but never leave the orphaned temp file behind (ENOSPC
+    // failures would otherwise self-amplify by eating more disk).
+    await fs.promises.unlink(tempPath).catch(() => {});
+    throw error;
+  }
 }
 
 module.exports = {

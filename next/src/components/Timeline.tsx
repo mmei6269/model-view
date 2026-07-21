@@ -1,6 +1,6 @@
 import { useMemo, useState, type CSSProperties } from "react";
 import { formatValidLabel, formatValidLocalShort, formatValidUtcShort, toEpochMs } from "../core/time";
-import type { PlaybackSpeed } from "../hooks/useTimelineController";
+import { PLAYBACK_BASE_INTERVAL_MS, type PlaybackSpeed } from "../hooks/useTimelineController";
 import type { FrameHourStatus, TimelineMode, ValidTimeIso } from "../types";
 import { computeDayBoundaryTicks } from "./timeline-track";
 
@@ -111,6 +111,10 @@ export default function Timeline({
           <button
             type="button"
             aria-label={playing ? "Pause playback" : "Play timeline"}
+            // The scheduling contract, exposed for specs: wall-clock speed
+            // ratios are unobservable on render-bound CI shards, so tests
+            // assert the interval the playback loop will actually schedule.
+            data-playback-interval-ms={Math.round(PLAYBACK_BASE_INTERVAL_MS / playbackSpeed)}
             onClick={onTogglePlay}
             className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-cyan-500 text-sm text-slate-950 shadow-[0_0_16px_rgba(34,211,238,0.25)] hover:bg-cyan-400 active:scale-95 ${
               playing ? "animate-[pulseGlow_2s_ease-in-out_infinite]" : ""

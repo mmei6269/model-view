@@ -4,8 +4,8 @@ const SHARED_CONFIG = require("../../shared/modelview-config.json");
 const REFLECTIVITY_PRECIP_TYPE_COLORS = require("../../shared/reflectivity-precip-type-colors.json");
 const SNOWFALL_LEGEND_COLORS = require("../../shared/snowfall-legend-colors.json");
 const PLANNED_COLOR_MAPS = require("../../shared/noaa-beta-planned-color-maps.json");
-const CATALOG_SCALE_PALETTES = require("../../shared/catalog-scale-palettes.json");
 const { loadColorMaps } = require("./color-maps");
+const CATALOG_SCALE_PALETTES = require("../../shared/catalog-scale-palettes.json");
 
 const SURFACE_GROUP = "Surface & Boundary Layer";
 const PRECIP_GROUP = "Precipitation";
@@ -17,6 +17,19 @@ const SEVERE_KINEMATICS_GROUP = "Severe: Kinematics";
 const WINTER_GROUP = "Winter / Snow & Ice";
 const UPPER_AIR_GROUP = "Upper Air: Height / Wind / Temp";
 const UPPER_AIR_DIAGNOSTIC_GROUP = "Upper Air: Omega / Vorticity";
+
+// Research-grade diagnostics are deliberately absent from the default catalog.
+// They are added only when a build explicitly names them with
+// --science-prototypes. Keeping stable IDs here lets the CLI, manifest, catalog,
+// and renderer record the same opt-in intent without exposing an experimental
+// field in ordinary analyst builds.
+const SCIENCE_PROTOTYPE_IDS = Object.freeze([
+  "camDcape21Level",
+  "effectiveStp100mbReduced",
+  "rowAwareCenterValidation",
+]);
+const CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY = "dcape21LevelCamPrototype";
+const EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY = "effectiveLayerStp100mbReducedPrototype";
 
 // Render-panel taxonomy: the 9 catalog groups collapse to 7 owner build/compute categories.
 // Severe thermo+kinematics merge; the two upper-air groups merge. WIND_GROUP is an alias of
@@ -54,6 +67,8 @@ const FULL_TIER_KEYS = Object.freeze(
     "effectiveLayerSupercellCompositeParameter",
     "effectiveLayerSignificantTornadoParameter",
     "dcape",
+    CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY,
+    EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY,
   ]),
 );
 
@@ -292,7 +307,7 @@ const SCALES = Object.freeze({
   relativeVorticity1e5S1: relativeVorticityScale(),
   verticalVelocityDPaS: plannedScale("verticalVelocityDPaS", {
     alpha: 1,
-    legendTicks: [-60, -40, -20, -10, 0, 10, 20, 30, 40],
+    legendTicks: [-60, -40, -20, -10, 0, 10, 20, 30],
     positiveGrayOpacityRampFrom: 0,
     whiteTransparent: true,
   }),
@@ -321,7 +336,7 @@ const SCALES = Object.freeze({
   cinJkg: plannedScale("cinJkg", {
     alpha: 1,
     legendTicks: [-1000, -600, -400, -200, -100, -50, 0],
-    thresholdNote: "Signed negative; near-zero values fade out through the generated opacity ramp",
+    thresholdNote: "Signed negative; near-zero values fade out through the source opacity ramp",
   }),
   surfaceBasedLclM: plannedScale("surfaceBasedLclM", {
     alpha: 1,
@@ -344,7 +359,7 @@ const SCALES = Object.freeze({
   }),
   surfaceThetaEK: plannedScale("surfaceThetaEK", {
     alpha: 1,
-    legendTicks: [280, 300, 320, 340, 360, 380],
+    legendTicks: [280, 300, 320, 340, 360],
   }),
   frontogenesisCPer100Km3Hr: plannedScale("frontogenesisCPer100Km3Hr", {
     alpha: 1,
@@ -393,9 +408,9 @@ const SCALES = Object.freeze({
   precipRateType: {
     min: 0,
     max: 0.5,
-    minVisible: 0.01,
+    minVisible: 0.02,
     alpha: 1,
-    thresholdNote: "Direct PRATE colored by model precip type; hidden < 0.01 in/hr",
+    thresholdNote: "Direct PRATE colored by model precip type; transparent below 0.02 in/hr",
     legendTicks: [0.01, 0.05, 0.1, 0.2, 0.5],
     legendStops: buildPrecipRateTypeOverviewStops(),
   },
@@ -540,6 +555,7 @@ function derivedScalar(key, label, unit, group, options = {}) {
     profileVariables,
     profileLevels,
     surfaceHeightRequired: Boolean(options.surfaceHeightRequired),
+    ...(options.completeProfileRequired ? { completeProfileRequired: true } : {}),
     lazyProfile: Boolean(options.lazyProfile),
     transform: options.transform || "identity",
     methodVersion: options.methodVersion || "derived-noaa-v1",
@@ -588,7 +604,7 @@ function precipRateType(key, label, group, options = {}) {
     group,
     kind: "precipRateType",
     rateKey: options.rateKey || "precipRate",
-    rateSelector: selector("PRATE", "surface"),
+    rateSelector: selector("PRATE", "surface", { statistic: "instant" }),
     precipTypeKeys: {
       rain: "precipRateTypeRain",
       snow: "precipRateTypeSnow",
@@ -628,13 +644,13 @@ function heightContour(level, intervalDam) {
     transform: "metersToDam",
     scale: "heightContourDam",
     required: false,
-    thresholdNote: `${intervalDam} dam contours`,
-    sourceNote: null,
+    thresholdNote: `${intervalDam} dam minor / ${intervalDam * 2} dam major contours`,
+    sourceNote: `NOAA HGT at ${level} mb; ${intervalDam} dam contour interval with ${intervalDam * 2} dam majors. Theme-aware upper-air ink; contour geometry is presentation-smoothed while hover values remain unsmoothed.`,
     contourIntervalDam: intervalDam,
     contourLevelMb: level,
     legendType: "height-contour",
-    methodVersion: "hgt-pressure-contour-simple-v1",
-    derivation: `NOAA HGT at ${level} mb converted from meters to decameters and rendered as ${intervalDam} dam height contours.`,
+    methodVersion: "hgt-pressure-contour-model-smoothed-v2",
+    derivation: `NOAA HGT at ${level} mb converted from meters to decameters. Model-dependent Gaussian presentation smoothing is applied before marching squares; contours use ${intervalDam} dam minor and ${intervalDam * 2} dam major intervals, while hover retains the unsmoothed field.`,
   };
 }
 
@@ -680,7 +696,7 @@ function precipAccumulation(key, label, options = {}) {
     group: options.group || PRECIP_GROUP,
     kind: "precipAccumulation",
     inputKey: key,
-    selector: selector("APCP", "surface"),
+    selector: selector("APCP", "surface", { statistic: "accumulation" }),
     scale: "precipIn",
     required: false,
     transform: "identity",
@@ -815,19 +831,20 @@ const BASE_PARAMETERS = [
     levelPattern: /entire atmosphere/i,
     scale: "cloudPct",
   }),
-  scalar("cloudCeiling", "Cloud Ceiling", "ft", CLOUD_GROUP, "cloudCeiling", selector("HGT", "cloud ceiling"), {
+  scalar("cloudCeiling", "Cloud Ceiling (AGL)", "ft", CLOUD_GROUP, "cloudCeiling", selector("HGT", "cloud ceiling"), {
     transform: "metersToFeet",
     scale: "cloudCeilingFt",
     models: ["gfs", "nam3km", "hrrr"],
     sourceSelectors: [{ key: "profileSurfaceHeight", selector: selector("HGT", "surface") }],
-    sourceNote: "NOAA HGT at cloud ceiling minus surface HGT, converted from meters to feet AGL",
-    methodVersion: "cloud-ceiling-msl-to-agl-v1",
+    sourceNote:
+      "NOAA HGT at cloud ceiling; 20,000 m no-ceiling sentinels are made missing before interpolation; GFS/NAM-family MSL values subtract surface HGT, while HRRR values are already AGL; converted to feet",
+    methodVersion: "cloud-ceiling-model-datum-agl-no-ceiling-v2",
     derivation:
-      "Cloud-ceiling geopotential height converted to AGL height by subtracting model surface HGT and clamping at zero.",
+      "Model-aware cloud-ceiling conversion: GFS/NAM-family MSL ceiling HGT subtracts model surface HGT and clamps at zero, while HRRR's native AGL ceiling is retained; the UPP 20,000 m no-ceiling sentinel is excluded before regridding.",
   }),
   scalar(
     "wetBulbZeroHeight",
-    "Wet Bulb Zero",
+    "Wet-Bulb Zero (MSL)",
     "ft",
     WINTER_GROUP,
     "wetBulbZeroHeight",
@@ -881,7 +898,7 @@ const BASE_PARAMETERS = [
       models: ["nam3km", "hrrr"],
     },
   ),
-  derivedScalar("surfaceBasedLclHeight", "Surface LCL", "m", SEVERE_THERMO_GROUP, {
+  derivedScalar("surfaceBasedLclHeight", "Surface LCL (AGL)", "m", SEVERE_THERMO_GROUP, {
     scale: "surfaceBasedLclM",
     directInputKey: "surfaceBasedLclHeightDirect",
     directSelector: selector("HGT", "level of adiabatic condensation from sfc"),
@@ -900,16 +917,16 @@ const BASE_PARAMETERS = [
   }),
   scalar(
     "updraftHelicity2to5km1h",
-    "2-5 km UH",
+    "1-h Max 2-5 km UH",
     "m2/s2",
     SEVERE_KINEMATICS_GROUP,
     "updraftHelicity2to5km1h",
-    selector("MXUPHL", "5000-2000 m above ground"),
+    selector("MXUPHL", "5000-2000 m above ground", { statistic: "maximum" }),
     { scale: "updraftHelicity2to5kmM2S2", models: ["nam3km", "hrrr"] },
   ),
   scalar(
     "maxSimulatedHailSize",
-    "Max Hail Size",
+    "Max Model-Simulated Hail",
     "in",
     SEVERE_THERMO_GROUP,
     "maxSimulatedHailSize",
@@ -924,7 +941,7 @@ const BASE_PARAMETERS = [
   derivedAccumulation("freezingRainLiquidTotal", "Freezing Rain Liquid", "in", WINTER_GROUP, {
     scale: "freezingRainIceIn",
     directInputKey: "freezingRainLiquidTotalDirect",
-    directSelector: selector("FRZR", "surface"),
+    directSelector: selector("FRZR", "surface", { statistic: "accumulation" }),
     sourceSelectors: [
       { key: "precip", selector: selector("APCP", "surface") },
       { key: "precipRateTypeFreezingRain", selector: selector("CFRZR", "surface") },
@@ -940,18 +957,30 @@ const BASE_PARAMETERS = [
     levelPattern: /entire atmosphere/i,
     scale: "pwat",
   }),
-  scalar("pblHeight", "PBL Height", "m", SURFACE_GROUP, "pblHeight", selector("HPBL", "surface"), {
+  scalar("pblHeight", "PBL Height (AGL)", "m", SURFACE_GROUP, "pblHeight", selector("HPBL", "surface"), {
     scale: "pblHeight",
     sourceNote: "NOAA HPBL at surface; model planetary-boundary-layer height in meters AGL",
   }),
-  scalar("snowDepth", "Snow Depth", "in", WINTER_GROUP, "snowDepth", selector("SNOD", "surface"), {
+  scalar("snowDepth", "Snow Depth (State)", "in", WINTER_GROUP, "snowDepth", selector("SNOD", "surface"), {
     transform: "metersToInches",
     scale: "snowDepthIn",
+    sourceNote:
+      "NOAA instantaneous SNOD at the valid time; a snowpack state field, not interval snowfall; converted from meters to inches",
   }),
-  scalar("snowWaterEq", "Snow Water Eq", "in", WINTER_GROUP, "snowWaterEq", selector("WEASD", "surface"), {
-    transform: "kgM2ToWaterInches",
-    scale: "snowWaterEqIn",
-  }),
+  scalar(
+    "snowWaterEq",
+    "Snow Water Eq (State)",
+    "in",
+    WINTER_GROUP,
+    "snowWaterEq",
+    selector("WEASD", "surface", { statistic: "instant" }),
+    {
+      transform: "kgM2ToWaterInches",
+      scale: "snowWaterEqIn",
+      sourceNote:
+        "NOAA instantaneous WEASD at the valid time; a snowpack water-equivalent state field, not interval snowfall; converted from kg/m2 (mm water) to inches",
+    },
+  ),
 ];
 
 const HEIGHT_CONTOUR_INTERVALS_DAM = Object.freeze({
@@ -1040,8 +1069,9 @@ const DERIVED_PARAMETERS = [
       { key: "height700", selector: selector("HGT", "700 mb") },
       { key: "height500", selector: selector("HGT", "500 mb") },
     ],
-    methodVersion: "pressure-layer-lapse-rate-v1",
-    derivation: "Temperature difference between 700 and 500 mb divided by geopotential-height separation.",
+    methodVersion: "pressure-layer-lapse-rate-terrain-mask-v2",
+    derivation:
+      "Temperature difference between 700 and 500 mb divided by geopotential-height separation; cells are missing where either pressure surface is at or below model terrain.",
     applicability: "All NOAA beta models with 700 and 500 mb temperature and height.",
   }),
   derivedScalar("lapseRate0to3km", "0-3 km Lapse Rate", "C/km", SEVERE_THERMO_GROUP, {
@@ -1121,9 +1151,9 @@ const DERIVED_PARAMETERS = [
     profileVariables: ["HGT", "TMP", "RH", "UGRD", "VGRD"],
     profileLevels: EFFECTIVE_LAYER_PROFILE_LEVELS,
     surfaceHeightRequired: true,
-    methodVersion: "spc-effective-scp-parcel-sparse-v3",
+    methodVersion: "spc-effective-scp-parcel-sparse-v4",
     derivation:
-      "SPC effective-layer SCP formula using every loaded pressure-profile source row for the effective inflow layer: 25 mb spacing from 1000-700 mb and 50 mb spacing from 700-300 mb. The inflow top is the last parcel level meeting the CAPE/CIN thresholds. Uses model MUCAPE where available, parcel-scanned MU EL, effective-layer Bunkers SRH when valid with fixed 0-6 km Bunkers fallback, and effective bulk wind difference spanning the inflow base to 50% of the MU parcel equilibrium-level height with no extra depth clamps.",
+      "SPC effective-layer SCP formula using every loaded pressure-profile source row for the effective inflow layer: 25 mb spacing from 1000-700 mb and 50 mb spacing from 700-300 mb. The inflow top is the last parcel level meeting the CAPE/CIN thresholds. Uses the internally paired parcel-scanned MU CAPE and MU CIN, including the SPC MU-CIN damping term; parcel-scanned MU EL; effective-layer Bunkers SRH when valid with fixed 0-6 km Bunkers fallback; and effective bulk wind difference spanning the inflow base to 50% of the MU parcel equilibrium-level height with no extra depth clamps.",
     applicability:
       "All NOAA beta models with MUCAPE, near-surface thermodynamics, and effective-layer pressure-level thermodynamic/wind profiles. Expensive parcel work is limited to conservatively prefiltered instability candidates.",
     formulaReference: "SPC Supercell Composite Parameter effective-layer formula.",
@@ -1162,7 +1192,7 @@ const DERIVED_PARAMETERS = [
     surfaceHeightRequired: true,
     methodVersion: "spc-effective-stp-parcel-sparse-v3",
     derivation:
-      "SPC effective-layer STP formula using MLCAPE and every loaded pressure-profile source row for the effective inflow layer: 25 mb spacing from 1000-700 mb and 50 mb spacing from 700-300 mb. The inflow top is the last parcel level meeting the CAPE/CIN thresholds. Uses mixed-layer LCL, effective-layer Bunkers SRH when valid with fixed 0-6 km Bunkers fallback, EBWD spanning the inflow base to 50% of the MU parcel equilibrium-level height with no extra depth clamps, and MLCIN. The index is zeroed when the effective inflow base is above ground.",
+      "SPC effective-layer STP formula using model-native 90-mb MLCAPE/MLCIN (an explicit approximation to the SPC 100-mb mixed layer) and every loaded pressure-profile source row for the effective inflow layer: 25 mb spacing from 1000-700 mb and 50 mb spacing from 700-300 mb. The inflow top is the last parcel level meeting the CAPE/CIN thresholds. Uses mixed-layer LCL, effective-layer Bunkers SRH when valid with fixed 0-6 km Bunkers fallback, EBWD spanning the inflow base to 50% of the MU parcel equilibrium-level height with no extra depth clamps, and MLCIN. The index is zeroed when the effective inflow base is above ground.",
     applicability:
       "All NOAA beta models with mixed-layer CAPE/CIN, near-surface thermodynamics, and effective-layer pressure-level thermodynamic/wind profiles. Expensive parcel work is limited to conservatively prefiltered instability candidates.",
     formulaReference: "SPC effective-layer Significant Tornado Parameter.",
@@ -1196,9 +1226,9 @@ const DERIVED_PARAMETERS = [
       { key: "wind850U", selector: selector("UGRD", "850 mb") },
       { key: "wind850V", selector: selector("VGRD", "850 mb") },
     ],
-    methodVersion: "petterssen-latlon-finite-difference-v3",
+    methodVersion: "petterssen-latlon-terrain-mask-v4",
     derivation:
-      "Full Petterssen 2D kinematic frontogenesis (deformation plus divergence terms) from 850 mb potential-temperature and wind gradients using latitude-aware finite differences; PNG rendering applies positive-only display smoothing while hover values remain raw.",
+      "Full Petterssen 2D kinematic frontogenesis (deformation plus divergence terms) from 850 mb potential-temperature and wind gradients using latitude-aware finite differences; below-terrain pressure-surface cells are missing before gradients are evaluated, and PNG rendering applies positive-only display smoothing while hover values remain raw.",
     applicability: "All NOAA beta models with 850 mb temperature and winds.",
     formulaReference: "Petterssen two-dimensional frontogenesis.",
   }),
@@ -1209,25 +1239,27 @@ const DERIVED_PARAMETERS = [
       { key: "wind700U", selector: selector("UGRD", "700 mb") },
       { key: "wind700V", selector: selector("VGRD", "700 mb") },
     ],
-    methodVersion: "petterssen-latlon-finite-difference-v3",
+    methodVersion: "petterssen-latlon-terrain-mask-v4",
     derivation:
-      "Full Petterssen 2D kinematic frontogenesis (deformation plus divergence terms) from 700 mb potential-temperature and wind gradients using latitude-aware finite differences; PNG rendering applies positive-only display smoothing while hover values remain raw.",
+      "Full Petterssen 2D kinematic frontogenesis (deformation plus divergence terms) from 700 mb potential-temperature and wind gradients using latitude-aware finite differences; below-terrain pressure-surface cells are missing before gradients are evaluated, and PNG rendering applies positive-only display smoothing while hover values remain raw.",
     applicability: "All NOAA beta models with 700 mb temperature and winds.",
     formulaReference: "Petterssen two-dimensional frontogenesis.",
   }),
   derivedScalar("relativeVorticity700", "700 mb Rel Vort", "x10^-5 s^-1", UPPER_AIR_DIAGNOSTIC_GROUP, {
     scale: "relativeVorticity1e5S1",
     sourceSelectors: [{ key: "absoluteVorticity700", selector: selector("ABSV", "700 mb") }],
-    methodVersion: "absv-minus-coriolis-v1",
-    derivation: "Relative vorticity computed as absolute vorticity minus f = 2 * Omega * sin(latitude).",
+    methodVersion: "absv-minus-coriolis-terrain-mask-v2",
+    derivation:
+      "Relative vorticity computed as absolute vorticity minus f = 2 * Omega * sin(latitude), with below-terrain pressure-surface cells missing.",
     applicability: "All NOAA beta models with 700 mb absolute vorticity.",
     formulaReference: "NOAA/MetPy Coriolis parameter with Omega = 7.2921e-5 rad/s.",
   }),
   derivedScalar("relativeVorticity500", "500 mb Rel Vort", "x10^-5 s^-1", UPPER_AIR_DIAGNOSTIC_GROUP, {
     scale: "relativeVorticity1e5S1",
     sourceSelectors: [{ key: "absoluteVorticity500", selector: selector("ABSV", "500 mb") }],
-    methodVersion: "absv-minus-coriolis-v1",
-    derivation: "Relative vorticity computed as absolute vorticity minus f = 2 * Omega * sin(latitude).",
+    methodVersion: "absv-minus-coriolis-terrain-mask-v2",
+    derivation:
+      "Relative vorticity computed as absolute vorticity minus f = 2 * Omega * sin(latitude), with below-terrain pressure-surface cells missing.",
     applicability: "All NOAA beta models with 500 mb absolute vorticity.",
     formulaReference: "NOAA/MetPy Coriolis parameter with Omega = 7.2921e-5 rad/s.",
   }),
@@ -1238,9 +1270,14 @@ const DERIVED_PARAMETERS = [
     derivation: "Pixelwise run maximum of surface gust fields from forecast hour 1 through the current frame.",
     applicability: "All NOAA beta models with surface gust.",
   }),
-  derivedAccumulation("updraftHelicity2to5kmRunMax", "Run Max 2-5 km UH", "m2/s2", SEVERE_KINEMATICS_GROUP, {
+  derivedAccumulation("updraftHelicity2to5kmRunMax", "Run Max of 1-h 2-5 km UH", "m2/s2", SEVERE_KINEMATICS_GROUP, {
     scale: "updraftHelicity2to5kmM2S2",
-    sourceSelectors: [{ key: "updraftHelicity2to5km1h", selector: selector("MXUPHL", "5000-2000 m above ground") }],
+    sourceSelectors: [
+      {
+        key: "updraftHelicity2to5km1h",
+        selector: selector("MXUPHL", "5000-2000 m above ground", { statistic: "maximum" }),
+      },
+    ],
     methodVersion: "run-max-interval-mxuphl-v2",
     derivation:
       "Pixelwise run maximum of 2-5 km updraft-helicity interval-maximum fields from forecast hour 1 through the current frame.",
@@ -1286,6 +1323,68 @@ const DERIVED_PARAMETERS = [
   }),
 ];
 
+// These entries are intentionally kept in a separate catalog. A normal build
+// never sees them; resolveNoaaNamParameterCatalog() appends only the explicitly
+// requested prototypes. This preserves existing artifacts and compute while
+// still giving an opted-in build ordinary parameter metadata, legends, hover,
+// and current-record provenance.
+const SCIENCE_PROTOTYPE_PARAMETERS = [
+  derivedScalar(CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY, "DCAPE (21-Level CAM Prototype)", "J/kg", SEVERE_THERMO_GROUP, {
+    scale: "dcapeJkg",
+    sourceSelectors: [
+      { key: "temperature2m", selector: selector("TMP", "2 m above ground") },
+      { key: "dewpoint2m", selector: selector("DPT", "2 m above ground"), required: false },
+      { key: "humidity2m", selector: selector("RH", "2 m above ground"), required: false },
+      { key: "pressureMsl", selector: selector("PRMSL", "mean sea level"), required: false },
+      { key: "derivedSurfacePressure", selector: selector("PRES", "surface"), required: false },
+      { key: "profileSurfaceHeight", selector: selector("HGT", "surface") },
+    ],
+    anySourceKeyGroups: [["dewpoint2m", "humidity2m"]],
+    profileVariables: ["TMP", "HGT", "RH"],
+    profileLevels: EFFECTIVE_LAYER_PROFILE_LEVELS,
+    surfaceHeightRequired: true,
+    completeProfileRequired: true,
+    models: ["hrrr", "nam3km"],
+    methodVersion: "cam-21level-reduced-numerics-dcape-prototype-v1",
+    derivation:
+      "Opt-in CAM research diagnostic. Applies the existing reduced-profile-dcape-v4 source-layer, wet-bulb, pseudoadiabatic-descent, and knot-trapezoid numerics to all 21 production effective-profile pressure rows (25 mb from 1000-700 mb and 50 mb from 700-300 mb). It is a fuller sampled profile, not the dense 1 hPa point/SHARPpy-exact calculation.",
+    applicability:
+      "HRRR and NAM 3 km only, and only in explicitly opted-in science-prototype builds. Reuses their effective-diagnostic HGT/TMP/RH profile grids; missing unless the complete 21-level profile is present.",
+    formulaReference:
+      "SHARPpy params.dcape conventions approximated with the app's current knot-trapezoid gridded kernel on 21 pressure levels; validation prototype, not operational guidance.",
+  }),
+  derivedScalar(
+    EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY,
+    "STP (100-mb Reduced Prototype)",
+    "",
+    SEVERE_KINEMATICS_GROUP,
+    {
+      scale: "significantTornadoParameter",
+      sourceSelectors: [
+        { key: "temperature2m", selector: selector("TMP", "2 m above ground") },
+        { key: "dewpoint2m", selector: selector("DPT", "2 m above ground"), required: false },
+        { key: "humidity2m", selector: selector("RH", "2 m above ground"), required: false },
+        { key: "pressureMsl", selector: selector("PRMSL", "mean sea level"), required: false },
+        { key: "derivedSurfacePressure", selector: selector("PRES", "surface"), required: false },
+        { key: "windU10m", selector: selector("UGRD", "10 m above ground") },
+        { key: "windV10m", selector: selector("VGRD", "10 m above ground") },
+      ],
+      anySourceKeyGroups: [["dewpoint2m", "humidity2m"]],
+      profileVariables: ["HGT", "TMP", "RH", "UGRD", "VGRD"],
+      profileLevels: EFFECTIVE_LAYER_PROFILE_LEVELS,
+      surfaceHeightRequired: true,
+      completeProfileRequired: true,
+      methodVersion: "spc-effective-stp-100mb-source-reduced-profile-prototype-v1",
+      derivation:
+        "Opt-in research diagnostic using a pressure-weighted 100 mb mixed-layer source derived from the 21 loaded pressure rows, with CAPE/CIN/LCL integrated by the app's reduced segment kernel. Effective inflow, Bunkers motion, ESRH, and EBWD share the existing sparse gridded effective-profile calculation. This is not a dense 1 hPa or SHARPpy-exact parcel calculation.",
+      applicability:
+        "Explicit science-prototype builds only. Requires a complete 21-level thermodynamic/wind profile and finite surface thermodynamic, pressure, height, and wind prerequisites. It deliberately does not use native CAPE/CIN as a spatial prefilter because that could omit a derived 100-mb parcel; the native 90-mb effective STP remains the default product.",
+      formulaReference:
+        "SPC effective-layer STP terms with a 100 mb mixed-layer parcel source evaluated on the app's reduced 21-level gridded profile.",
+    },
+  ),
+];
+
 const SNOWFALL_PARAMETERS = [
   snowfallDerived("snow10to1", "10:1 Snow", {
     methodVersion: "snow10to1-v1",
@@ -1295,7 +1394,7 @@ const SNOWFALL_PARAMETERS = [
   snowfallDerived("snowKuchera", "Kuchera Snow", {
     methodVersion: "kuchera-surface-to-500mb-profile-v2",
     derivation:
-      "Interval snow-liquid water equivalent multiplied by a Kuchera ratio from the warmest available surface-to-500 mb profile temperature.",
+      "Interval snow-liquid water equivalent multiplied by a Kuchera ratio from the warmest available instantaneous surface-to-500 mb profile temperature; the operational ratio is clamped to 3-50:1.",
     applicability:
       "All NOAA beta models with accumulated snow-liquid input and surface-to-500 mb pressure-profile temperature/height fields.",
     profileVariables: ["TMP", "HGT"],
@@ -1304,9 +1403,9 @@ const SNOWFALL_PARAMETERS = [
     lazyProfile: true,
   }),
   snowfallDerived("snowCobb", "Cobb Snow", {
-    methodVersion: "cobb-waldstreicher-925to300mb-profile-v2",
+    methodVersion: "cobb-waldstreicher-925to300mb-profile-v3",
     derivation:
-      "Interval snow-liquid water equivalent multiplied by a Cobb/Waldstreicher profile SLR using 925-300 mb temperature, humidity, height, and omega.",
+      "Interval snow-liquid water equivalent multiplied by a Cobb/Waldstreicher profile SLR using instantaneous temperature, humidity, height, and omega every 25 mb from 925-300 mb; each fitted temperature response is centered with the operational T-1/T/T+1 C three-sample mean.",
     applicability:
       "All NOAA beta models with accumulated snow-liquid input plus 925-300 mb TMP/HGT/RH/VVEL pressure profiles.",
     profileVariables: ["TMP", "HGT", "RH", "VVEL"],
@@ -1314,23 +1413,23 @@ const SNOWFALL_PARAMETERS = [
     completeProfileRequired: true,
     lazyProfile: true,
   }),
-  snowfallDerived("snowRfConus", "RF Snow", {
-    methodVersion: "pletcher-conus-rf-2d35566",
+  snowfallDerived("snowRfConus", "CONUS RF Snow", {
+    methodVersion: "pletcher-conus-rf-2d35566-domain-v4",
     derivation:
-      "Pletcher CONUS random-forest SLR using SPD/T/RH at 300-2400 m AGL plus latitude, longitude, and elevation, then multiplied by snow-liquid water equivalent.",
+      "Pletcher CONUS random-forest SLR using SPD/T/RH at 300-2400 m AGL plus latitude, longitude, and elevation, constrained by a versioned simplified contiguous-US mainland polygon, clamped to 1-60:1, then multiplied by snow-liquid water equivalent. Per-cell accumulated liquid totaling <=0.1/60 in is reported as 0 without running learned inference because even the 60:1 cap cannot bring the omitted accumulated snow to the 0.1 in display threshold; other hover values retain the unsmoothed raw grid.",
     applicability:
-      "All NOAA beta models after the pinned utahrfslr model has been exported to compact Node tree arrays.",
+      "All NOAA beta models inside a deterministic Natural Earth-derived contiguous-US mainland mask after the pinned utahrfslr model has been exported to compact Node tree arrays; missing over obvious ocean, Mexico, Canada, Alaska, and other out-of-domain locations. The mask limits extrapolation but does not imply uniform training coverage.",
     artifactRequired: "snow-rf/conus-rf.json",
     profileVariables: ["TMP", "HGT", "RH", "UGRD", "VGRD"],
     surfaceHeightRequired: true,
     lazyProfile: true,
   }),
-  snowfallDerived("snowWesternLinear", "Western Linear Snow", {
-    methodVersion: "veals-western-v1c-linear-5304094",
+  snowfallDerived("snowWesternLinear", "Western HRRR Linear Snow", {
+    methodVersion: "veals-western-v1c-linear-5304094-domain-v4",
     derivation:
-      "Veals et al. V1c HRRR linear SLR using T04K, T24K, SPD04K, and SPD24K, then multiplied by snow-liquid water equivalent.",
+      "Veals et al. V1c HRRR linear SLR using instantaneous endpoint T04K, T24K, SPD04K, and SPD24K, constrained to a versioned western contiguous-US/elevation domain, clamped to 1-60:1, then multiplied by snow-liquid water equivalent. Per-cell accumulated liquid totaling <=0.1/60 in is reported as 0 without running learned inference because even the 60:1 cap cannot bring the omitted accumulated snow to the 0.1 in display threshold; other hover values retain the unsmoothed raw grid.",
     applicability:
-      "HRRR western elevated terrain only; restricted to areas west of 103W with surface elevation >=1000 m.",
+      "HRRR western elevated terrain only; restricted to the contiguous-US mainland mask, at or west of 103W, at or north of 31N, and surface elevation >=1000 m; missing outside that deterministic applicability mask.",
     artifactRequired: "snow-rf/western-linear-v1c.json",
     profileVariables: ["TMP", "HGT", "UGRD", "VGRD"],
     surfaceHeightRequired: true,
@@ -1347,22 +1446,52 @@ const SNOWFALL_PARAMETERS = [
 const NOAA_NAM_PARAMETER_CATALOG = Object.freeze(
   [...BASE_PARAMETERS, ...UPPER_AIR_PARAMETERS, ...DERIVED_PARAMETERS, ...SNOWFALL_PARAMETERS].map(freezeEntry),
 );
+const NOAA_NAM_SCIENCE_PROTOTYPE_CATALOG = Object.freeze(SCIENCE_PROTOTYPE_PARAMETERS.map(freezeEntry));
 const NOAA_NAM_PARAMETER_ORDER = Object.freeze(NOAA_NAM_PARAMETER_CATALOG.map((entry) => entry.key));
+
+function normalizeSciencePrototypeIds(value) {
+  const source = Array.isArray(value) ? value : Array.isArray(value?.sciencePrototypes) ? value.sciencePrototypes : [];
+  const selected = new Set(source.map((entry) => String(entry || "").trim()));
+  return SCIENCE_PROTOTYPE_IDS.filter((id) => selected.has(id));
+}
+
+function resolveNoaaNamParameterCatalog(options = null) {
+  const enabled = new Set(normalizeSciencePrototypeIds(options));
+  if (enabled.size === 0) {
+    return NOAA_NAM_PARAMETER_CATALOG;
+  }
+  const prototypeKeys = new Set();
+  if (enabled.has("camDcape21Level")) {
+    prototypeKeys.add(CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY);
+  }
+  if (enabled.has("effectiveStp100mbReduced")) {
+    prototypeKeys.add(EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY);
+  }
+  if (prototypeKeys.size === 0) {
+    return NOAA_NAM_PARAMETER_CATALOG;
+  }
+  return Object.freeze([
+    ...NOAA_NAM_PARAMETER_CATALOG,
+    ...NOAA_NAM_SCIENCE_PROTOTYPE_CATALOG.filter((entry) => prototypeKeys.has(entry.key)),
+  ]);
+}
 
 const SUPPORT_SELECTORS = Object.freeze({
   pressureMsl: selector("PRMSL", "mean sea level"),
   height500: selector("HGT", "500 mb"),
   height1000: selector("HGT", "1000 mb"),
+  profileSurfaceHeight: selector("HGT", "surface"),
 });
 
-function getNoaaNamParameterMetadata() {
+function getNoaaNamParameterMetadata(options = null) {
   const out = {};
-  for (const entry of NOAA_NAM_PARAMETER_CATALOG) {
+  for (const entry of resolveNoaaNamParameterCatalog(options)) {
     if (entry.hidden) {
       continue;
     }
     const scale = resolveScale(entry);
     const stops = buildLegendStops(entry, scale);
+    const tickData = buildLegendTickData(scale);
     out[entry.key] = {
       key: entry.key,
       label: entry.label,
@@ -1371,8 +1500,8 @@ function getNoaaNamParameterMetadata() {
       category: entry.category,
       costTier: entry.costTier,
       thresholdNote: entry.thresholdNote || scale.thresholdNote || null,
-      legendTicks: [...(scale.legendTicks || [])],
-      legendTickPositions: buildLegendTickPositions(scale),
+      legendTicks: tickData.ticks,
+      legendTickPositions: tickData.positions,
       legendStops: stops,
     };
     const sourceNote = entry.sourceNote || buildParameterSourceNote(entry);
@@ -1473,14 +1602,25 @@ function buildParameterSourceNote(entry) {
 }
 
 function buildScalarSourceNote(entry) {
-  return joinNoteParts([formatNoaaSelector(entry.selector), formatTransformNote(entry.transform)]);
+  return joinNoteParts([
+    formatNoaaSelector(entry.selector),
+    formatTransformNote(entry.transform),
+    pressureLevelTerrainMaskNote(entry.selector),
+  ]);
 }
 
 function buildWindSourceNote(entry) {
   return joinNoteParts([
     `NOAA UGRD/VGRD at ${formatSelectorLevel(entry.uSelector) || "selected level"}`,
     `vector speed converted from m/s components to ${entry.unit || "display units"}`,
+    pressureLevelTerrainMaskNote(entry.uSelector),
   ]);
+}
+
+function pressureLevelTerrainMaskNote(selector) {
+  return /^\s*\d+(?:\.\d+)?\s*mb\s*$/i.test(String(selector?.level || ""))
+    ? "cells at or below model terrain are missing using pressure-level HGT versus surface HGT"
+    : null;
 }
 
 function buildPrecipAccumulationSourceNote(entry) {
@@ -1644,8 +1784,10 @@ function joinNoteParts(parts) {
   return parts.filter(Boolean).join("; ");
 }
 
-function getNoaaNamParameterOrder() {
-  return NOAA_NAM_PARAMETER_CATALOG.filter((entry) => !entry.hidden).map((entry) => entry.key);
+function getNoaaNamParameterOrder(options = null) {
+  return resolveNoaaNamParameterCatalog(options)
+    .filter((entry) => !entry.hidden)
+    .map((entry) => entry.key);
 }
 
 function resolveScale(entry) {
@@ -1662,17 +1804,34 @@ function buildLegendStops(entry, scale) {
   return (scale.legendStops || []).map(([position, color]) => [position, [...color]]);
 }
 
-function buildLegendTickPositions(scale) {
-  if (!scale?.positionLegendTicks) {
-    return [];
-  }
+// Every gradient legend gets value-accurate tick positions. Before 2026-07-07
+// this was opt-in (positionLegendTicks) and only two scales opted in — the UI
+// fell back to evenly spaced labels, which mislabels any legend whose ticks
+// are not uniform in value (37 catalog scales: temperature's 32°F break,
+// CAPE/CIN, hail, UH, snow/ice, omega, frontogenesis, ...).
+// Ticks OUTSIDE the scale's [min, max] are dropped rather than clamped: a
+// clamped below-min tick lands on the same pixel as the true minimum and the
+// wrong label wins the declutter (wind's tick 0 vs its 10 mph scale floor).
+function buildLegendTickData(scale) {
   const ticks = Array.isArray(scale?.legendTicks) ? scale.legendTicks : [];
-  return ticks.map((tick) =>
-    normalizeValueForLegend(tick, scale?.min ?? 0, scale?.max ?? 1, {
-      displayScale: scale?.legendDisplayScale,
-      log: Boolean(scale?.legendLog ?? scale?.log),
-    }),
-  );
+  const min = scale?.min ?? 0;
+  const max = scale?.max ?? 1;
+  const keptTicks = [];
+  const positions = [];
+  for (const tick of ticks) {
+    const value = Number(tick);
+    if (!Number.isFinite(value) || value < min || value > max) {
+      continue;
+    }
+    keptTicks.push(value);
+    positions.push(
+      normalizeValueForLegend(value, min, max, {
+        displayScale: scale?.legendDisplayScale,
+        log: Boolean(scale?.legendLog ?? scale?.log),
+      }),
+    );
+  }
+  return { ticks: keptTicks, positions };
 }
 
 function buildReflectivityPrecipTypeLegend() {
@@ -2228,8 +2387,12 @@ function freezeEntry(entry) {
 }
 
 module.exports = {
+  CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY,
+  EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY,
   NOAA_NAM_PARAMETER_CATALOG,
+  NOAA_NAM_SCIENCE_PROTOTYPE_CATALOG,
   NOAA_NAM_PARAMETER_ORDER,
+  SCIENCE_PROTOTYPE_IDS,
   SCALES,
   SNOW_PROFILE_LEVELS,
   EFFECTIVE_LAYER_PROFILE_LEVELS,
@@ -2240,4 +2403,6 @@ module.exports = {
   RENDER_CATEGORY_IDS,
   getNoaaNamParameterMetadata,
   getNoaaNamParameterOrder,
+  normalizeSciencePrototypeIds,
+  resolveNoaaNamParameterCatalog,
 };

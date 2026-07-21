@@ -26,6 +26,18 @@ export const EMPTY_HOVER: HoverValues = {
   pressureHpa: null,
 };
 
+export function describeMissingHoverValue(layerKey: string, values: Record<string, number | null>): string | null {
+  if (
+    layerKey === "cloudCeiling" &&
+    !Number.isFinite(values.cloudCeiling) &&
+    Number.isFinite(values.cloudCover) &&
+    Number(values.cloudCover) < 50
+  ) {
+    return "No ceiling";
+  }
+  return null;
+}
+
 const WEB_MERCATOR_MAX_LAT = 85.05112878;
 
 interface HoverBounds {
@@ -95,7 +107,7 @@ function assignFallback(byLayer: Record<string, number | null>, key: string, val
   byLayer[key] = value as number;
 }
 
-function sampleHoverVariableAtPoint(
+export function sampleHoverVariableAtPoint(
   hoverGrid: HoverGridPayload,
   bounds: HoverBounds,
   lat: number,
@@ -113,7 +125,7 @@ function sampleHoverVariableAtPoint(
 
   const rows = Number(hoverGrid.rows);
   const cols = Number(hoverGrid.cols);
-  if (!Number.isFinite(rows) || !Number.isFinite(cols) || rows < 2 || cols < 2) {
+  if (!Number.isFinite(rows) || !Number.isFinite(cols) || rows < 1 || cols < 1) {
     return null;
   }
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
@@ -131,33 +143,13 @@ function sampleHoverVariableAtPoint(
     return null;
   }
 
-  const x0 = Math.floor(fx);
-  const x1 = Math.min(cols - 1, x0 + 1);
-  const y0 = Math.floor(fy);
-  const y1 = Math.min(rows - 1, y0 + 1);
-  const tx = fx - x0;
-  const ty = fy - y0;
-
-  const samples = [
-    { value: decodeHoverSample(values[y0 * cols + x0], variable), weight: (1 - tx) * (1 - ty) },
-    { value: decodeHoverSample(values[y0 * cols + x1], variable), weight: tx * (1 - ty) },
-    { value: decodeHoverSample(values[y1 * cols + x0], variable), weight: (1 - tx) * ty },
-    { value: decodeHoverSample(values[y1 * cols + x1], variable), weight: tx * ty },
-  ];
-
-  let weighted = 0;
-  let weightTotal = 0;
-  for (const sample of samples) {
-    if (!Number.isFinite(sample.value) || sample.weight <= 0) {
-      continue;
-    }
-    weighted += sample.value * sample.weight;
-    weightTotal += sample.weight;
-  }
-  if (weightTotal <= 0) {
-    return null;
-  }
-  return weighted / weightTotal;
+  // The displayed PNG is a nearest-cell raster. Sampling the same cell keeps
+  // the analyst readout visually honest at sharp fronts, maxima, and mask
+  // boundaries while also avoiding four-sample interpolation work.
+  const x = Math.max(0, Math.min(cols - 1, Math.round(fx)));
+  const y = Math.max(0, Math.min(rows - 1, Math.round(fy)));
+  const value = decodeHoverSample(values[y * cols + x], variable);
+  return Number.isFinite(value) ? value : null;
 }
 
 function decodeHoverSample(value: number, variable: HoverGridVariable): number {

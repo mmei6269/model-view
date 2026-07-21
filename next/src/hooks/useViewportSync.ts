@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Map as LeafletMapType } from "leaflet";
+import type { MapEngine } from "../core/map-engine/types";
 import { createViewportSyncController } from "../core/viewport-sync";
 
 export function useViewportSync(panelCount: number, initialLinkViewports = true) {
@@ -13,20 +13,21 @@ export function useViewportSync(panelCount: number, initialLinkViewports = true)
     if (!enabled) {
       return;
     }
+    // Converge immediately (from the primary panel) instead of waiting for
+    // the next manual pan: covers relinking after unlinked drift and panels
+    // whose containers just changed shape. Size invalidation now lives inside
+    // each engine (ResizeObserver in create()), so aligning is all that's left.
     window.setTimeout(() => {
-      syncControllerRef.current.invalidateAll();
+      syncControllerRef.current.alignAll();
     }, 0);
   }, [linkViewports, panelCount]);
 
   useEffect(() => {
     setLayoutVersion((prev) => prev + 1);
-    window.setTimeout(() => {
-      syncControllerRef.current.invalidateAll();
-    }, 20);
   }, [panelCount]);
 
-  const handleMapReady = useCallback((panelId: string, map: LeafletMapType) => {
-    syncControllerRef.current.register(panelId, map);
+  const handleMapReady = useCallback((panelId: string, engine: MapEngine) => {
+    syncControllerRef.current.register(panelId, engine);
   }, []);
 
   const handleMapDestroyed = useCallback((panelId: string) => {

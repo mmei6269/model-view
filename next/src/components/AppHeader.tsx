@@ -2,6 +2,7 @@ import type { ReactNode, RefObject } from "react";
 import DisplayMenu from "./DisplayMenu";
 import RenderMenu, { type RenderJobEntry } from "./RenderMenu";
 import { VIEW_CONFIG, VIEW_KEYS } from "../config/constants";
+import { MAX_PANELS } from "../config/panels";
 import type { MapDisplaySettings } from "../config/display";
 import type { RenderSelection } from "../config/render";
 import type { AvailableRunsState } from "../hooks/useAvailableRuns";
@@ -10,6 +11,7 @@ import type { ReflectivityGateDbz, SynopticDetailMode, ViewKey } from "../types"
 
 interface AppHeaderProps {
   canAddPanel: boolean;
+  onCopyLink: () => void;
   display: MapDisplaySettings;
   displayMenuOpen: boolean;
   headerRef: RefObject<HTMLElement | null>;
@@ -47,10 +49,13 @@ interface AppHeaderProps {
   onResetRenderSelection: () => void;
   onSubmitRender: () => void;
   onPrefetchSoundings: () => void;
+  onCancelRenderJob: (jobId: string) => void;
+  onDismissRenderJob: (jobId: string) => void;
 }
 
 export default function AppHeader({
   canAddPanel,
+  onCopyLink,
   display,
   displayMenuOpen,
   headerRef,
@@ -88,6 +93,8 @@ export default function AppHeader({
   onResetRenderSelection,
   onSubmitRender,
   onPrefetchSoundings,
+  onCancelRenderJob,
+  onDismissRenderJob,
 }: AppHeaderProps) {
   const isCustomTimeZone = !TIMEZONE_OPTIONS.some((option) => option.value === timeZone);
   return (
@@ -105,7 +112,7 @@ export default function AppHeader({
             type="button"
             onClick={onAddPanel}
             disabled={!canAddPanel}
-            title={canAddPanel ? undefined : "Maximum 2 maps"}
+            title={canAddPanel ? undefined : `Maximum ${MAX_PANELS} maps`}
             className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20 active:scale-95 disabled:opacity-40"
           >
             Add Map
@@ -138,10 +145,20 @@ export default function AppHeader({
             onReset={onResetRenderSelection}
             onSubmit={onSubmitRender}
             onPrefetchSoundings={onPrefetchSoundings}
+            onCancelJob={onCancelRenderJob}
+            onDismissJob={onDismissRenderJob}
             jobs={renderJobs}
             canSubmit={canSubmitRender}
             availableRuns={renderAvailableRuns}
           />
+          <button
+            type="button"
+            onClick={onCopyLink}
+            title="Copy a link to the current view (panels, layers, frame, viewport)"
+            className="rounded-lg border border-white/[0.06] bg-white/[0.04] px-2.5 py-1.5 text-xs font-medium text-slate-400 hover:bg-white/[0.08] active:scale-95"
+          >
+            Share
+          </button>
           <button
             type="button"
             onClick={onToggleSettings}
@@ -188,16 +205,31 @@ export default function AppHeader({
             <div className="hidden h-5 w-px bg-white/[0.06] sm:block" />
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[10px] font-medium uppercase tracking-widest text-slate-400">Overlays</span>
-              <TogglePill active={showIsobars} onClick={onToggleIsobars}>
+              <TogglePill
+                active={showIsobars}
+                onClick={onToggleIsobars}
+                title="Model MSLP contours: 4 hPa in Simple mode, 2 hPa in Detailed mode, with 8 hPa major contours. Presentation smoothing is model-dependent."
+              >
                 Isobars
               </TogglePill>
-              <TogglePill active={showThickness} onClick={onToggleThickness}>
+              <TogglePill
+                active={showThickness}
+                onClick={onToggleThickness}
+                title="1000-500 mb thickness: 6 dam contours with 12 dam majors. The emphasized 540 dam line is a synoptic thermal reference, not a universal rain/snow boundary."
+              >
                 Thickness
               </TogglePill>
-              <TogglePill active={showCenters} onClick={onToggleCenters}>
+              <TogglePill
+                active={showCenters}
+                onClick={onToggleCenters}
+                title="Automated model-guidance H/L centers: local MSLP extrema with at least 1.8 hPa annular prominence, capped at 12 highs and 12 lows. These are not an analyzed surface chart."
+              >
                 Centers
               </TogglePill>
-              <label className="flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.04] px-2.5 py-1.5 text-xs">
+              <label
+                className="flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.04] px-2.5 py-1.5 text-xs"
+                title="Changes isobar contour density only; the automated H/L center roster is identical in both modes. While Detailed vectors load or if unavailable, any displayed combined raster is explicitly identified as Simple."
+              >
                 <span className="text-slate-400">Isobar Detail</span>
                 <select
                   value={synopticDetailMode}
@@ -262,12 +294,23 @@ export default function AppHeader({
   );
 }
 
-function TogglePill({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+function TogglePill({
+  active,
+  onClick,
+  children,
+  title,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+  title?: string;
+}) {
   return (
     <button
       type="button"
       aria-pressed={active}
       onClick={onClick}
+      title={title}
       className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium active:scale-95 ${
         active
           ? "border-cyan-400/30 bg-cyan-500/20 text-cyan-300"

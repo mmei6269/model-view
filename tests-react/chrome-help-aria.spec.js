@@ -1,7 +1,7 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 const ONE_BY_ONE =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s0NkgAAAABJRU5ErkJggg==";
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNoaGj4DwAFhAKAfr3l1AAAAABJRU5ErkJggg==";
 
 // Frames at caller-picked hour offsets from now (same shape as keyboard-shortcuts.spec.js).
 function frameSetAt(offsetHours) {
@@ -118,17 +118,20 @@ test("play button exposes Play timeline / Pause playback aria-labels", async ({ 
   await expect(play).toBeVisible();
 });
 
-test("disabled Add Map button explains the two-map limit", async ({ page }) => {
+test("disabled Add Map button explains the four-map limit", async ({ page }) => {
   const valids = frameSetAt([0, 6]);
   await routeModel(page, "gfs", valids);
   await routeModel(page, "nam3km", valids);
+  await routeModel(page, "hrrr", valids);
   await page.goto("/");
   await expect(page.locator("article")).toHaveCount(1);
 
   const addMap = page.getByRole("button", { name: "Add Map" });
   await expect(addMap).toBeEnabled();
   await addMap.click();
-  await expect(page.locator("article")).toHaveCount(2);
+  await addMap.click();
+  await addMap.click();
+  await expect(page.locator("article")).toHaveCount(4);
   await expect(addMap).toBeDisabled();
-  await expect(addMap).toHaveAttribute("title", "Maximum 2 maps");
+  await expect(addMap).toHaveAttribute("title", "Maximum 4 maps");
 });

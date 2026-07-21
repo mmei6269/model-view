@@ -1,4 +1,4 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 async function openRenderMenu(page) {
   await page.getByRole("button", { name: "Render", exact: true }).click();
@@ -51,6 +51,34 @@ const AVAILABLE_RUNS_PAYLOAD = {
       built: [],
       upstream: [{ date: "20260703", cycle: "18", runId: "20260703-1800Z", frameCount: 61, maxHour: 60 }],
     },
+    gfs: {
+      built: [
+        {
+          model: "gfs",
+          run: "20260703-0000Z",
+          view: "conus",
+          generatedAt: "2026-07-03T00:40:00Z",
+          frameCount: 129,
+          loadedFrameCount: 129,
+          complete: true,
+          latest: true,
+          upstreamFrameCount: 209,
+          upstreamSourceFrameCount: 209,
+          upstreamDefaultRenderFrameCount: 129,
+        },
+      ],
+      upstream: [
+        {
+          date: "20260702",
+          cycle: "18",
+          runId: "20260702-1800Z",
+          frameCount: 209,
+          sourceFrameCount: 209,
+          defaultRenderFrameCount: 129,
+          maxHour: 384,
+        },
+      ],
+    },
   },
 };
 
@@ -102,6 +130,10 @@ test("pick from list shows per-model run lists with frame counts; picks post per
   await page.goto("/");
   const drawer = await openRenderMenu(page);
   await drawer.getByRole("radio", { name: "Pick from list" }).check();
+  await expect(drawer.getByRole("combobox", { name: "Frames" }).locator("option[value='full']")).toHaveText(
+    "Full horizon",
+  );
+  await expect(drawer.getByText(/latest completed official horizon/)).toBeVisible();
 
   // One run list PER selected model (run cycles differ per model).
   await expect(drawer.getByText("Runs for HRRR")).toBeVisible();
@@ -129,7 +161,7 @@ test("pick from list shows per-model run lists with frame counts; picks post per
   await expect(latestRow).toBeVisible();
   await expect(latestRow.getByText("Built", { exact: true })).toBeVisible();
   await expect(latestRow.getByText("Latest built", { exact: true })).toBeVisible();
-  await expect(latestRow.getByText("Complete", { exact: true })).toBeVisible();
+  await expect(latestRow.getByText("Build complete", { exact: true })).toBeVisible();
   await expect(partialRow.getByText("Partial", { exact: true })).toBeVisible();
   await expect(upstreamRow.getByText("Upstream (not built)", { exact: true })).toBeVisible();
   // The run built AND probed upstream appears exactly once.
@@ -148,7 +180,32 @@ test("pick from list shows per-model run lists with frame counts; picks post per
   await partialRow.click();
   await expect(partialRow).toHaveAttribute("aria-pressed", "true");
   await expect(latestRow).toHaveAttribute("aria-pressed", "false");
+  await expect(hrrrList.getByRole("button", { name: "Latest available" })).toHaveAttribute("aria-pressed", "false");
   await expect(namList.getByRole("button", { name: "Latest available" })).toHaveAttribute("aria-pressed", "true");
+  await expect(drawer.getByRole("combobox", { name: "Frames" }).locator("option[value='full']")).toHaveText(
+    "Mixed: prefix + full",
+  );
+  await expect(drawer.getByText(/Concrete picked cycles use their currently published prefix/)).toBeVisible();
+
+  // Once every model has a concrete pick, the unbounded choice is a published
+  // prefix for every run; toggling NAM back to latest restores mixed wording.
+  const namPickedRow = namList.getByRole("button", { name: "20260703-1800Z", exact: true });
+  await namPickedRow.click();
+  await expect(drawer.getByRole("combobox", { name: "Frames" }).locator("option[value='full']")).toHaveText(
+    "Published prefix",
+  );
+  await expect(drawer.getByText(/each concrete picked run's currently published contiguous prefix/i)).toBeVisible();
+  await namPickedRow.click();
+  await expect(drawer.getByRole("combobox", { name: "Frames" }).locator("option[value='full']")).toHaveText(
+    "Mixed: prefix + full",
+  );
+
+  // Multi-run queue: a second pick toggles ON alongside the first and the
+  // queue note appears; picks persist as arrays.
+  await upstreamRow.click();
+  await expect(upstreamRow).toHaveAttribute("aria-pressed", "true");
+  await expect(partialRow).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("run-queue-note-hrrr")).toContainText("2 runs queued");
   await expect
     .poll(async () =>
       page.evaluate(() => {
@@ -156,16 +213,62 @@ test("pick from list shows per-model run lists with frame counts; picks post per
         return raw ? { runs: JSON.parse(raw).runs, runMode: JSON.parse(raw).runMode } : null;
       }),
     )
-    .toEqual({ runs: { hrrr: "20260703-1100Z" }, runMode: "pick" });
+    .toEqual({ runs: { hrrr: ["20260703-1100Z", "20260703-1300Z"] }, runMode: "pick" });
 
-  // Submitting posts the per-model runs map: the picked run for HRRR, latest
-  // for the untouched NAM3km.
+  // Toggling a pick off removes just that run.
+  await upstreamRow.click();
+  await expect(upstreamRow).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByTestId("run-queue-note-hrrr")).toHaveCount(0);
+
+  // Submitting posts the per-model runs map (arrays): the picked run for
+  // HRRR, latest for the untouched NAM3km.
   await drawer.getByRole("button", { name: "▶ Render" }).click();
   await expect.poll(() => postedBodies.length).toBe(1);
-  expect(postedBodies[0].runs).toEqual({ hrrr: "20260703-1100Z", nam3km: "latest" });
+  expect(postedBodies[0].runs).toEqual({ hrrr: ["20260703-1100Z"], nam3km: ["latest"] });
 
   // Both spawned jobs render a progress row.
   await expect(drawer.getByRole("status", { name: "Render job" })).toHaveCount(2);
+});
+
+test("GFS run chips distinguish the 129-frame default from the 209-frame source cadence", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.route("**/__cf/actions/available-runs**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(AVAILABLE_RUNS_PAYLOAD),
+    });
+  });
+
+  await page.goto("/");
+  const drawer = await openRenderMenu(page);
+  await drawer.getByRole("checkbox", { name: "GFS", exact: true }).check();
+  await drawer.getByRole("checkbox", { name: "HRRR", exact: true }).uncheck();
+  await drawer.getByRole("checkbox", { name: "NAM 3km", exact: true }).uncheck();
+  await drawer.getByRole("radio", { name: "Pick from list" }).check();
+
+  const gfsList = drawer.locator('[data-run-list="gfs"]');
+  const builtRow = gfsList.getByRole("button", { name: "20260703-0000Z", exact: true });
+  await expect(builtRow.getByText("129 built/default · 209 hourly-tier source", { exact: true })).toBeVisible();
+  const describedText = await builtRow.evaluate((element) => {
+    const id = element.getAttribute("aria-describedby");
+    return id ? document.getElementById(id)?.textContent || "" : "";
+  });
+  expect(describedText).toContain("129 built/default · 209 hourly-tier source");
+  expect(await builtRow.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  await expect(
+    gfsList
+      .getByRole("button", { name: "20260702-1800Z", exact: true })
+      .getByText("129 3-hourly default · 209 hourly-tier source", { exact: true }),
+  ).toBeVisible();
+
+  // Selecting the optional cadence leaves both exact rosters visible.
+  await drawer.getByRole("checkbox", { name: "GFS hourly F000-F120 (optional)" }).check();
+  await expect(
+    gfsList
+      .getByRole("button", { name: "20260703-0000Z", exact: true })
+      .getByText("129 built/default · 209 hourly-tier source", { exact: true }),
+  ).toBeVisible();
 });
 
 test("picker shows 'No runs found' when the server has nothing for the model", async ({ page }) => {
@@ -219,4 +322,33 @@ test("mid-run progress uses markerCount/markerTotal when the builder summary has
   await expect(status).toBeVisible();
   await expect(status).toContainText("2/5");
   await expect(status).not.toContainText("2/0");
+});
+
+test("queued jobs show an indeterminate planning state before an exact denominator arrives", async ({ page }) => {
+  await page.route("**/__cf/actions/render**", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ jobId: "job-plan" }) });
+  });
+  await page.route("**/__cf/actions/status/job-plan**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        jobId: "job-plan",
+        status: "queued",
+        built: 0,
+        reused: 0,
+        failed: 0,
+        total: 0,
+        markerCount: 0,
+        markerTotal: 0,
+      }),
+    });
+  });
+
+  await page.goto("/");
+  const drawer = await openRenderMenu(page);
+  await drawer.getByRole("button", { name: "▶ Render" }).click();
+  const status = drawer.getByRole("status", { name: "Render job" });
+  await expect(status).toContainText("planning target");
+  await expect(status).not.toContainText("0/0");
 });

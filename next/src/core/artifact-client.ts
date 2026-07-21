@@ -31,7 +31,6 @@ import {
   resolveLayerRequestUrl,
   resolveLayerUrl,
   resolveSynopticVectorRequestUrl,
-  resolveSynopticStyleVersion,
   resolveSynopticVectorKey,
   resolveWeatherVectorRequestUrl,
 } from "./layer-refs";
@@ -50,14 +49,23 @@ export {
   resolveContourVectorRequestUrl,
   resolveLayerRequestUrl,
   resolveLayerUrl,
-  resolveSynopticStyleVersion,
   resolveSynopticVectorKey,
   resolveSynopticVectorRequestUrl,
   resolveWeatherVectorRequestUrl,
 };
 
 const MANIFEST_TTL_MS = 60_000;
-const PARSED_PAYLOAD_CACHE_LIMIT = 8_192;
+const PARSED_PAYLOAD_CACHE_LIMIT = resolveCacheMaxEntries(import.meta.env.VITE_PARSED_PAYLOAD_CACHE_MAX_ENTRIES, 8_192);
+// Hover payloads are fundamentally different from the small JSON vectors in
+// the generic parsed-payload caches: a single full CONUS frame can decode to
+// hundreds of MiB of Int16Array storage. Keep only a tiny, real-LRU working
+// set and enforce a byte ceiling so timeline scrubbing cannot retain a whole
+// run (or several runs) in the JS heap.
+const HOVER_GRID_PAYLOAD_CACHE_LIMIT_BYTES = resolveCacheLimitBytes(
+  import.meta.env.VITE_HOVER_GRID_CACHE_LIMIT_MB,
+  512,
+);
+const HOVER_GRID_PAYLOAD_CACHE_MAX_ENTRIES = 6;
 
 interface CacheEntry {
   manifest: ModelManifest;
@@ -89,10 +97,36 @@ const contourVectorPayloadCache = new Map<string, ContourVectorPayload>();
 const contourVectorPayloadInFlight = createSharedRequestMap<ContourVectorPayload>();
 const weatherVectorPayloadCache = new Map<string, WeatherVectorPayload>();
 const weatherVectorPayloadInFlight = createSharedRequestMap<WeatherVectorPayload>();
-const hoverGridPayloadCache = new Map<string, HoverGridPayload>();
+const hoverGridPayloadCache = new Map<string, { payload: HoverGridPayload; bytes: number }>();
+let hoverGridPayloadCacheBytes = 0;
 const hoverGridPayloadInFlight = createSharedRequestMap<HoverGridPayload>();
 const pointSoundingPayloadCache = new Map<string, PointSoundingPayload>();
 const pointSoundingPayloadInFlight = createSharedRequestMap<PointSoundingPayload>();
+
+export type ParsedPayloadCacheKind = "synoptic-vector" | "contour-vector" | "weather-vector" | "point-sounding";
+const parsedPayloadEvictionListeners = new Set<(kind: ParsedPayloadCacheKind, key: string) => void>();
+
+export function subscribeParsedPayloadEvictions(
+  listener: (kind: ParsedPayloadCacheKind, key: string) => void,
+): () => void {
+  parsedPayloadEvictionListeners.add(listener);
+  return () => {
+    parsedPayloadEvictionListeners.delete(listener);
+  };
+}
+
+export function isParsedPayloadCached(kind: ParsedPayloadCacheKind, key: string): boolean {
+  if (kind === "synoptic-vector") {
+    return synopticVectorPayloadCache.has(key);
+  }
+  if (kind === "contour-vector") {
+    return contourVectorPayloadCache.has(key);
+  }
+  if (kind === "weather-vector") {
+    return weatherVectorPayloadCache.has(key);
+  }
+  return pointSoundingPayloadCache.has(key);
+}
 
 export async function fetchModelManifestWithOptions(
   modelKey: ModelKey,
@@ -229,7 +263,7 @@ export async function fetchSynopticVectorPayload(
     return null;
   }
   const key = url;
-  const cached = synopticVectorPayloadCache.get(key);
+  const cached = getCachedParsedPayload(synopticVectorPayloadCache, key);
   if (cached) {
     return cached;
   }
@@ -239,10 +273,18 @@ export async function fetchSynopticVectorPayload(
         throw new Error(`Synoptic vector request failed (${response.status}) for ${url}`);
       }
       const payload = (await response.json()) as SynopticVectorPayload;
-      cacheParsedPayload(synopticVectorPayloadCache, key, payload);
+      cacheParsedPayload(synopticVectorPayloadCache, key, payload, "synoptic-vector");
       return payload;
     }),
   );
+}
+
+export function getCachedSynopticVectorPayload(
+  frame: FrameRecord | null | undefined,
+  options: PrefetchOptions = {},
+): SynopticVectorPayload | null {
+  const url = resolveSynopticVectorRequestUrl(frame, options.synopticDetailMode || "simple");
+  return url ? getCachedParsedPayload(synopticVectorPayloadCache, url) : null;
 }
 
 export async function prefetchSynopticVectorPayload(
@@ -261,7 +303,7 @@ export async function fetchContourVectorPayload(
   if (!url) {
     return null;
   }
-  const cached = contourVectorPayloadCache.get(url);
+  const cached = getCachedParsedPayload(contourVectorPayloadCache, url);
   if (cached) {
     return cached;
   }
@@ -271,10 +313,26 @@ export async function fetchContourVectorPayload(
         throw new Error(`Contour vector request failed (${response.status}) for ${url}`);
       }
       const payload = (await response.json()) as ContourVectorPayload;
-      cacheParsedPayload(contourVectorPayloadCache, url, payload);
+      cacheParsedPayload(contourVectorPayloadCache, url, payload, "contour-vector");
       return payload;
     }),
   );
+}
+
+export function getCachedContourVectorPayload(
+  frame: FrameRecord | null | undefined,
+  layer: LayerKey,
+): ContourVectorPayload | null {
+  const url = resolveContourVectorRequestUrl(frame, layer);
+  return url ? getCachedParsedPayload(contourVectorPayloadCache, url) : null;
+}
+
+export async function prefetchContourVectorPayload(
+  frame: FrameRecord | null | undefined,
+  layer: LayerKey,
+  options: PrefetchOptions = {},
+): Promise<void> {
+  await fetchContourVectorPayload(frame, layer, options);
 }
 
 export async function fetchWeatherVectorPayload(
@@ -286,7 +344,7 @@ export async function fetchWeatherVectorPayload(
   if (!url) {
     return null;
   }
-  const cached = weatherVectorPayloadCache.get(url);
+  const cached = getCachedParsedPayload(weatherVectorPayloadCache, url);
   if (cached) {
     return cached;
   }
@@ -296,7 +354,7 @@ export async function fetchWeatherVectorPayload(
         throw new Error(`Weather vector request failed (${response.status}) for ${url}`);
       }
       const payload = (await response.json()) as WeatherVectorPayload;
-      cacheParsedPayload(weatherVectorPayloadCache, url, payload);
+      cacheParsedPayload(weatherVectorPayloadCache, url, payload, "weather-vector");
       return payload;
     }),
   );
@@ -319,9 +377,16 @@ export async function fetchHoverGridPayload(
     return null;
   }
   const key = buildHoverGridPayloadCacheKey(urls);
-  const cached = hoverGridPayloadCache.get(key);
+  const cached = getCachedHoverGridPayloadByKey(key);
   if (cached) {
     return cached;
+  }
+  // For the common one-file case the merged key is the URL itself. Nesting a
+  // per-URL shared request inside another shared request with that same key
+  // replaces the inner entry before abort bookkeeping can see it, leaving a
+  // tens-of-megabytes fetch alive after every caller has scrubbed away.
+  if (urls.length === 1) {
+    return fetchSingleHoverGridPayload(urls[0], options);
   }
   // The merged fetch is itself one consumer of each per-URL fetch, so a
   // caller abort propagates inward only when every merged consumer is gone.
@@ -329,7 +394,7 @@ export async function fetchHoverGridPayload(
     Promise.all(urls.map((url) => fetchSingleHoverGridPayload(url, { ...options, signal: sharedSignal }))).then(
       (payloads) => {
         const mergedPayload = mergeHoverGridPayloadObjects(payloads);
-        cacheParsedPayload(hoverGridPayloadCache, key, mergedPayload);
+        cacheHoverGridPayload(key, mergedPayload);
         return mergedPayload;
       },
     ),
@@ -344,7 +409,7 @@ export async function prefetchHoverGridPayload(
 }
 
 async function fetchSingleHoverGridPayload(url: string, options: PrefetchOptions): Promise<HoverGridPayload> {
-  const cached = hoverGridPayloadCache.get(url);
+  const cached = getCachedHoverGridPayloadByKey(url);
   if (cached) {
     return cached;
   }
@@ -356,7 +421,7 @@ async function fetchSingleHoverGridPayload(url: string, options: PrefetchOptions
       const parsedPayload = /\.bin\.gz(?:$|[?#])/.test(url)
         ? normalizeBinaryHoverGridPayload(await response.arrayBuffer())
         : normalizeHoverGridPayload((await response.json()) as HoverGridPayload);
-      cacheParsedPayload(hoverGridPayloadCache, url, parsedPayload);
+      cacheHoverGridPayload(url, parsedPayload);
       return parsedPayload;
     }),
   );
@@ -384,7 +449,7 @@ export function getCachedHoverGridPayload(requestUrl: string | null | undefined)
   if (!key) {
     return null;
   }
-  return hoverGridPayloadCache.get(key) || null;
+  return getCachedHoverGridPayloadByKey(key);
 }
 
 export async function fetchPointSoundingPayload({
@@ -413,7 +478,7 @@ export async function fetchPointSoundingPayload({
     lon: String(lon),
   });
   const cacheKey = `${modelKey}|${runId}|${viewKey}|${safeHour}|${lat.toFixed(4)}|${lon.toFixed(4)}`;
-  const cached = pointSoundingPayloadCache.get(cacheKey);
+  const cached = getCachedParsedPayload(pointSoundingPayloadCache, cacheKey);
   if (cached) {
     return cached;
   }
@@ -430,13 +495,13 @@ export async function fetchPointSoundingPayload({
         throw new Error(`Point sounding request failed (${response.status})${reason}`);
       }
       const payload = (await response.json()) as PointSoundingPayload;
-      cacheParsedPayload(pointSoundingPayloadCache, cacheKey, payload);
+      cacheParsedPayload(pointSoundingPayloadCache, cacheKey, payload, "point-sounding");
       return payload;
     }),
   );
 }
 
-function cacheParsedPayload<T>(cache: Map<string, T>, key: string, payload: T): void {
+function cacheParsedPayload<T>(cache: Map<string, T>, key: string, payload: T, kind: ParsedPayloadCacheKind): void {
   if (cache.has(key)) {
     cache.delete(key);
   }
@@ -447,7 +512,85 @@ function cacheParsedPayload<T>(cache: Map<string, T>, key: string, payload: T): 
       break;
     }
     cache.delete(oldest);
+    notifyParsedPayloadEviction(kind, oldest);
   }
+}
+
+function notifyParsedPayloadEviction(kind: ParsedPayloadCacheKind, key: string): void {
+  for (const listener of parsedPayloadEvictionListeners) {
+    try {
+      listener(kind, key);
+    } catch {
+      // Cache accounting is advisory. A consumer must not be able to turn a
+      // successful artifact fetch into an interactive failure.
+    }
+  }
+}
+
+function getCachedParsedPayload<T>(cache: Map<string, T>, key: string): T | null {
+  const cached = cache.get(key);
+  if (!cached) {
+    return null;
+  }
+  // Map insertion order is the eviction order, so a cache hit must move the
+  // entry to the newest end for the advertised LRU behavior to be real.
+  cache.delete(key);
+  cache.set(key, cached);
+  return cached;
+}
+
+function getCachedHoverGridPayloadByKey(key: string): HoverGridPayload | null {
+  const entry = hoverGridPayloadCache.get(key);
+  if (!entry) {
+    return null;
+  }
+  hoverGridPayloadCache.delete(key);
+  hoverGridPayloadCache.set(key, entry);
+  return entry.payload;
+}
+
+function cacheHoverGridPayload(key: string, payload: HoverGridPayload): void {
+  const existing = hoverGridPayloadCache.get(key);
+  if (existing) {
+    hoverGridPayloadCache.delete(key);
+    hoverGridPayloadCacheBytes = Math.max(0, hoverGridPayloadCacheBytes - existing.bytes);
+  }
+  const bytes = estimateHoverGridPayloadBytes(payload);
+  hoverGridPayloadCache.set(key, { payload, bytes });
+  hoverGridPayloadCacheBytes += bytes;
+  while (
+    hoverGridPayloadCache.size > HOVER_GRID_PAYLOAD_CACHE_MAX_ENTRIES ||
+    hoverGridPayloadCacheBytes > HOVER_GRID_PAYLOAD_CACHE_LIMIT_BYTES
+  ) {
+    const oldestKey = hoverGridPayloadCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    const oldest = hoverGridPayloadCache.get(oldestKey);
+    hoverGridPayloadCache.delete(oldestKey);
+    hoverGridPayloadCacheBytes = Math.max(0, hoverGridPayloadCacheBytes - (oldest?.bytes || 0));
+  }
+}
+
+function estimateHoverGridPayloadBytes(payload: HoverGridPayload): number {
+  let bytes = 64;
+  for (const [key, variable] of Object.entries(payload.variables || {})) {
+    bytes += key.length * 2 + 48;
+    bytes += variable?.values?.byteLength || 0;
+    bytes += typeof variable?.data === "string" ? variable.data.length * 2 : 0;
+  }
+  return bytes;
+}
+
+function resolveCacheLimitBytes(value: unknown, fallbackMb: number): number {
+  const mb = Number(value);
+  const normalizedMb = Number.isFinite(mb) && mb > 0 ? mb : fallbackMb;
+  return Math.round(normalizedMb * 1024 * 1024);
+}
+
+function resolveCacheMaxEntries(value: unknown, fallback: number): number {
+  const entries = Number(value);
+  return Number.isFinite(entries) && entries > 0 ? Math.max(1, Math.floor(entries)) : fallback;
 }
 
 class HttpStatusError extends Error {

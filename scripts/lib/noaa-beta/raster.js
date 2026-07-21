@@ -1,11 +1,10 @@
 "use strict";
 
 const { NOAA_NAM_PARAMETER_CATALOG } = require("../noaa-nam-parameter-catalog");
-const { MM_TO_IN, MPS_TO_KT, MPS_TO_MPH, clamp01, clampInt, lerp } = require("./util");
+const { MPS_TO_KT, MPS_TO_MPH, clamp01, clampInt, lerp } = require("./util");
 const { kelvinToCelsius, kelvinToFahrenheit, pascalToHpa } = require("./thermo");
 const { smoothFiniteNonnegativeGrid } = require("./grid-ops");
-const { encodeRgbaPng } = require("./png-encode");
-const { parseAccumulationHours } = require("./records");
+const { encodeRgbaPng, encodeRgbaPngFilter0ViaPool } = require("./png-encode");
 const REFLECTIVITY_PRECIP_TYPE_COLORS = require("../../../shared/reflectivity-precip-type-colors.json");
 const PLANNED_COLOR_MAPS = require("../../../shared/noaa-beta-planned-color-maps.json");
 const { loadColorMaps } = require("../color-maps");
@@ -94,7 +93,7 @@ function renderScalarGrid({
         value = affineMin;
       }
     }
-    if (value === value) {
+    if (Number.isFinite(value)) {
       validCount += 1;
     }
     if (!isValueInVisibleRange(value, minVisible, maxVisible, visibleRange)) {
@@ -173,7 +172,7 @@ function renderScalarGridContinuousRaw({ rgba, values, cellCount, colorLookup, v
   let validCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
     const value = values[index];
-    if (value !== value) {
+    if (!Number.isFinite(value)) {
       continue;
     }
     validCount += 1;
@@ -219,7 +218,7 @@ function renderScalarGridContinuousAffine({ rgba, values, cellCount, colorLookup
     if (affineHasMin && value < affineMin) {
       value = affineMin;
     }
-    if (value !== value) {
+    if (!Number.isFinite(value)) {
       continue;
     }
     validCount += 1;
@@ -256,7 +255,7 @@ function renderScalarGridContinuousFunction({ rgba, values, cellCount, colorLook
   let validCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
     const value = transform(values[index]);
-    if (value !== value) {
+    if (!Number.isFinite(value)) {
       continue;
     }
     validCount += 1;
@@ -354,7 +353,7 @@ function renderScalarGridStepRaw({ rgba, values, cellCount, colorLookup, visible
   let validCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
     const value = values[index];
-    if (value !== value) {
+    if (!Number.isFinite(value)) {
       continue;
     }
     validCount += 1;
@@ -423,7 +422,7 @@ function renderScalarGridStepAffine({ rgba, values, cellCount, colorLookup, visi
     if (affineHasMin && value < affineMin) {
       value = affineMin;
     }
-    if (value !== value) {
+    if (!Number.isFinite(value)) {
       continue;
     }
     validCount += 1;
@@ -483,7 +482,7 @@ function renderScalarGridStepFunction({ rgba, values, cellCount, colorLookup, vi
   let validCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
     const value = transform(values[index]);
-    if (value !== value) {
+    if (!Number.isFinite(value)) {
       continue;
     }
     validCount += 1;
@@ -585,6 +584,44 @@ function encodeLayerOrEmpty(layer, emptyPng, width, height, compressionLevel, fi
   return encodeRawPng(encodeRgbaPng(layer.rgba, width, height, compressionLevel, filterType));
 }
 
+// Deferred variant for the compression pool: the descriptor is returned
+// immediately (empty layers resolve inline from the shared transparent PNG),
+// while non-empty filter-0 bodies fill in when the pooled deflate completes.
+// Callers collect `pending` promises and await them once before the
+// descriptors are consumed. Non-filter-0 encodes stay inline (pngjs path).
+// `encodeContext` is null when compression offload is disabled, otherwise
+// `{ pool, counters }`: the pool submits the scanline scratch built in
+// png-encode (released for reuse right after the synchronous submit clone),
+// and counters feed the render profile's compressPoolJobs/Fallbacks. Each
+// rendered layer exclusively owns its RGBA and is never written after this
+// call, so it can remain the immutable failure-fallback source without an
+// otherwise-required defensive copy.
+function encodeLayerOrEmptyDeferred(layer, emptyPng, width, height, compressionLevel, filterType, encodeContext) {
+  if (!encodeContext || Number(filterType) !== 0) {
+    return {
+      descriptor: encodeLayerOrEmpty(layer, emptyPng, width, height, compressionLevel, filterType),
+      pending: null,
+    };
+  }
+  if (!layer || layer.visibleCount <= 0) {
+    return { descriptor: encodeRawPng(emptyPng), pending: null };
+  }
+  const descriptor = { body: null, bytes: 0, contentType: "image/png" };
+  const pending = encodeRgbaPngFilter0ViaPool(
+    layer.rgba,
+    width,
+    height,
+    compressionLevel,
+    encodeContext.pool,
+    encodeContext.counters,
+    { rgbaIsImmutableUntilSettled: true },
+  ).then((body) => {
+    descriptor.body = body;
+    descriptor.bytes = body.length;
+  });
+  return { descriptor, pending };
+}
+
 // Zero-visible scalar results are only consumed through encodeLayerOrEmpty,
 // which returns the cached transparent PNG without reading rgba bytes, so
 // null-input renders share one empty buffer instead of allocating and zeroing
@@ -603,6 +640,95 @@ function encodeRawPng(body) {
   };
 }
 
+// Reflectivity gate variants share one grid scan: the step bucket and the
+// valid count depend only on the cell value, not on the gate, so a single
+// pass writes each gate's buffer wherever the gate's minVisible predicate
+// holds. Produces byte-identical layers to running renderScalarGridStepRaw
+// once per gate with minVisible set to that gate.
+function renderReflectivityGateLayers({ values, width, height, colorLookup, gates }) {
+  const cellCount = width * height;
+  if (gates.length <= 0) {
+    return [];
+  }
+  if (!values || values.length !== cellCount || !colorLookup?.colors || !colorLookup?.thresholds) {
+    return gates.map(() => emptyScalarLayerResult());
+  }
+  const rgbaByGate = gates.map(() => Buffer.alloc(Math.max(0, cellCount * 4)));
+  const visibleCountByGate = gates.map(() => 0);
+  const thresholds = colorLookup.thresholds;
+  const colors = colorLookup.colors;
+  const thresholdCount = thresholds.length;
+  if (thresholdCount <= 0) {
+    return gates.map((_, gateIndex) => ({ rgba: rgbaByGate[gateIndex], visibleCount: 0, validCount: 0 }));
+  }
+  const uniformScale = Number(colorLookup.uniformScale) || 0;
+  const uniformStart = Number(colorLookup.uniformStart) || 0;
+  // Cells below every gate fail all gate predicates, so skip their bucket
+  // math entirely (mirrors the per-gate renders, which never bucket
+  // sub-gate cells).
+  let minGate = Infinity;
+  for (const gate of gates) {
+    if (gate < minGate) {
+      minGate = gate;
+    }
+  }
+  let validCount = 0;
+  for (let index = 0; index < cellCount; index += 1) {
+    const value = values[index];
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+    validCount += 1;
+    if (value < minGate) {
+      continue;
+    }
+    let selected;
+    if (uniformScale > 0) {
+      selected = Math.floor((value - uniformStart) * uniformScale);
+      if (selected < 0) {
+        selected = 0;
+      } else if (selected >= thresholdCount) {
+        selected = thresholdCount - 1;
+      }
+    } else {
+      selected = 0;
+      let low = 1;
+      let high = thresholdCount - 1;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (value < thresholds[mid]) {
+          high = mid - 1;
+        } else {
+          selected = mid;
+          low = mid + 1;
+        }
+      }
+    }
+    const colorOffset = selected * 4;
+    const alphaByte = colors[colorOffset + 3];
+    if (alphaByte <= 0) {
+      continue;
+    }
+    const offset = index * 4;
+    for (let gateIndex = 0; gateIndex < gates.length; gateIndex += 1) {
+      if (value < gates[gateIndex]) {
+        continue;
+      }
+      const rgba = rgbaByGate[gateIndex];
+      rgba[offset] = colors[colorOffset];
+      rgba[offset + 1] = colors[colorOffset + 1];
+      rgba[offset + 2] = colors[colorOffset + 2];
+      rgba[offset + 3] = alphaByte;
+      visibleCountByGate[gateIndex] += 1;
+    }
+  }
+  return gates.map((_, gateIndex) => ({
+    rgba: rgbaByGate[gateIndex],
+    visibleCount: visibleCountByGate[gateIndex],
+    validCount,
+  }));
+}
+
 function renderReflectivityVariants({
   values,
   width,
@@ -611,27 +737,28 @@ function renderReflectivityVariants({
   emptyPng,
   pngCompressionLevel,
   pngFilterType,
+  encodeLayer = null,
 }) {
-  const variants = {};
+  const encode =
+    encodeLayer || ((layer) => encodeLayerOrEmpty(layer, emptyPng, width, height, pngCompressionLevel, pngFilterType));
+  const gates = [];
   for (const gate of reflectivityGates) {
     const gateDbz = Math.round(Number(gate));
     if (!Number.isFinite(gateDbz)) {
       continue;
     }
-    variants[`dbz${gateDbz}`] = encodeLayerOrEmpty(
-      renderScalarGrid({
-        values,
-        width,
-        height,
-        ...CORE_LAYER_RENDER_OPTIONS.reflectivity,
-        minVisible: gateDbz,
-      }),
-      emptyPng,
-      width,
-      height,
-      pngCompressionLevel,
-      pngFilterType,
-    );
+    gates.push(gateDbz);
+  }
+  const layers = renderReflectivityGateLayers({
+    values,
+    width,
+    height,
+    colorLookup: CORE_LAYER_RENDER_OPTIONS.reflectivity.colorLookup,
+    gates,
+  });
+  const variants = {};
+  for (let index = 0; index < gates.length; index += 1) {
+    variants[`dbz${gates[index]}`] = encode(layers[index]);
   }
   return variants;
 }
@@ -660,7 +787,7 @@ function renderReflectivityPrecipTypeGrid({ reflectivityDbz, rain, snow, freezin
   let visibleCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
     const dbz = reflectivityDbz[index];
-    if (dbz !== dbz) {
+    if (!Number.isFinite(dbz)) {
       continue;
     }
     let lookup = null;
@@ -750,7 +877,7 @@ function findReflectivityPrecipTypeColorOffset(lookup, dbz) {
   const thresholds = lookup?.thresholds;
   const maxes = lookup?.maxes;
   const count = Number(lookup?.count) || 0;
-  if (!thresholds || !maxes || count <= 0) {
+  if (!thresholds || !maxes || count <= 0 || !Number.isFinite(dbz)) {
     return -1;
   }
   let selected = 0;
@@ -792,18 +919,11 @@ function findStepColorOffset(lookup, value) {
   return selected * 4;
 }
 
-function resolveHoverTransformValue(entry, selection) {
+function resolveHoverTransformValue(entry) {
   if (!entry || !entry.transform || entry.transform === "identity") {
     return null;
   }
-  if (entry.transform === "precipRate") {
-    const divisor = parseAccumulationHours(selection?.records?.[entry.inputKey]) || 1;
-    return {
-      transformScale: MM_TO_IN / divisor,
-      transformMin: 0,
-    };
-  }
-  return resolveCatalogAffineTransform(entry.transform) || resolveCatalogTransformValue(entry, selection);
+  return resolveCatalogAffineTransform(entry.transform) || ((value) => applyCatalogTransform(value, entry.transform));
 }
 
 function renderWindSpeedLayer({
@@ -870,7 +990,7 @@ function renderWindSpeedContinuousLayer({
   for (let index = 0; index < cellCount; index += 1) {
     const u = uValues[index];
     const v = vValues[index];
-    if (u !== u || v !== v) {
+    if (!Number.isFinite(u) || !Number.isFinite(v)) {
       continue;
     }
     const value = Math.sqrt(u * u + v * v) * multiplier;
@@ -929,7 +1049,7 @@ function renderWindSpeedStepLayer({
   for (let index = 0; index < cellCount; index += 1) {
     const u = uValues[index];
     const v = vValues[index];
-    if (u !== u || v !== v) {
+    if (!Number.isFinite(u) || !Number.isFinite(v)) {
       continue;
     }
     const value = Math.sqrt(u * u + v * v) * multiplier;
@@ -1004,7 +1124,7 @@ function buildFrontogenesisPresentationGrid(values, width, height) {
     : positive;
 }
 
-function renderCatalogParameterLayer({ entry, decoded, selection, width, height, getWindSpeedGrid = null }) {
+function renderCatalogParameterLayer({ entry, decoded, modelKey = null, width, height, getWindSpeedGrid = null }) {
   if (!entry || !decoded) {
     return null;
   }
@@ -1031,12 +1151,12 @@ function renderCatalogParameterLayer({ entry, decoded, selection, width, height,
   if (entry.kind === "heightContour") {
     return null;
   }
-  const source = resolveCatalogSourceGrid(entry, decoded, width, height);
+  const source = resolveCatalogSourceGrid(entry, decoded, width, height, modelKey);
   if (!source) {
     return null;
   }
   const values = resolveCatalogPresentationGrid(entry, source, width, height);
-  const transformOptions = resolveCatalogTransformOptions(entry, selection);
+  const transformOptions = resolveCatalogTransformOptions(entry);
   return renderScalarGrid({
     values,
     width,
@@ -1046,15 +1166,134 @@ function renderCatalogParameterLayer({ entry, decoded, selection, width, height,
   });
 }
 
-function resolveCatalogSourceGrid(entry, decoded, width, height) {
+// Per-frame memo caches attached to the decoded-grid object itself so the
+// PNG pass, the hover pass, and the derived-grid phase all share the same
+// computed source grids without any plumbing. Non-enumerable so the caches
+// never travel through Object.assign/spread copies of decoded.
+const CATALOG_SOURCE_GRID_CACHE = Symbol("catalogSourceGridCache");
+const BELOW_TERRAIN_MASK_CACHE = Symbol("belowTerrainMaskCache");
+
+function frameLocalCache(decoded, symbolKey) {
+  let cache = decoded[symbolKey];
+  if (!cache) {
+    cache = new Map();
+    Object.defineProperty(decoded, symbolKey, { value: cache, enumerable: false, configurable: true });
+  }
+  return cache;
+}
+
+// Frees the masked-grid copies once the last consumer (the hover pass) has
+// run, so a frame doesn't retain one Float32Array copy per pressure-level
+// entry for the rest of its lifetime.
+function releaseFrameLocalRasterCaches(decoded) {
+  if (!decoded || typeof decoded !== "object") {
+    return;
+  }
+  if (decoded[CATALOG_SOURCE_GRID_CACHE]) {
+    decoded[CATALOG_SOURCE_GRID_CACHE].clear();
+  }
+  if (decoded[BELOW_TERRAIN_MASK_CACHE]) {
+    decoded[BELOW_TERRAIN_MASK_CACHE].clear();
+  }
+}
+
+function resolveCatalogSourceGrid(entry, decoded, width, height, modelKey = null) {
   const source = decoded?.[entry?.inputKey];
   if (!source) {
     return null;
   }
   if (entry?.key === "cloudCeiling") {
-    return buildAglHeightMetersGrid(source, decoded?.profileSurfaceHeight, width, height);
+    // UPP's GFS/NAM family cloud-ceiling HGT is MSL, while HRRR's RAPR
+    // branch emits AGL directly. Subtracting terrain from HRRR would apply
+    // the datum conversion twice.
+    if (String(modelKey || "").toLowerCase() === "hrrr") {
+      return source;
+    }
+    const cache = frameLocalCache(decoded, CATALOG_SOURCE_GRID_CACHE);
+    let out = cache.get(entry.key);
+    if (out === undefined) {
+      out = buildAglHeightMetersGrid(source, decoded?.profileSurfaceHeight, width, height);
+      cache.set(entry.key, out);
+    }
+    return out;
   }
-  return source;
+  const pressureLevelMb = resolveCatalogPressureLevelMb(entry);
+  if (!Number.isFinite(pressureLevelMb)) {
+    return source;
+  }
+  const cache = frameLocalCache(decoded, CATALOG_SOURCE_GRID_CACHE);
+  let out = cache.get(entry.key);
+  if (out === undefined) {
+    out = maskPressureLevelGridBelowTerrain(source, decoded, pressureLevelMb, width, height);
+    cache.set(entry.key, out);
+  }
+  return out;
+}
+
+function resolveCatalogPressureLevelMb(entry) {
+  const directLevel = Number(entry?.contourLevelMb);
+  if (Number.isFinite(directLevel) && directLevel > 0) {
+    return directLevel;
+  }
+  for (const selector of [entry?.selector, entry?.uSelector, entry?.vSelector]) {
+    const match = String(selector?.level || "").match(/^\s*(\d+(?:\.\d+)?)\s*mb\s*$/i);
+    if (match) {
+      return Number(match[1]);
+    }
+  }
+  return Number.NaN;
+}
+
+function maskPressureLevelGridBelowTerrain(values, decoded, levelMb, width, height) {
+  const cols = Math.max(0, Math.round(Number(width) || 0));
+  const rows = Math.max(0, Math.round(Number(height) || 0));
+  const cellCount = cols * rows;
+  const level = Math.round(Number(levelMb));
+  const surfaceHeight = decoded?.profileSurfaceHeight;
+  const pressureHeight = decoded?.[`height${level}`] || decoded?.[`profileHgt${level}`];
+  if (
+    !values ||
+    values.length !== cellCount ||
+    !surfaceHeight ||
+    surfaceHeight.length !== cellCount ||
+    !pressureHeight ||
+    pressureHeight.length !== cellCount
+  ) {
+    return values || null;
+  }
+
+  // The below-terrain condition depends only on (surface height, pressure
+  // height at this level), so its boolean mask is shared per level across
+  // every variable masked at that level in the frame (temperature, RH,
+  // wind components, vorticity, frontogenesis inputs, hover). A null mask
+  // records "no below-terrain cells" so the copy is skipped exactly as the
+  // unshared loop skipped it.
+  const maskCache = frameLocalCache(decoded, BELOW_TERRAIN_MASK_CACHE);
+  let mask = maskCache.get(level);
+  if (mask === undefined) {
+    mask = null;
+    for (let index = 0; index < cellCount; index += 1) {
+      const terrainM = Number(surfaceHeight[index]);
+      const pressureSurfaceM = Number(pressureHeight[index]);
+      if (Number.isFinite(terrainM) && Number.isFinite(pressureSurfaceM) && pressureSurfaceM <= terrainM) {
+        if (!mask) {
+          mask = new Uint8Array(cellCount);
+        }
+        mask[index] = 1;
+      }
+    }
+    maskCache.set(level, mask);
+  }
+  if (!mask) {
+    return values;
+  }
+  const out = new Float32Array(values);
+  for (let index = 0; index < cellCount; index += 1) {
+    if (mask[index]) {
+      out[index] = Number.NaN;
+    }
+  }
+  return out;
 }
 
 function buildAglHeightMetersGrid(heightMslMeters, surfaceHeightMeters, width, height) {
@@ -1087,16 +1326,9 @@ function resolveCatalogPresentationGrid(entry, values, width, height) {
   return values;
 }
 
-function resolveCatalogTransformOptions(entry, selection) {
+function resolveCatalogTransformOptions(entry) {
   if (!entry || !entry.transform || entry.transform === "identity") {
     return {};
-  }
-  if (entry.transform === "precipRate") {
-    const divisor = parseAccumulationHours(selection?.records?.[entry.inputKey]) || 1;
-    return {
-      transformScale: 1 / divisor,
-      transformMin: 0,
-    };
   }
   const affine = resolveCatalogAffineTransform(entry.transform);
   if (affine) {
@@ -1221,53 +1453,6 @@ function resolveCatalogAffineTransform(transform) {
     };
   }
   return null;
-}
-
-function resolveCatalogTransformValue(entry, selection) {
-  if (!entry || !entry.transform || entry.transform === "identity") {
-    return null;
-  }
-  if (entry.transform === "precipRate") {
-    const divisor = parseAccumulationHours(selection.records?.[entry.inputKey]) || 1;
-    return (value) => (Number.isFinite(value) ? Math.max(0, value) / divisor : Number.NaN);
-  }
-  if (entry.transform === "kelvinToFahrenheit") {
-    return kelvinToFahrenheit;
-  }
-  if (entry.transform === "kelvinToCelsius") {
-    return kelvinToCelsius;
-  }
-  if (entry.transform === "pascalToHpa") {
-    return pascalToHpa;
-  }
-  if (entry.transform === "kgKgToGkg") {
-    return (value) => (Number.isFinite(value) ? value * 1000 : Number.NaN);
-  }
-  if (entry.transform === "metersToMiles") {
-    return (value) => (Number.isFinite(value) ? value / 1609.344 : Number.NaN);
-  }
-  if (entry.transform === "metersToFeet") {
-    return (value) => (Number.isFinite(value) ? value * 3.28084 : Number.NaN);
-  }
-  if (entry.transform === "metersToInches") {
-    return (value) => (Number.isFinite(value) ? value * 39.3701 : Number.NaN);
-  }
-  if (entry.transform === "kgM2ToWaterInches") {
-    return (value) => (Number.isFinite(value) ? value / 25.4 : Number.NaN);
-  }
-  if (entry.transform === "absoluteVorticity1e5") {
-    return (value) => (Number.isFinite(value) ? value * 100000 : Number.NaN);
-  }
-  if (entry.transform === "paSToDPaS") {
-    return (value) => (Number.isFinite(value) ? value * 10 : Number.NaN);
-  }
-  if (entry.transform === "metersPerSecondToKnots") {
-    return (value) => (Number.isFinite(value) ? value * MPS_TO_KT : Number.NaN);
-  }
-  if (entry.transform === "metersPerSecondToMph") {
-    return (value) => (Number.isFinite(value) ? value * MPS_TO_MPH : Number.NaN);
-  }
-  return (value) => applyCatalogTransform(value, entry.transform);
 }
 
 function resolveCatalogScale(entry) {
@@ -1668,6 +1853,7 @@ module.exports = {
   detectUniformStepThresholds,
   emptyScalarLayerResult,
   encodeLayerOrEmpty,
+  encodeLayerOrEmptyDeferred,
   encodeRawPng,
   findReflectivityPrecipTypeColorOffset,
   findStepColorOffset,
@@ -1682,6 +1868,7 @@ module.exports = {
   nullableFiniteNumber,
   renderCatalogParameterLayer,
   renderPrecipRateTypeGrid,
+  renderReflectivityGateLayers,
   renderReflectivityPrecipTypeGrid,
   renderReflectivityVariants,
   renderScalarGrid,
@@ -1696,13 +1883,15 @@ module.exports = {
   renderWindSpeedContinuousLayer,
   renderWindSpeedLayer,
   renderWindSpeedStepLayer,
+  maskPressureLevelGridBelowTerrain,
+  releaseFrameLocalRasterCaches,
+  resolveCatalogPressureLevelMb,
   resolveCatalogAffineTransform,
   resolveCatalogPresentationGrid,
   resolveCatalogScale,
   resolveCatalogSourceGrid,
   resolveCatalogStops,
   resolveCatalogTransformOptions,
-  resolveCatalogTransformValue,
   resolveHoverTransformValue,
   resolveVisibleBounds,
 };

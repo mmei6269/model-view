@@ -112,20 +112,20 @@ async function waitForHttp(url, timeoutMs = 30_000) {
 }
 
 async function waitForWeatherOverlay(page) {
+  // window.__wx bridge (the app's test-only map-state surface): at least one
+  // active weather layer whose current URL fired the engine's load event,
+  // with the weather group visible.
   await page.waitForFunction(
     () => {
-      const overlays = document.querySelectorAll(".leaflet-image-layer.wx-weather-overlay");
-      return Array.from(overlays).some((element) => {
-        const image = element;
-        const style = window.getComputedStyle(image);
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          Number(style.opacity || "1") > 0 &&
-          image.naturalWidth > 0 &&
-          image.naturalHeight > 0
-        );
-      });
+      const bridge = window.__wx;
+      if (!bridge || bridge.panels().length === 0) {
+        return false;
+      }
+      const id = bridge.panels()[0];
+      if (!(bridge.getGroupOpacity(id, "weather") > 0)) {
+        return false;
+      }
+      return bridge.getActiveWeatherLayers(id).some((key) => bridge.isWeatherLoaded(id, key));
     },
     null,
     { timeout: 15_000 },

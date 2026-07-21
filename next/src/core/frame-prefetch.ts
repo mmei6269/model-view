@@ -1,19 +1,22 @@
 import type { FrameRecord, LayerKey, PrefetchState, ReflectivityGateDbz, SynopticDetailMode } from "../types";
 import {
+  type ParsedPayloadCacheKind,
+  prefetchContourVectorPayload,
   prefetchFrameAssets,
-  prefetchHoverGridPayload,
   prefetchSynopticVectorPayload,
   prefetchWeatherVectorPayload,
-  resolveHoverGridRequestUrls,
+  isParsedPayloadCached,
+  resolveContourVectorRequestUrl,
   resolveLayerRequestUrl,
   resolveSynopticVectorKey,
   resolveSynopticVectorRequestUrl,
   resolveWeatherVectorRequestUrl,
+  subscribeParsedPayloadEvictions,
 } from "./artifact-client";
-import { subscribeLayerImageObjectUrlEvictions } from "./image-prefetch-cache";
+import { isLayerImageUrlResident, subscribeLayerImageObjectUrlEvictions } from "./image-prefetch-cache";
 
 interface PrefetchTask {
-  kind: "layer" | "vector" | "weather-vector" | "hover";
+  kind: "layer" | "vector" | "contour-vector" | "weather-vector";
   frame: FrameRecord;
   layer?: LayerKey;
   reflectivityGate?: ReflectivityGateDbz;
@@ -43,12 +46,18 @@ let globalLoadedCacheNotifyScheduled = false;
 type TaskOutcome = "success" | "error" | "cancelled";
 
 export function markFramePrefetchCacheKeyLoaded(cacheKey: string): void {
+  rememberFramePrefetchCacheKeyLoaded(cacheKey, true);
+}
+
+function rememberFramePrefetchCacheKeyLoaded(cacheKey: string, notify: boolean): void {
   const key = String(cacheKey || "");
   if (!key || GLOBAL_LOADED_CACHE_KEYS.has(key)) {
     return;
   }
   GLOBAL_LOADED_CACHE_KEYS.add(key);
-  scheduleGlobalLoadedCacheNotify();
+  if (notify) {
+    scheduleGlobalLoadedCacheNotify();
+  }
 }
 
 export function markFramePrefetchCacheKeyEvicted(cacheKey: string): void {
@@ -64,6 +73,34 @@ export function markFramePrefetchCacheKeyEvicted(cacheKey: string): void {
 subscribeLayerImageObjectUrlEvictions((requestUrl) => {
   markFramePrefetchCacheKeyEvicted(`layer|${requestUrl}`);
 });
+
+subscribeParsedPayloadEvictions((kind, requestUrl) => {
+  evictParsedPayloadLoadedKeys(kind, requestUrl);
+});
+
+function evictParsedPayloadLoadedKeys(kind: ParsedPayloadCacheKind, requestUrl: string): void {
+  const prefix =
+    kind === "synoptic-vector"
+      ? "vector|"
+      : kind === "contour-vector"
+        ? "contour-vector|"
+        : kind === "weather-vector"
+          ? "weather-vector|"
+          : "";
+  if (!prefix) {
+    return;
+  }
+  let changed = false;
+  for (const cacheKey of GLOBAL_LOADED_CACHE_KEYS) {
+    if (cacheKey.startsWith(prefix) && cacheKey.endsWith(`|${requestUrl}`)) {
+      GLOBAL_LOADED_CACHE_KEYS.delete(cacheKey);
+      changed = true;
+    }
+  }
+  if (changed) {
+    scheduleGlobalLoadedCacheNotify();
+  }
+}
 
 export function subscribeFramePrefetchCacheChanges(listener: () => void): () => void {
   GLOBAL_LOADED_CACHE_LISTENERS.add(listener);
@@ -98,6 +135,15 @@ export function markFrameLayerLoaded(
   if (!frame) {
     return;
   }
+  // Display-driven marking is intentionally NOT residency-guarded: the map
+  // engine fires this when its decode of the layer lands, and a frame that
+  // is genuinely on screen counts as loaded even when cache pressure holds
+  // no copy of its bytes (the transient-failure recovery flow depends on
+  // exactly this — MapLibre's one visible request marks the selected hour
+  // without a parallel prefetch). The residency guards live on the
+  // cache-warming completion paths (prefetch + warmup engines), whose only
+  // claim is "bytes are resident for instant reuse". Consequence: eviction
+  // honesty can only be asserted for frames the map is not displaying.
   markFramePrefetchCacheKeyLoaded(buildLayerCacheKey(frame, layer, reflectivityGate));
 }
 
@@ -112,21 +158,34 @@ export function markFrameSynopticVectorLoaded(
   markFramePrefetchCacheKeyLoaded(buildVectorCacheKey(frame, vectorUrl));
 }
 
+export function markFrameContourVectorLoaded(frame: FrameRecord | null | undefined, layer: LayerKey): void {
+  const vectorUrl = String(resolveContourVectorRequestUrl(frame, layer) || "").trim();
+  if (!frame || !vectorUrl) {
+    return;
+  }
+  markFramePrefetchCacheKeyLoaded(buildContourVectorCacheKey(frame, layer, vectorUrl));
+}
+
 function scheduleGlobalLoadedCacheNotify(): void {
   if (globalLoadedCacheNotifyScheduled) {
     return;
   }
   globalLoadedCacheNotifyScheduled = true;
+  // Network/cache completions for a hot run arrive in dense clusters. One
+  // notification per short burst keeps independent panels and background
+  // warmups coherent without forcing a whole-horizon React scan per asset.
   globalThis.setTimeout(() => {
     globalLoadedCacheNotifyScheduled = false;
     for (const listener of GLOBAL_LOADED_CACHE_LISTENERS) {
       listener();
     }
-  }, 0);
+  }, 100);
 }
 
 export class FramePrefetchEngine {
   private cacheKey = "";
+  private planSignature = "";
+  private anchorHour: number | null = null;
   private planRevision = 0;
   private queue: PrefetchTask[] = [];
   private inFlight = 0;
@@ -135,6 +194,8 @@ export class FramePrefetchEngine {
   private successByHour = new Map<number, number>();
   private seededTaskKeys = new Set<string>();
   private failedHours = new Set<number>();
+  private failedTaskHours = new Map<string, number>();
+  private urgentTaskKeys = new Set<string>();
   private globalAbort: AbortController | null = null;
   private onStatus?: (hour: number, status: PrefetchState) => void;
 
@@ -144,26 +205,82 @@ export class FramePrefetchEngine {
       this.stop();
       return;
     }
-    this.planRevision += 1;
-    const revision = this.planRevision;
-    this.cacheKey = nextKey;
-    this.queue = [];
-    this.requiredByHour.clear();
-    this.successByHour.clear();
-    this.seededTaskKeys.clear();
-    this.failedHours.clear();
-
-    this.onStatus = plan.onStatus;
-    this.globalAbort = this.globalAbort || new AbortController();
-
-    const tasks = buildTieredTasks(
+    const candidateTasks = buildTieredTasks(
       plan.frames,
       plan.activeLayers,
       plan.currentHour,
       plan.reflectivityGate || 15,
       plan.synopticDetailMode || "simple",
-      revision,
+      this.planRevision,
     );
+    const nextSignature = buildTaskPlanSignature(candidateTasks);
+    this.onStatus = plan.onStatus;
+
+    if (nextKey === this.cacheKey && nextSignature === this.planSignature) {
+      if (plan.currentHour === this.anchorHour) {
+        // Status callbacks can synchronously rerender the owning panel while a
+        // cached-task pump is still unwinding. Re-entering pump() for the same
+        // anchor recursively drains the remaining cached queue and can exceed
+        // React's nested-update limit on a full run. Refreshing onStatus above
+        // is the only work an identical configure call needs.
+        return;
+      }
+      this.anchorHour = plan.currentHour;
+      // A timeline move changes priority only. Preserve valid in-flight work
+      // and progress, while reordering tasks that have not started yet around
+      // the new anchor hour.
+      const pendingTaskKeys = new Set(this.queue.map((task) => task.taskKey));
+      // A transiently failed task is no longer pending. Give it one deliberate
+      // retry when the analyst moves onto that hour, without restarting other
+      // failed work or aborting unrelated in-flight requests.
+      const retryTaskKeys = new Set<string>();
+      const candidateByTaskKey = new Map(candidateTasks.map((task) => [task.taskKey, task]));
+      for (const [taskKey, hour] of this.failedTaskHours.entries()) {
+        const failedTask = candidateByTaskKey.get(taskKey);
+        // Raster selection already makes MapLibre issue the direct visible
+        // image request. Do not duplicate that transfer with a simultaneous
+        // prefetch retry; its load callback updates the shared cache/status.
+        if (hour === plan.currentHour && failedTask?.kind !== "layer") {
+          retryTaskKeys.add(taskKey);
+        }
+      }
+      const eligibleTasks = candidateTasks.filter(
+        (task) => pendingTaskKeys.has(task.taskKey) || retryTaskKeys.has(task.taskKey),
+      );
+      const urgentTasks = eligibleTasks.filter((task) => task.frame.hour === plan.currentHour);
+      const urgentTaskKeys = new Set(urgentTasks.map((task) => task.taskKey));
+      const retryTasks = eligibleTasks.filter(
+        (task) => retryTaskKeys.has(task.taskKey) && !urgentTaskKeys.has(task.taskKey),
+      );
+      const pendingTasks = eligibleTasks.filter(
+        (task) => !retryTaskKeys.has(task.taskKey) && !urgentTaskKeys.has(task.taskKey),
+      );
+      this.urgentTaskKeys = urgentTaskKeys;
+      this.queue = [...urgentTasks, ...retryTasks, ...pendingTasks];
+      this.pump();
+      return;
+    }
+
+    this.planRevision += 1;
+    const revision = this.planRevision;
+    // A URL/task-roster change is genuinely obsolete. Abort the old work and
+    // release its concurrency slots; late handlers are revision-guarded.
+    this.globalAbort?.abort();
+    this.globalAbort = new AbortController();
+    this.inFlightByUrl.clear();
+    this.inFlight = 0;
+    this.cacheKey = nextKey;
+    this.planSignature = nextSignature;
+    this.anchorHour = plan.currentHour;
+    this.queue = [];
+    this.requiredByHour.clear();
+    this.successByHour.clear();
+    this.seededTaskKeys.clear();
+    this.failedHours.clear();
+    this.failedTaskHours.clear();
+    this.urgentTaskKeys.clear();
+
+    const tasks = candidateTasks.map((task) => ({ ...task, revision }));
     this.queue = tasks;
     this.requiredByHour = countTasksByHour(tasks);
     const seeded = seedSuccessByHour(tasks);
@@ -186,11 +303,15 @@ export class FramePrefetchEngine {
   stop(): void {
     this.planRevision += 1;
     this.cacheKey = "";
+    this.planSignature = "";
+    this.anchorHour = null;
     this.queue = [];
     this.requiredByHour.clear();
     this.successByHour.clear();
     this.seededTaskKeys.clear();
     this.failedHours.clear();
+    this.failedTaskHours.clear();
+    this.urgentTaskKeys.clear();
     this.onStatus = undefined;
     this.inFlightByUrl.clear();
     if (this.globalAbort) {
@@ -201,10 +322,22 @@ export class FramePrefetchEngine {
   }
 
   private pump(): void {
-    while (this.inFlight < DEFAULT_CONCURRENCY && this.queue.length > 0) {
+    while (this.queue.length > 0) {
+      const nextTask = this.queue[0];
+      const canUseUrgentSlot =
+        this.inFlight === DEFAULT_CONCURRENCY && Boolean(nextTask && this.urgentTaskKeys.has(nextTask.taskKey));
+      if (this.inFlight >= DEFAULT_CONCURRENCY && !canUseUrgentSlot) {
+        break;
+      }
       const task = this.queue.shift();
       if (!task) {
         break;
+      }
+      this.urgentTaskKeys.delete(task.taskKey);
+      const isSelectedRetry = this.failedTaskHours.has(task.taskKey) && task.frame.hour === this.anchorHour;
+      if (isSelectedRetry) {
+        this.failedTaskHours.delete(task.taskKey);
+        this.refreshFailedHour(task.frame.hour);
       }
       if (GLOBAL_LOADED_CACHE_KEYS.has(task.cacheKey)) {
         this.markTaskComplete(task, "success");
@@ -222,15 +355,24 @@ export class FramePrefetchEngine {
         continue;
       }
       const request = this.createTaskRequest(task);
+      const requestRevision = task.revision;
       this.inFlight += 1;
       this.inFlightByUrl.set(url, request);
       this.noteTaskFetchStarted(task);
-      this.attachTaskToRequest(task, request);
-      void request.finally(() => {
+      const releaseRequestSlot = () => {
+        if (requestRevision !== this.planRevision) {
+          return;
+        }
         this.inFlight = Math.max(0, this.inFlight - 1);
-        this.inFlightByUrl.delete(url);
+        if (this.inFlightByUrl.get(url) === request) {
+          this.inFlightByUrl.delete(url);
+        }
         this.pump();
-      });
+      };
+      // Register release first so an error status callback that synchronously
+      // re-anchors cannot attach a retry to the already-rejected request.
+      void request.then(releaseRequestSlot, releaseRequestSlot);
+      this.attachTaskToRequest(task, request);
     }
   }
 
@@ -253,10 +395,10 @@ export class FramePrefetchEngine {
           signal,
           synopticDetailMode: task.synopticDetailMode || "simple",
         })
-      : task.kind === "weather-vector"
-        ? prefetchWeatherVectorPayload(task.frame, task.layer as LayerKey, { signal })
-        : task.kind === "hover"
-          ? prefetchHoverGridPayload(task.frame, { signal })
+      : task.kind === "contour-vector"
+        ? prefetchContourVectorPayload(task.frame, task.layer as LayerKey, { signal })
+        : task.kind === "weather-vector"
+          ? prefetchWeatherVectorPayload(task.frame, task.layer as LayerKey, { signal })
           : prefetchFrameAssets(task.frame, [task.layer as LayerKey], {
               decode: true,
               signal,
@@ -267,7 +409,17 @@ export class FramePrefetchEngine {
   private attachTaskToRequest(task: PrefetchTask, request: Promise<void>): void {
     void request
       .then(() => {
-        markFramePrefetchCacheKeyLoaded(task.cacheKey);
+        if (!isTaskCacheResident(task)) {
+          markFramePrefetchCacheKeyEvicted(task.cacheKey);
+          this.markTaskComplete(task, "cancelled");
+          return;
+        }
+        // The owner receives its hour status below, but other mounted panels can
+        // still hold an error for this shared URL. Publish through the batched
+        // global channel so they recover too. The 100 ms scheduler collapses a
+        // hot completion burst, and an identical reconfiguration is a no-op, so
+        // this cannot recreate synchronous nested-update churn.
+        rememberFramePrefetchCacheKeyLoaded(task.cacheKey, true);
         this.markTaskComplete(task, "success");
       })
       .catch((error: unknown) => {
@@ -291,10 +443,13 @@ export class FramePrefetchEngine {
       return;
     }
     if (outcome === "error") {
+      this.failedTaskHours.set(task.taskKey, hour);
       this.failedHours.add(hour);
       this.emitStatus(hour, "error");
       return;
     }
+    this.failedTaskHours.delete(task.taskKey);
+    this.refreshFailedHour(hour);
     if (this.seededTaskKeys.has(task.taskKey)) {
       // The configure-time seed already counted this task; counting it again on the
       // pump()'s cached fast path would double-count the hour and emit "loaded"
@@ -316,9 +471,46 @@ export class FramePrefetchEngine {
     }
     this.onStatus(hour, status);
   }
+
+  private refreshFailedHour(hour: number): void {
+    for (const failedHour of this.failedTaskHours.values()) {
+      if (failedHour === hour) {
+        this.failedHours.add(hour);
+        return;
+      }
+    }
+    this.failedHours.delete(hour);
+  }
 }
 
-function buildTieredTasks(
+function buildTaskPlanSignature(tasks: PrefetchTask[]): string {
+  return tasks
+    .map((task) => `${task.taskKey}\u0000${task.cacheKey}\u0000${task.affectsStatus ? "status" : "warm"}`)
+    .sort()
+    .join("\n");
+}
+
+function isTaskCacheResident(task: PrefetchTask): boolean {
+  const requestUrl = resolveTaskUrl(task);
+  if (!requestUrl) {
+    return true;
+  }
+  if (task.kind === "vector") {
+    return isParsedPayloadCached("synoptic-vector", requestUrl);
+  }
+  if (task.kind === "contour-vector") {
+    return isParsedPayloadCached("contour-vector", requestUrl);
+  }
+  if (task.kind === "weather-vector") {
+    return isParsedPayloadCached("weather-vector", requestUrl);
+  }
+  // A raster fetch can finish after cache pressure evicted the object URL
+  // (especially while its decode was still in flight). Do not let that stale
+  // completion recreate a loaded key for bytes that are no longer resident.
+  return isLayerImageUrlResident(requestUrl);
+}
+
+export function buildTieredTasks(
   frames: FrameRecord[],
   activeLayers: Set<LayerKey>,
   currentHour: number,
@@ -335,6 +527,19 @@ function buildTieredTasks(
     const inTierA = distance <= 2;
 
     for (const layer of active) {
+      const contourVectorUrl = resolveContourVectorRequestUrl(frame, layer);
+      if (contourVectorUrl) {
+        tasks.push({
+          kind: "contour-vector",
+          frame,
+          layer,
+          priority: inTierA ? 1 : 2,
+          taskKey: buildContourVectorTaskKey(frame, layer, contourVectorUrl),
+          cacheKey: buildContourVectorCacheKey(frame, layer, contourVectorUrl),
+          affectsStatus: !hasCompleteFrameLayerRef(frame.layers?.[layer]),
+          revision,
+        });
+      }
       const weatherVectorUrl = resolveWeatherVectorRequestUrl(frame, layer);
       if (weatherVectorUrl) {
         tasks.push({
@@ -382,24 +587,17 @@ function buildTieredTasks(
         revision,
       });
     }
-    if (frame.hoverGridKey) {
-      tasks.push({
-        kind: "hover",
-        frame,
-        priority: inTierA ? 1 : 2,
-        taskKey: buildHoverTaskKey(frame),
-        cacheKey: buildHoverCacheKey(frame),
-        affectsStatus: false,
-        revision,
-      });
-    }
   }
 
   tasks.sort((left, right) => {
     if (left.priority !== right.priority) {
       return left.priority - right.priority;
     }
-    return Math.abs(left.frame.hour - currentHour) - Math.abs(right.frame.hour - currentHour);
+    const distance = Math.abs(left.frame.hour - currentHour) - Math.abs(right.frame.hour - currentHour);
+    if (distance !== 0) {
+      return distance;
+    }
+    return taskKindRank(left.kind) - taskKindRank(right.kind);
   });
 
   return dedupeTasks(tasks);
@@ -492,21 +690,20 @@ function buildWeatherVectorTaskKey(frame: FrameRecord, layer: LayerKey, key: str
   return `weather-vector|${frame.hour}|${layer}|${String(key || "missing")}`;
 }
 
-function buildHoverCacheKey(frame: FrameRecord): string {
-  const url = resolveHoverGridRequestUrls(frame).join("|");
-  return `hover|${String(url || `missing|${frame.hour}`)}`;
+function buildContourVectorCacheKey(frame: FrameRecord, layer: LayerKey, key: string): string {
+  return `contour-vector|${frame.hour}|${layer}|${String(key || "missing")}`;
 }
 
-function buildHoverTaskKey(frame: FrameRecord): string {
-  return `hover|${frame.hour}|${String(resolveHoverGridRequestUrls(frame).join("|") || "missing")}`;
+function buildContourVectorTaskKey(frame: FrameRecord, layer: LayerKey, key: string): string {
+  return `contour-vector|${frame.hour}|${layer}|${String(key || "missing")}`;
 }
 
 function resolveTaskUrl(task: PrefetchTask): string {
   if (task.kind === "vector") {
     return String(task.vectorKey || "");
   }
-  if (task.kind === "hover") {
-    return resolveHoverGridRequestUrls(task.frame).join("|");
+  if (task.kind === "contour-vector") {
+    return resolveContourVectorRequestUrl(task.frame, task.layer as LayerKey) || "";
   }
   if (task.kind === "weather-vector") {
     return resolveWeatherVectorRequestUrl(task.frame, task.layer as LayerKey) || "";
@@ -514,6 +711,13 @@ function resolveTaskUrl(task: PrefetchTask): string {
   return String(
     resolveLayerRequestUrl(task.frame, task.layer as LayerKey, { reflectivityGate: task.reflectivityGate }) || "",
   );
+}
+
+function taskKindRank(kind: PrefetchTask["kind"]): number {
+  if (kind === "vector" || kind === "contour-vector" || kind === "weather-vector") {
+    return 0;
+  }
+  return 1;
 }
 
 function isAbortLikeError(error: unknown): boolean {
