@@ -37,10 +37,10 @@
           "startDbz": 10,
           "belowFilter": false,
           "webColor": {
-            "hex": "#37B65B",
-            "rgb": [55, 182, 91],
-            "alpha": 0.24,
-            "cssRgba": "rgba(55, 182, 91, 0.240)"
+            "hex": "#8FE08A",
+            "rgb": [143, 224, 138],
+            "alpha": 0.3,
+            "cssRgba": "rgba(143, 224, 138, 0.300)"
           }
         },
         {
@@ -51,10 +51,10 @@
           "startDbz": 12.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#2EA953",
-            "rgb": [46, 169, 83],
-            "alpha": 0.285,
-            "cssRgba": "rgba(46, 169, 83, 0.285)"
+            "hex": "#71C777",
+            "rgb": [113, 199, 119],
+            "alpha": 0.345,
+            "cssRgba": "rgba(113, 199, 119, 0.345)"
           }
         },
         {
@@ -65,10 +65,10 @@
           "startDbz": 15,
           "belowFilter": false,
           "webColor": {
-            "hex": "#269B4B",
-            "rgb": [38, 155, 75],
-            "alpha": 0.33,
-            "cssRgba": "rgba(38, 155, 75, 0.330)"
+            "hex": "#52AD63",
+            "rgb": [82, 173, 99],
+            "alpha": 0.39,
+            "cssRgba": "rgba(82, 173, 99, 0.390)"
           }
         },
         {
@@ -79,10 +79,10 @@
           "startDbz": 17.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#1D8E43",
-            "rgb": [29, 142, 67],
-            "alpha": 0.375,
-            "cssRgba": "rgba(29, 142, 67, 0.375)"
+            "hex": "#349450",
+            "rgb": [52, 148, 80],
+            "alpha": 0.435,
+            "cssRgba": "rgba(52, 148, 80, 0.435)"
           }
         },
         {
@@ -93,10 +93,10 @@
           "startDbz": 20,
           "belowFilter": false,
           "webColor": {
-            "hex": "#14803B",
-            "rgb": [20, 128, 59],
-            "alpha": 0.42,
-            "cssRgba": "rgba(20, 128, 59, 0.420)"
+            "hex": "#157A3C",
+            "rgb": [21, 122, 60],
+            "alpha": 0.48,
+            "cssRgba": "rgba(21, 122, 60, 0.480)"
           }
         },
         {
@@ -107,10 +107,10 @@
           "startDbz": 22.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#47913F",
-            "rgb": [71, 145, 63],
-            "alpha": 0.465,
-            "cssRgba": "rgba(71, 145, 63, 0.465)"
+            "hex": "#488D3F",
+            "rgb": [72, 141, 63],
+            "alpha": 0.525,
+            "cssRgba": "rgba(72, 141, 63, 0.525)"
           }
         },
         {
@@ -121,10 +121,10 @@
           "startDbz": 25,
           "belowFilter": false,
           "webColor": {
-            "hex": "#7AA242",
-            "rgb": [122, 162, 66],
-            "alpha": 0.51,
-            "cssRgba": "rgba(122, 162, 66, 0.510)"
+            "hex": "#7B9F43",
+            "rgb": [123, 159, 67],
+            "alpha": 0.57,
+            "cssRgba": "rgba(123, 159, 67, 0.570)"
           }
         },
         {
@@ -135,10 +135,10 @@
           "startDbz": 27.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#ADB346",
-            "rgb": [173, 179, 70],
-            "alpha": 0.555,
-            "cssRgba": "rgba(173, 179, 70, 0.555)"
+            "hex": "#ADB246",
+            "rgb": [173, 178, 70],
+            "alpha": 0.615,
+            "cssRgba": "rgba(173, 178, 70, 0.615)"
           }
         },
         {
@@ -151,8 +151,8 @@
           "webColor": {
             "hex": "#E0C449",
             "rgb": [224, 196, 73],
-            "alpha": 0.6,
-            "cssRgba": "rgba(224, 196, 73, 0.600)"
+            "alpha": 0.66,
+            "cssRgba": "rgba(224, 196, 73, 0.660)"
           }
         },
         {
@@ -165,8 +165,8 @@
           "webColor": {
             "hex": "#DEAA47",
             "rgb": [222, 170, 71],
-            "alpha": 0.645,
-            "cssRgba": "rgba(222, 170, 71, 0.645)"
+            "alpha": 0.705,
+            "cssRgba": "rgba(222, 170, 71, 0.705)"
           }
         },
         {
@@ -179,8 +179,8 @@
           "webColor": {
             "hex": "#DC8F46",
             "rgb": [220, 143, 70],
-            "alpha": 0.69,
-            "cssRgba": "rgba(220, 143, 70, 0.690)"
+            "alpha": 0.75,
+            "cssRgba": "rgba(220, 143, 70, 0.750)"
           }
         },
         {
@@ -193,8 +193,8 @@
           "webColor": {
             "hex": "#DA7544",
             "rgb": [218, 117, 68],
-            "alpha": 0.735,
-            "cssRgba": "rgba(218, 117, 68, 0.735)"
+            "alpha": 0.795,
+            "cssRgba": "rgba(218, 117, 68, 0.795)"
           }
         },
         {
@@ -207,8 +207,8 @@
           "webColor": {
             "hex": "#D85A42",
             "rgb": [216, 90, 66],
-            "alpha": 0.78,
-            "cssRgba": "rgba(216, 90, 66, 0.780)"
+            "alpha": 0.84,
+            "cssRgba": "rgba(216, 90, 66, 0.840)"
           }
         },
         {
@@ -221,8 +221,8 @@
           "webColor": {
             "hex": "#C95359",
             "rgb": [201, 83, 89],
-            "alpha": 0.825,
-            "cssRgba": "rgba(201, 83, 89, 0.825)"
+            "alpha": 0.885,
+            "cssRgba": "rgba(201, 83, 89, 0.885)"
           }
         },
         {
@@ -235,8 +235,8 @@
           "webColor": {
             "hex": "#BA4C70",
             "rgb": [186, 76, 112],
-            "alpha": 0.87,
-            "cssRgba": "rgba(186, 76, 112, 0.870)"
+            "alpha": 0.93,
+            "cssRgba": "rgba(186, 76, 112, 0.930)"
           }
         },
         {
@@ -249,8 +249,8 @@
           "webColor": {
             "hex": "#AB4587",
             "rgb": [171, 69, 135],
-            "alpha": 0.915,
-            "cssRgba": "rgba(171, 69, 135, 0.915)"
+            "alpha": 0.975,
+            "cssRgba": "rgba(171, 69, 135, 0.975)"
           }
         },
         {
@@ -263,8 +263,8 @@
           "webColor": {
             "hex": "#9C3E9E",
             "rgb": [156, 62, 158],
-            "alpha": 0.96,
-            "cssRgba": "rgba(156, 62, 158, 0.960)"
+            "alpha": 1,
+            "cssRgba": "rgba(156, 62, 158, 1.000)"
           }
         },
         {
@@ -408,10 +408,10 @@
           "startDbz": 5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#6CC7E0",
-            "rgb": [108, 199, 224],
-            "alpha": 0.24,
-            "cssRgba": "rgba(108, 199, 224, 0.240)"
+            "hex": "#D9F2FA",
+            "rgb": [217, 242, 250],
+            "alpha": 0.3,
+            "cssRgba": "rgba(217, 242, 250, 0.300)"
           }
         },
         {
@@ -422,10 +422,10 @@
           "startDbz": 8.75,
           "belowFilter": false,
           "webColor": {
-            "hex": "#5FB5DB",
-            "rgb": [95, 181, 219],
-            "alpha": 0.285,
-            "cssRgba": "rgba(95, 181, 219, 0.285)"
+            "hex": "#AFD9F0",
+            "rgb": [175, 217, 240],
+            "alpha": 0.345,
+            "cssRgba": "rgba(175, 217, 240, 0.345)"
           }
         },
         {
@@ -436,10 +436,10 @@
           "startDbz": 12.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#53A3D5",
-            "rgb": [83, 163, 213],
-            "alpha": 0.33,
-            "cssRgba": "rgba(83, 163, 213, 0.330)"
+            "hex": "#84BFE6",
+            "rgb": [132, 191, 230],
+            "alpha": 0.39,
+            "cssRgba": "rgba(132, 191, 230, 0.390)"
           }
         },
         {
@@ -450,10 +450,10 @@
           "startDbz": 16.25,
           "belowFilter": false,
           "webColor": {
-            "hex": "#4691D0",
-            "rgb": [70, 145, 208],
-            "alpha": 0.375,
-            "cssRgba": "rgba(70, 145, 208, 0.375)"
+            "hex": "#5AA6DC",
+            "rgb": [90, 166, 220],
+            "alpha": 0.435,
+            "cssRgba": "rgba(90, 166, 220, 0.435)"
           }
         },
         {
@@ -464,10 +464,10 @@
           "startDbz": 20,
           "belowFilter": false,
           "webColor": {
-            "hex": "#397FCA",
-            "rgb": [57, 127, 202],
-            "alpha": 0.42,
-            "cssRgba": "rgba(57, 127, 202, 0.420)"
+            "hex": "#2F8CD2",
+            "rgb": [47, 140, 210],
+            "alpha": 0.48,
+            "cssRgba": "rgba(47, 140, 210, 0.480)"
           }
         },
         {
@@ -478,10 +478,10 @@
           "startDbz": 22.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#4675C6",
-            "rgb": [70, 117, 198],
-            "alpha": 0.465,
-            "cssRgba": "rgba(70, 117, 198, 0.465)"
+            "hex": "#2C7BC5",
+            "rgb": [44, 123, 197],
+            "alpha": 0.525,
+            "cssRgba": "rgba(44, 123, 197, 0.525)"
           }
         },
         {
@@ -492,10 +492,10 @@
           "startDbz": 25,
           "belowFilter": false,
           "webColor": {
-            "hex": "#526CC1",
-            "rgb": [82, 108, 193],
-            "alpha": 0.51,
-            "cssRgba": "rgba(82, 108, 193, 0.510)"
+            "hex": "#2A6AB7",
+            "rgb": [42, 106, 183],
+            "alpha": 0.57,
+            "cssRgba": "rgba(42, 106, 183, 0.570)"
           }
         },
         {
@@ -506,10 +506,10 @@
           "startDbz": 27.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#5F62BD",
-            "rgb": [95, 98, 189],
-            "alpha": 0.555,
-            "cssRgba": "rgba(95, 98, 189, 0.555)"
+            "hex": "#2758AA",
+            "rgb": [39, 88, 170],
+            "alpha": 0.615,
+            "cssRgba": "rgba(39, 88, 170, 0.615)"
           }
         },
         {
@@ -520,10 +520,10 @@
           "startDbz": 30,
           "belowFilter": false,
           "webColor": {
-            "hex": "#6B58B8",
-            "rgb": [107, 88, 184],
-            "alpha": 0.6,
-            "cssRgba": "rgba(107, 88, 184, 0.600)"
+            "hex": "#24479C",
+            "rgb": [36, 71, 156],
+            "alpha": 0.66,
+            "cssRgba": "rgba(36, 71, 156, 0.660)"
           }
         },
         {
@@ -534,10 +534,10 @@
           "startDbz": 32.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#7E59B5",
-            "rgb": [126, 89, 181],
-            "alpha": 0.645,
-            "cssRgba": "rgba(126, 89, 181, 0.645)"
+            "hex": "#3E4AA6",
+            "rgb": [62, 74, 166],
+            "alpha": 0.705,
+            "cssRgba": "rgba(62, 74, 166, 0.705)"
           }
         },
         {
@@ -548,10 +548,10 @@
           "startDbz": 35,
           "belowFilter": false,
           "webColor": {
-            "hex": "#915BB1",
-            "rgb": [145, 91, 177],
-            "alpha": 0.69,
-            "cssRgba": "rgba(145, 91, 177, 0.690)"
+            "hex": "#574DB0",
+            "rgb": [87, 77, 176],
+            "alpha": 0.75,
+            "cssRgba": "rgba(87, 77, 176, 0.750)"
           }
         },
         {
@@ -562,10 +562,10 @@
           "startDbz": 37.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#A35CAE",
-            "rgb": [163, 92, 174],
-            "alpha": 0.735,
-            "cssRgba": "rgba(163, 92, 174, 0.735)"
+            "hex": "#714FBA",
+            "rgb": [113, 79, 186],
+            "alpha": 0.795,
+            "cssRgba": "rgba(113, 79, 186, 0.795)"
           }
         },
         {
@@ -576,10 +576,10 @@
           "startDbz": 40,
           "belowFilter": false,
           "webColor": {
-            "hex": "#B65DAA",
-            "rgb": [182, 93, 170],
-            "alpha": 0.78,
-            "cssRgba": "rgba(182, 93, 170, 0.780)"
+            "hex": "#8A52C4",
+            "rgb": [138, 82, 196],
+            "alpha": 0.84,
+            "cssRgba": "rgba(138, 82, 196, 0.840)"
           }
         },
         {
@@ -590,10 +590,10 @@
           "startDbz": 42.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#BF6BB1",
-            "rgb": [191, 107, 177],
-            "alpha": 0.825,
-            "cssRgba": "rgba(191, 107, 177, 0.825)"
+            "hex": "#995CC5",
+            "rgb": [153, 92, 197],
+            "alpha": 0.885,
+            "cssRgba": "rgba(153, 92, 197, 0.885)"
           }
         },
         {
@@ -604,10 +604,10 @@
           "startDbz": 45,
           "belowFilter": false,
           "webColor": {
-            "hex": "#C878B8",
-            "rgb": [200, 120, 184],
-            "alpha": 0.87,
-            "cssRgba": "rgba(200, 120, 184, 0.870)"
+            "hex": "#A967C7",
+            "rgb": [169, 103, 199],
+            "alpha": 0.93,
+            "cssRgba": "rgba(169, 103, 199, 0.930)"
           }
         },
         {
@@ -618,10 +618,10 @@
           "startDbz": 47.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#D086BE",
-            "rgb": [208, 134, 190],
-            "alpha": 0.915,
-            "cssRgba": "rgba(208, 134, 190, 0.915)"
+            "hex": "#B871C8",
+            "rgb": [184, 113, 200],
+            "alpha": 0.975,
+            "cssRgba": "rgba(184, 113, 200, 0.975)"
           }
         },
         {
@@ -632,10 +632,10 @@
           "startDbz": 50,
           "belowFilter": false,
           "webColor": {
-            "hex": "#D993C5",
-            "rgb": [217, 147, 197],
-            "alpha": 0.96,
-            "cssRgba": "rgba(217, 147, 197, 0.960)"
+            "hex": "#C77BC9",
+            "rgb": [199, 123, 201],
+            "alpha": 1,
+            "cssRgba": "rgba(199, 123, 201, 1.000)"
           }
         },
         {
@@ -646,10 +646,10 @@
           "startDbz": 52.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#DC9CCA",
-            "rgb": [220, 156, 202],
+            "hex": "#CC86CD",
+            "rgb": [204, 134, 205],
             "alpha": 1,
-            "cssRgba": "rgba(220, 156, 202, 1.000)"
+            "cssRgba": "rgba(204, 134, 205, 1.000)"
           }
         },
         {
@@ -660,10 +660,10 @@
           "startDbz": 55,
           "belowFilter": false,
           "webColor": {
-            "hex": "#DFA4CF",
-            "rgb": [223, 164, 207],
+            "hex": "#D192D2",
+            "rgb": [209, 146, 210],
             "alpha": 1,
-            "cssRgba": "rgba(223, 164, 207, 1.000)"
+            "cssRgba": "rgba(209, 146, 210, 1.000)"
           }
         },
         {
@@ -674,10 +674,10 @@
           "startDbz": 57.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#E1ADD3",
-            "rgb": [225, 173, 211],
+            "hex": "#D59DD6",
+            "rgb": [213, 157, 214],
             "alpha": 1,
-            "cssRgba": "rgba(225, 173, 211, 1.000)"
+            "cssRgba": "rgba(213, 157, 214, 1.000)"
           }
         },
         {
@@ -688,10 +688,10 @@
           "startDbz": 60,
           "belowFilter": false,
           "webColor": {
-            "hex": "#E4B6D8",
-            "rgb": [228, 182, 216],
+            "hex": "#DAA8DA",
+            "rgb": [218, 168, 218],
             "alpha": 1,
-            "cssRgba": "rgba(228, 182, 216, 1.000)"
+            "cssRgba": "rgba(218, 168, 218, 1.000)"
           }
         },
         {
@@ -702,10 +702,10 @@
           "startDbz": 62.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#E7BEDD",
-            "rgb": [231, 190, 221],
+            "hex": "#DFB4DF",
+            "rgb": [223, 180, 223],
             "alpha": 1,
-            "cssRgba": "rgba(231, 190, 221, 1.000)"
+            "cssRgba": "rgba(223, 180, 223, 1.000)"
           }
         },
         {
@@ -716,10 +716,10 @@
           "startDbz": 65,
           "belowFilter": false,
           "webColor": {
-            "hex": "#EAC7E2",
-            "rgb": [234, 199, 226],
+            "hex": "#E4BFE3",
+            "rgb": [228, 191, 227],
             "alpha": 1,
-            "cssRgba": "rgba(234, 199, 226, 1.000)"
+            "cssRgba": "rgba(228, 191, 227, 1.000)"
           }
         },
         {
@@ -730,10 +730,10 @@
           "startDbz": 67.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#ECD0E6",
-            "rgb": [236, 208, 230],
+            "hex": "#E8CAE7",
+            "rgb": [232, 202, 231],
             "alpha": 1,
-            "cssRgba": "rgba(236, 208, 230, 1.000)"
+            "cssRgba": "rgba(232, 202, 231, 1.000)"
           }
         },
         {
@@ -744,10 +744,10 @@
           "startDbz": 70,
           "belowFilter": false,
           "webColor": {
-            "hex": "#EFD8EB",
-            "rgb": [239, 216, 235],
+            "hex": "#EDD6EC",
+            "rgb": [237, 214, 236],
             "alpha": 1,
-            "cssRgba": "rgba(239, 216, 235, 1.000)"
+            "cssRgba": "rgba(237, 214, 236, 1.000)"
           }
         }
       ]
@@ -779,10 +779,10 @@
           "startDbz": 10,
           "belowFilter": false,
           "webColor": {
-            "hex": "#E26DB4",
-            "rgb": [226, 109, 180],
-            "alpha": 0.24,
-            "cssRgba": "rgba(226, 109, 180, 0.240)"
+            "hex": "#F7C4DD",
+            "rgb": [247, 196, 221],
+            "alpha": 0.3,
+            "cssRgba": "rgba(247, 196, 221, 0.300)"
           }
         },
         {
@@ -793,10 +793,10 @@
           "startDbz": 12.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#DB61AC",
-            "rgb": [219, 97, 172],
-            "alpha": 0.285,
-            "cssRgba": "rgba(219, 97, 172, 0.285)"
+            "hex": "#EEA2CC",
+            "rgb": [238, 162, 204],
+            "alpha": 0.345,
+            "cssRgba": "rgba(238, 162, 204, 0.345)"
           }
         },
         {
@@ -807,10 +807,10 @@
           "startDbz": 15,
           "belowFilter": false,
           "webColor": {
-            "hex": "#D455A4",
-            "rgb": [212, 85, 164],
-            "alpha": 0.33,
-            "cssRgba": "rgba(212, 85, 164, 0.330)"
+            "hex": "#E581BA",
+            "rgb": [229, 129, 186],
+            "alpha": 0.39,
+            "cssRgba": "rgba(229, 129, 186, 0.390)"
           }
         },
         {
@@ -821,10 +821,10 @@
           "startDbz": 17.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#CC499B",
-            "rgb": [204, 73, 155],
-            "alpha": 0.375,
-            "cssRgba": "rgba(204, 73, 155, 0.375)"
+            "hex": "#DB5FA9",
+            "rgb": [219, 95, 169],
+            "alpha": 0.435,
+            "cssRgba": "rgba(219, 95, 169, 0.435)"
           }
         },
         {
@@ -835,10 +835,10 @@
           "startDbz": 20,
           "belowFilter": false,
           "webColor": {
-            "hex": "#C53D93",
-            "rgb": [197, 61, 147],
-            "alpha": 0.42,
-            "cssRgba": "rgba(197, 61, 147, 0.420)"
+            "hex": "#D23D97",
+            "rgb": [210, 61, 151],
+            "alpha": 0.48,
+            "cssRgba": "rgba(210, 61, 151, 0.480)"
           }
         },
         {
@@ -849,10 +849,10 @@
           "startDbz": 22.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#B93C8F",
-            "rgb": [185, 60, 143],
-            "alpha": 0.465,
-            "cssRgba": "rgba(185, 60, 143, 0.465)"
+            "hex": "#C43690",
+            "rgb": [196, 54, 144],
+            "alpha": 0.525,
+            "cssRgba": "rgba(196, 54, 144, 0.525)"
           }
         },
         {
@@ -863,10 +863,10 @@
           "startDbz": 25,
           "belowFilter": false,
           "webColor": {
-            "hex": "#AD3A8B",
-            "rgb": [173, 58, 139],
-            "alpha": 0.51,
-            "cssRgba": "rgba(173, 58, 139, 0.510)"
+            "hex": "#B62E8A",
+            "rgb": [182, 46, 138],
+            "alpha": 0.57,
+            "cssRgba": "rgba(182, 46, 138, 0.570)"
           }
         },
         {
@@ -877,10 +877,10 @@
           "startDbz": 27.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#A13987",
-            "rgb": [161, 57, 135],
-            "alpha": 0.555,
-            "cssRgba": "rgba(161, 57, 135, 0.555)"
+            "hex": "#A82783",
+            "rgb": [168, 39, 131],
+            "alpha": 0.615,
+            "cssRgba": "rgba(168, 39, 131, 0.615)"
           }
         },
         {
@@ -891,10 +891,10 @@
           "startDbz": 30,
           "belowFilter": false,
           "webColor": {
-            "hex": "#953783",
-            "rgb": [149, 55, 131],
-            "alpha": 0.6,
-            "cssRgba": "rgba(149, 55, 131, 0.600)"
+            "hex": "#9A1F7C",
+            "rgb": [154, 31, 124],
+            "alpha": 0.66,
+            "cssRgba": "rgba(154, 31, 124, 0.660)"
           }
         },
         {
@@ -905,10 +905,10 @@
           "startDbz": 32.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#8E3A85",
-            "rgb": [142, 58, 133],
-            "alpha": 0.645,
-            "cssRgba": "rgba(142, 58, 133, 0.645)"
+            "hex": "#8C1C75",
+            "rgb": [140, 28, 117],
+            "alpha": 0.705,
+            "cssRgba": "rgba(140, 28, 117, 0.705)"
           }
         },
         {
@@ -919,10 +919,10 @@
           "startDbz": 35,
           "belowFilter": false,
           "webColor": {
-            "hex": "#883C87",
-            "rgb": [136, 60, 135],
-            "alpha": 0.69,
-            "cssRgba": "rgba(136, 60, 135, 0.690)"
+            "hex": "#7F196D",
+            "rgb": [127, 25, 109],
+            "alpha": 0.75,
+            "cssRgba": "rgba(127, 25, 109, 0.750)"
           }
         },
         {
@@ -933,10 +933,10 @@
           "startDbz": 37.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#813F89",
-            "rgb": [129, 63, 137],
-            "alpha": 0.735,
-            "cssRgba": "rgba(129, 63, 137, 0.735)"
+            "hex": "#711566",
+            "rgb": [113, 21, 102],
+            "alpha": 0.795,
+            "cssRgba": "rgba(113, 21, 102, 0.795)"
           }
         },
         {
@@ -947,10 +947,10 @@
           "startDbz": 40,
           "belowFilter": false,
           "webColor": {
-            "hex": "#7A418B",
-            "rgb": [122, 65, 139],
-            "alpha": 0.78,
-            "cssRgba": "rgba(122, 65, 139, 0.780)"
+            "hex": "#63125E",
+            "rgb": [99, 18, 94],
+            "alpha": 0.84,
+            "cssRgba": "rgba(99, 18, 94, 0.840)"
           }
         },
         {
@@ -961,10 +961,10 @@
           "startDbz": 42.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#884C98",
-            "rgb": [136, 76, 152],
-            "alpha": 0.825,
-            "cssRgba": "rgba(136, 76, 152, 0.825)"
+            "hex": "#742577",
+            "rgb": [116, 37, 119],
+            "alpha": 0.885,
+            "cssRgba": "rgba(116, 37, 119, 0.885)"
           }
         },
         {
@@ -975,10 +975,10 @@
           "startDbz": 45,
           "belowFilter": false,
           "webColor": {
-            "hex": "#9657A5",
-            "rgb": [150, 87, 165],
-            "alpha": 0.87,
-            "cssRgba": "rgba(150, 87, 165, 0.870)"
+            "hex": "#86388F",
+            "rgb": [134, 56, 143],
+            "alpha": 0.93,
+            "cssRgba": "rgba(134, 56, 143, 0.930)"
           }
         },
         {
@@ -989,10 +989,10 @@
           "startDbz": 47.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#A462B2",
-            "rgb": [164, 98, 178],
-            "alpha": 0.915,
-            "cssRgba": "rgba(164, 98, 178, 0.915)"
+            "hex": "#974BA8",
+            "rgb": [151, 75, 168],
+            "alpha": 0.975,
+            "cssRgba": "rgba(151, 75, 168, 0.975)"
           }
         },
         {
@@ -1003,10 +1003,10 @@
           "startDbz": 50,
           "belowFilter": false,
           "webColor": {
-            "hex": "#B26DBF",
-            "rgb": [178, 109, 191],
-            "alpha": 0.96,
-            "cssRgba": "rgba(178, 109, 191, 0.960)"
+            "hex": "#A85EC0",
+            "rgb": [168, 94, 192],
+            "alpha": 1,
+            "cssRgba": "rgba(168, 94, 192, 1.000)"
           }
         },
         {
@@ -1017,10 +1017,10 @@
           "startDbz": 52.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#B777C4",
-            "rgb": [183, 119, 196],
+            "hex": "#AE6AC5",
+            "rgb": [174, 106, 197],
             "alpha": 1,
-            "cssRgba": "rgba(183, 119, 196, 1.000)"
+            "cssRgba": "rgba(174, 106, 197, 1.000)"
           }
         },
         {
@@ -1031,10 +1031,10 @@
           "startDbz": 55,
           "belowFilter": false,
           "webColor": {
-            "hex": "#BC81C9",
-            "rgb": [188, 129, 201],
+            "hex": "#B475CA",
+            "rgb": [180, 117, 202],
             "alpha": 1,
-            "cssRgba": "rgba(188, 129, 201, 1.000)"
+            "cssRgba": "rgba(180, 117, 202, 1.000)"
           }
         },
         {
@@ -1045,10 +1045,10 @@
           "startDbz": 57.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#C18BCE",
-            "rgb": [193, 139, 206],
+            "hex": "#BB81CF",
+            "rgb": [187, 129, 207],
             "alpha": 1,
-            "cssRgba": "rgba(193, 139, 206, 1.000)"
+            "cssRgba": "rgba(187, 129, 207, 1.000)"
           }
         },
         {
@@ -1059,10 +1059,10 @@
           "startDbz": 60,
           "belowFilter": false,
           "webColor": {
-            "hex": "#C695D3",
-            "rgb": [198, 149, 211],
+            "hex": "#C18DD4",
+            "rgb": [193, 141, 212],
             "alpha": 1,
-            "cssRgba": "rgba(198, 149, 211, 1.000)"
+            "cssRgba": "rgba(193, 141, 212, 1.000)"
           }
         },
         {
@@ -1073,10 +1073,10 @@
           "startDbz": 62.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#CC9FD8",
-            "rgb": [204, 159, 216],
+            "hex": "#C798D8",
+            "rgb": [199, 152, 216],
             "alpha": 1,
-            "cssRgba": "rgba(204, 159, 216, 1.000)"
+            "cssRgba": "rgba(199, 152, 216, 1.000)"
           }
         },
         {
@@ -1087,10 +1087,10 @@
           "startDbz": 65,
           "belowFilter": false,
           "webColor": {
-            "hex": "#D1A9DD",
-            "rgb": [209, 169, 221],
+            "hex": "#CDA4DD",
+            "rgb": [205, 164, 221],
             "alpha": 1,
-            "cssRgba": "rgba(209, 169, 221, 1.000)"
+            "cssRgba": "rgba(205, 164, 221, 1.000)"
           }
         },
         {
@@ -1101,10 +1101,10 @@
           "startDbz": 67.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#D6B3E2",
-            "rgb": [214, 179, 226],
+            "hex": "#D4B0E2",
+            "rgb": [212, 176, 226],
             "alpha": 1,
-            "cssRgba": "rgba(214, 179, 226, 1.000)"
+            "cssRgba": "rgba(212, 176, 226, 1.000)"
           }
         },
         {
@@ -1115,10 +1115,10 @@
           "startDbz": 70,
           "belowFilter": false,
           "webColor": {
-            "hex": "#DBBDE7",
-            "rgb": [219, 189, 231],
+            "hex": "#DABBE7",
+            "rgb": [218, 187, 231],
             "alpha": 1,
-            "cssRgba": "rgba(219, 189, 231, 1.000)"
+            "cssRgba": "rgba(218, 187, 231, 1.000)"
           }
         }
       ]
@@ -1150,10 +1150,10 @@
           "startDbz": 10,
           "belowFilter": false,
           "webColor": {
-            "hex": "#CFA84E",
-            "rgb": [207, 168, 78],
-            "alpha": 0.24,
-            "cssRgba": "rgba(207, 168, 78, 0.240)"
+            "hex": "#F7DC7E",
+            "rgb": [247, 220, 126],
+            "alpha": 0.3,
+            "cssRgba": "rgba(247, 220, 126, 0.300)"
           }
         },
         {
@@ -1164,10 +1164,10 @@
           "startDbz": 12.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#C99E48",
-            "rgb": [201, 158, 72],
-            "alpha": 0.285,
-            "cssRgba": "rgba(201, 158, 72, 0.285)"
+            "hex": "#EBC367",
+            "rgb": [235, 195, 103],
+            "alpha": 0.345,
+            "cssRgba": "rgba(235, 195, 103, 0.345)"
           }
         },
         {
@@ -1178,10 +1178,10 @@
           "startDbz": 15,
           "belowFilter": false,
           "webColor": {
-            "hex": "#C49441",
-            "rgb": [196, 148, 65],
-            "alpha": 0.33,
-            "cssRgba": "rgba(196, 148, 65, 0.330)"
+            "hex": "#E0AA4F",
+            "rgb": [224, 170, 79],
+            "alpha": 0.39,
+            "cssRgba": "rgba(224, 170, 79, 0.390)"
           }
         },
         {
@@ -1192,10 +1192,10 @@
           "startDbz": 17.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#BE8A3B",
-            "rgb": [190, 138, 59],
-            "alpha": 0.375,
-            "cssRgba": "rgba(190, 138, 59, 0.375)"
+            "hex": "#D49138",
+            "rgb": [212, 145, 56],
+            "alpha": 0.435,
+            "cssRgba": "rgba(212, 145, 56, 0.435)"
           }
         },
         {
@@ -1206,10 +1206,10 @@
           "startDbz": 20,
           "belowFilter": false,
           "webColor": {
-            "hex": "#B88034",
-            "rgb": [184, 128, 52],
-            "alpha": 0.42,
-            "cssRgba": "rgba(184, 128, 52, 0.420)"
+            "hex": "#C87820",
+            "rgb": [200, 120, 32],
+            "alpha": 0.48,
+            "cssRgba": "rgba(200, 120, 32, 0.480)"
           }
         },
         {
@@ -1220,10 +1220,10 @@
           "startDbz": 22.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#B07935",
-            "rgb": [176, 121, 53],
-            "alpha": 0.465,
-            "cssRgba": "rgba(176, 121, 53, 0.465)"
+            "hex": "#BD6E1D",
+            "rgb": [189, 110, 29],
+            "alpha": 0.525,
+            "cssRgba": "rgba(189, 110, 29, 0.525)"
           }
         },
         {
@@ -1234,10 +1234,10 @@
           "startDbz": 25,
           "belowFilter": false,
           "webColor": {
-            "hex": "#A87236",
-            "rgb": [168, 114, 54],
-            "alpha": 0.51,
-            "cssRgba": "rgba(168, 114, 54, 0.510)"
+            "hex": "#B1631A",
+            "rgb": [177, 99, 26],
+            "alpha": 0.57,
+            "cssRgba": "rgba(177, 99, 26, 0.570)"
           }
         },
         {
@@ -1248,10 +1248,10 @@
           "startDbz": 27.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#A06A36",
-            "rgb": [160, 106, 54],
-            "alpha": 0.555,
-            "cssRgba": "rgba(160, 106, 54, 0.555)"
+            "hex": "#A65917",
+            "rgb": [166, 89, 23],
+            "alpha": 0.615,
+            "cssRgba": "rgba(166, 89, 23, 0.615)"
           }
         },
         {
@@ -1262,10 +1262,10 @@
           "startDbz": 30,
           "belowFilter": false,
           "webColor": {
-            "hex": "#986337",
-            "rgb": [152, 99, 55],
-            "alpha": 0.6,
-            "cssRgba": "rgba(152, 99, 55, 0.600)"
+            "hex": "#9A4E14",
+            "rgb": [154, 78, 20],
+            "alpha": 0.66,
+            "cssRgba": "rgba(154, 78, 20, 0.660)"
           }
         },
         {
@@ -1276,10 +1276,10 @@
           "startDbz": 32.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#91613B",
-            "rgb": [145, 97, 59],
-            "alpha": 0.645,
-            "cssRgba": "rgba(145, 97, 59, 0.645)"
+            "hex": "#8E4712",
+            "rgb": [142, 71, 18],
+            "alpha": 0.705,
+            "cssRgba": "rgba(142, 71, 18, 0.705)"
           }
         },
         {
@@ -1290,10 +1290,10 @@
           "startDbz": 35,
           "belowFilter": false,
           "webColor": {
-            "hex": "#895F3F",
-            "rgb": [137, 95, 63],
-            "alpha": 0.69,
-            "cssRgba": "rgba(137, 95, 63, 0.690)"
+            "hex": "#833F10",
+            "rgb": [131, 63, 16],
+            "alpha": 0.75,
+            "cssRgba": "rgba(131, 63, 16, 0.750)"
           }
         },
         {
@@ -1304,10 +1304,10 @@
           "startDbz": 37.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#825C43",
-            "rgb": [130, 92, 67],
-            "alpha": 0.735,
-            "cssRgba": "rgba(130, 92, 67, 0.735)"
+            "hex": "#77380E",
+            "rgb": [119, 56, 14],
+            "alpha": 0.795,
+            "cssRgba": "rgba(119, 56, 14, 0.795)"
           }
         },
         {
@@ -1318,10 +1318,10 @@
           "startDbz": 40,
           "belowFilter": false,
           "webColor": {
-            "hex": "#7A5A47",
-            "rgb": [122, 90, 71],
-            "alpha": 0.78,
-            "cssRgba": "rgba(122, 90, 71, 0.780)"
+            "hex": "#6B300C",
+            "rgb": [107, 48, 12],
+            "alpha": 0.84,
+            "cssRgba": "rgba(107, 48, 12, 0.840)"
           }
         },
         {
@@ -1332,10 +1332,10 @@
           "startDbz": 42.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#8A6950",
-            "rgb": [138, 105, 80],
-            "alpha": 0.825,
-            "cssRgba": "rgba(138, 105, 80, 0.825)"
+            "hex": "#7F471E",
+            "rgb": [127, 71, 30],
+            "alpha": 0.885,
+            "cssRgba": "rgba(127, 71, 30, 0.885)"
           }
         },
         {
@@ -1346,10 +1346,10 @@
           "startDbz": 45,
           "belowFilter": false,
           "webColor": {
-            "hex": "#997859",
-            "rgb": [153, 120, 89],
-            "alpha": 0.87,
-            "cssRgba": "rgba(153, 120, 89, 0.870)"
+            "hex": "#925D30",
+            "rgb": [146, 93, 48],
+            "alpha": 0.93,
+            "cssRgba": "rgba(146, 93, 48, 0.930)"
           }
         },
         {
@@ -1360,10 +1360,10 @@
           "startDbz": 47.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#A98662",
-            "rgb": [169, 134, 98],
-            "alpha": 0.915,
-            "cssRgba": "rgba(169, 134, 98, 0.915)"
+            "hex": "#A67442",
+            "rgb": [166, 116, 66],
+            "alpha": 0.975,
+            "cssRgba": "rgba(166, 116, 66, 0.975)"
           }
         },
         {
@@ -1374,10 +1374,10 @@
           "startDbz": 50,
           "belowFilter": false,
           "webColor": {
-            "hex": "#B8956B",
-            "rgb": [184, 149, 107],
-            "alpha": 0.96,
-            "cssRgba": "rgba(184, 149, 107, 0.960)"
+            "hex": "#B98A54",
+            "rgb": [185, 138, 84],
+            "alpha": 1,
+            "cssRgba": "rgba(185, 138, 84, 1.000)"
           }
         },
         {
@@ -1388,10 +1388,10 @@
           "startDbz": 52.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#BD9C72",
-            "rgb": [189, 156, 114],
+            "hex": "#BE925D",
+            "rgb": [190, 146, 93],
             "alpha": 1,
-            "cssRgba": "rgba(189, 156, 114, 1.000)"
+            "cssRgba": "rgba(190, 146, 93, 1.000)"
           }
         },
         {
@@ -1402,10 +1402,10 @@
           "startDbz": 55,
           "belowFilter": false,
           "webColor": {
-            "hex": "#C2A279",
-            "rgb": [194, 162, 121],
+            "hex": "#C39A67",
+            "rgb": [195, 154, 103],
             "alpha": 1,
-            "cssRgba": "rgba(194, 162, 121, 1.000)"
+            "cssRgba": "rgba(195, 154, 103, 1.000)"
           }
         },
         {
@@ -1416,10 +1416,10 @@
           "startDbz": 57.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#C7A97F",
-            "rgb": [199, 169, 127],
+            "hex": "#C8A170",
+            "rgb": [200, 161, 112],
             "alpha": 1,
-            "cssRgba": "rgba(199, 169, 127, 1.000)"
+            "cssRgba": "rgba(200, 161, 112, 1.000)"
           }
         },
         {
@@ -1430,10 +1430,10 @@
           "startDbz": 60,
           "belowFilter": false,
           "webColor": {
-            "hex": "#CCAF86",
-            "rgb": [204, 175, 134],
+            "hex": "#CDA979",
+            "rgb": [205, 169, 121],
             "alpha": 1,
-            "cssRgba": "rgba(204, 175, 134, 1.000)"
+            "cssRgba": "rgba(205, 169, 121, 1.000)"
           }
         },
         {
@@ -1444,10 +1444,10 @@
           "startDbz": 62.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#D1B68D",
-            "rgb": [209, 182, 141],
+            "hex": "#D1B183",
+            "rgb": [209, 177, 131],
             "alpha": 1,
-            "cssRgba": "rgba(209, 182, 141, 1.000)"
+            "cssRgba": "rgba(209, 177, 131, 1.000)"
           }
         },
         {
@@ -1458,10 +1458,10 @@
           "startDbz": 65,
           "belowFilter": false,
           "webColor": {
-            "hex": "#D6BC94",
-            "rgb": [214, 188, 148],
+            "hex": "#D6B98C",
+            "rgb": [214, 185, 140],
             "alpha": 1,
-            "cssRgba": "rgba(214, 188, 148, 1.000)"
+            "cssRgba": "rgba(214, 185, 140, 1.000)"
           }
         },
         {
@@ -1472,10 +1472,10 @@
           "startDbz": 67.5,
           "belowFilter": false,
           "webColor": {
-            "hex": "#DBC39A",
-            "rgb": [219, 195, 154],
+            "hex": "#DBC095",
+            "rgb": [219, 192, 149],
             "alpha": 1,
-            "cssRgba": "rgba(219, 195, 154, 1.000)"
+            "cssRgba": "rgba(219, 192, 149, 1.000)"
           }
         },
         {
@@ -1486,10 +1486,10 @@
           "startDbz": 70,
           "belowFilter": false,
           "webColor": {
-            "hex": "#E0C9A1",
-            "rgb": [224, 201, 161],
+            "hex": "#E0C89F",
+            "rgb": [224, 200, 159],
             "alpha": 1,
-            "cssRgba": "rgba(224, 201, 161, 1.000)"
+            "cssRgba": "rgba(224, 200, 159, 1.000)"
           }
         }
       ]
