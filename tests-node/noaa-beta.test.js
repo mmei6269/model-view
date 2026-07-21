@@ -1183,7 +1183,7 @@ test("NOAA derived planned parameters gate on source inputs and expose formula m
   assert.equal(metadata.framRadialIce.thresholdNote, "FRAM accretion; trace opacity ramp from generated palette");
   const firstFramVisibleStop = SCALES.framIceIn.legendStops.find(([, color]) => Number(color?.[3]) > 0);
   assert.ok(firstFramVisibleStop, "FRAM ice scale should have visible stops");
-  assert.deepEqual(firstFramVisibleStop[1].slice(0, 3), [130, 130, 130]);
+  assert.deepEqual(firstFramVisibleStop[1].slice(0, 3), [122, 129, 139]);
 });
 
 test("NOAA filtered optional derived parameters do not leak staged profile records", () => {
