@@ -1,4 +1,4 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 function encodeInt16(values) {
   return Buffer.from(Int16Array.from(values).buffer).toString("base64");
@@ -203,7 +203,7 @@ test("hover grid aborts the underlying request only after every consumer aborts"
 });
 
 const ONE_BY_ONE =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s0NkgAAAABJRU5ErkJggg==";
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNoaGj4DwAFhAKAfr3l1AAAAABJRU5ErkJggg==";
 const ONE_BY_ONE_BYTES = Buffer.from(ONE_BY_ONE.split(",")[1], "base64");
 const MODELS = ["gfs", "nam", "nam3km", "hrrr"];
 
@@ -317,16 +317,20 @@ test("removing one panel does not clear the other panel's hover grid", async ({ 
     await route.fulfill({ status: 200, contentType: "image/png", body: ONE_BY_ONE_BYTES });
   });
 
-  await page.goto("/");
+  await page.goto(`/?hour=${encodeURIComponent("2026-04-23T12:00:00Z")}`);
   const firstPanel = page.locator("article").first();
-  await expect(firstPanel.getByText("Ready")).toBeVisible();
+  await expect(firstPanel.getByTestId("panel-status")).toHaveText("Ready");
+  const firstBox = await firstPanel.boundingBox();
+  await page.mouse.move(firstBox.x + firstBox.width / 2, firstBox.y + firstBox.height / 2);
   await expect.poll(() => countBySuffix(hoverRequestCounts, "/gfs/000/hover-grid.json")).toBe(1);
 
   await page.getByRole("button", { name: "Add Map" }).click();
   await expect(page.locator("article")).toHaveCount(2);
   const secondPanel = page.locator("article").nth(1);
-  await secondPanel.getByLabel("Model").selectOption("gfs");
-  await expect(secondPanel.getByText("Ready")).toBeVisible();
+  await secondPanel.getByLabel("Model", { exact: true }).selectOption("gfs");
+  await expect(secondPanel.getByText("Ready", { exact: true }).first()).toBeVisible();
+  const secondBox = await secondPanel.boundingBox();
+  await page.mouse.move(secondBox.x + secondBox.width / 2, secondBox.y + secondBox.height / 2);
 
   // The second panel must join the still-pending gfs hover fetch, not start a new one.
   await page.waitForTimeout(400);

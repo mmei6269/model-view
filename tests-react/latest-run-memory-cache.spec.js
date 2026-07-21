@@ -1,7 +1,7 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 const ONE_BY_ONE =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s0NkgAAAABJRU5ErkJggg==";
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNoaGj4DwAFhAKAfr3l1AAAAABJRU5ErkJggg==";
 const ONE_BY_ONE_BYTES = Buffer.from(ONE_BY_ONE.split(",")[1], "base64");
 const MODELS = ["gfs", "nam", "nam3km", "hrrr"];
 
@@ -53,6 +53,11 @@ function frame(model, hour) {
         bytes: ONE_BY_ONE_BYTES.length,
         contentType: "image/png",
       },
+      height500: {
+        key: `fixtures/${model}/full-memory-cache/${padded}/height500.png`,
+        bytes: ONE_BY_ONE_BYTES.length,
+        contentType: "image/png",
+      },
       synoptic: {
         key: `fixtures/${model}/full-memory-cache/${padded}/synoptic.png`,
         bytes: ONE_BY_ONE_BYTES.length,
@@ -78,6 +83,12 @@ function frame(model, hour) {
     synopticStyleVersions: {
       simple: "v4-operational-contrast",
       detailed: "v4-operational-contrast",
+    },
+    contourVectorRefs: {
+      height500: {
+        key: `fixtures/${model}/full-memory-cache/${padded}/height500-contour.json`,
+        bytes: 100,
+      },
     },
     hoverGridKey: `fixtures/${model}/full-memory-cache/${padded}/hover-grid.json.gz`,
     hoverGridSchemaVersion: 1,
@@ -163,7 +174,7 @@ function expectedFixturePaths() {
   for (const model of MODELS) {
     for (const hour of [0, 3]) {
       const padded = String(hour).padStart(3, "0");
-      for (const name of ["temperature.png", "synoptic.png", "synoptic-simple.json", "hover-grid.json.gz"]) {
+      for (const name of ["temperature.png", "synoptic.png", "synoptic-simple.json"]) {
         paths.push(`/__cf/fixtures/${model}/full-memory-cache/${padded}/${name}`);
       }
     }
@@ -177,9 +188,24 @@ test("latest view memory warmup covers active layers on every model and makes mo
   const { fixtureRequests, fixtureRequestCounts } = await routeWarmupFixtures(page);
 
   await page.goto("/");
-  await expect(page.locator("article").first().getByText("Ready")).toBeVisible();
+  await expect(page.locator("article").first().getByTestId("panel-status")).toHaveText("Ready");
 
-  await expect.poll(() => Array.from(fixtureRequests).sort(), { timeout: 10_000 }).toEqual(expectedFixturePaths());
+  await expect
+    .poll(
+      () =>
+        Array.from(fixtureRequests)
+          .filter((path) => !path.includes("hover-grid"))
+          .sort(),
+      { timeout: 10_000 },
+    )
+    .toEqual(expectedFixturePaths());
+
+  // The cross-model/whole-run warmer must never decode every hover grid.
+  // Only this panel's settled selected GFS frame may be warmed on demand.
+  await page.waitForTimeout(1_000);
+  const hoverRequests = Array.from(fixtureRequests).filter((path) => path.includes("hover-grid"));
+  expect(hoverRequests.length).toBeLessThanOrEqual(1);
+  expect(hoverRequests.every((path) => path.includes("/gfs/"))).toBeTruthy();
 
   const panel = page.locator("article").first();
   const hrrrTemperaturePath = "/__cf/fixtures/hrrr/full-memory-cache/000/temperature.png";
@@ -196,8 +222,16 @@ test("selecting a snow layer warms it across every model", async ({ page }) => {
 
   await page.goto("/");
   const panel = page.locator("article").first();
-  await expect(panel.getByText("Ready")).toBeVisible();
-  await expect.poll(() => Array.from(fixtureRequests).sort(), { timeout: 10_000 }).toEqual(expectedFixturePaths());
+  await expect(panel.getByTestId("panel-status")).toHaveText("Ready");
+  await expect
+    .poll(
+      () =>
+        Array.from(fixtureRequests)
+          .filter((path) => !path.includes("hover-grid"))
+          .sort(),
+      { timeout: 10_000 },
+    )
+    .toEqual(expectedFixturePaths());
 
   await panel.getByRole("button", { name: /Parameters/ }).click();
   const snowCheckbox = panel.getByRole("checkbox", { name: /10:1 Snow/ });
@@ -216,4 +250,23 @@ test("selecting a snow layer warms it across every model", async ({ page }) => {
   await expect
     .poll(() => expectedSnowPaths.filter((path) => fixtureRequests.has(path)).length, { timeout: 10_000 })
     .toBe(expectedSnowPaths.length);
+});
+
+test("height parameters warm their vector contours across the run", async ({ page }) => {
+  const { fixtureRequests } = await routeWarmupFixtures(page);
+
+  await page.goto("/?p1=gfs:height500");
+  await expect(page.locator("article").first().getByTestId("panel-status")).toHaveText("Ready");
+
+  const expectedContourPaths = [];
+  for (const model of MODELS) {
+    for (const hour of [0, 3]) {
+      expectedContourPaths.push(
+        `/__cf/fixtures/${model}/full-memory-cache/${String(hour).padStart(3, "0")}/height500-contour.json`,
+      );
+    }
+  }
+  await expect
+    .poll(() => expectedContourPaths.filter((path) => fixtureRequests.has(path)).length, { timeout: 10_000 })
+    .toBe(expectedContourPaths.length);
 });

@@ -1,7 +1,7 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 const ONE_BY_ONE =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s0NkgAAAABJRU5ErkJggg==";
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNoaGj4DwAFhAKAfr3l1AAAAABJRU5ErkJggg==";
 
 const GFS_RUN = "20260701-0000Z";
 const HRRR_RUN = "20260701-0600Z";
@@ -135,13 +135,20 @@ function drawerCloseButton(page) {
 }
 
 async function openSoundingDrawer(page) {
-  const container = page.locator(".leaflet-container").first();
+  const container = page.locator('[data-testid="map-canvas-host"]').first();
   await container.dblclick();
   await expect(drawerCloseButton(page)).toBeVisible({ timeout: 15000 });
-  // Leaflet focuses the map container on click and its own keyboard handler
-  // consumes arrow keys (map pan); blur so ArrowRight reaches the app-level
-  // frame-step shortcut, matching a user whose focus is on the page body.
-  await container.blur();
+  // The map focuses its keyboard surface (the inner canvas) on click and
+  // consumes arrow keys for panning (Task 4.4's host keydown guard stops
+  // them leaking to app shortcuts). Blur whatever owns focus rather than the
+  // host — matching a user whose focus is on the page body, so ArrowRight
+  // reaches the app-level frame-step shortcut.
+  await page.evaluate(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) {
+      active.blur();
+    }
+  });
 }
 
 function followToggle(page) {
@@ -230,7 +237,7 @@ test("changing the panel model surfaces a stale notice and Refresh re-requests a
   await expect(staleNotice(page)).toHaveCount(0);
 
   const panel = page.locator("article").first();
-  await panel.getByLabel("Model").selectOption("hrrr");
+  await panel.getByLabel("Model", { exact: true }).selectOption("hrrr");
 
   // The drawer must never silently keep showing the old model's profile:
   // a visible stale notice with a Refresh action appears.
@@ -269,13 +276,27 @@ test("recenter affordance appears only for manually typed coordinates and recent
   await page.getByRole("button", { name: "Go" }).click();
   await expect(recenterButton(page)).toBeVisible({ timeout: 15000 });
 
-  // Clicking it recenters the map on the typed point. The marker itself is
-  // canvas-rendered (preferCanvas), so observe the pan through the map pane
-  // transform, which changes when setView moves the center.
-  const pane = page.locator(".leaflet-map-pane").first();
-  const transformBefore = await pane.evaluate((element) => element.style.transform || "");
+  // Zoom in before recentering: at the default view fit the whole map is
+  // pinned by maxBounds, so a recenter jump cannot move the center at all.
+  // With panning freedom, the bridge viewport asserts the user-visible
+  // outcome: the center lands on the typed point.
+  const zoomIn = page.getByTestId("map-zoom-in").first();
+  for (let i = 0; i < 3; i += 1) {
+    await zoomIn.click();
+    await page.waitForTimeout(150);
+  }
   await recenterButton(page).click();
   await expect
-    .poll(() => pane.evaluate((element) => element.style.transform || ""), { timeout: 15000 })
-    .not.toBe(transformBefore);
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const bridge = window.__wx;
+          if (!bridge || bridge.panels().length === 0) {
+            return null;
+          }
+          return bridge.getViewport(bridge.panels()[0]);
+        }),
+      { timeout: 15000 },
+    )
+    .toEqual(expect.objectContaining({ lat: expect.closeTo(41, 0), lon: expect.closeTo(-104, 0) }));
 });

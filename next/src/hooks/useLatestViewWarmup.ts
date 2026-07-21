@@ -21,6 +21,8 @@ interface LatestViewWarmupOptions {
   viewKey: ViewKey;
 }
 
+const LATEST_VIEW_WARMUP_DEBOUNCE_MS = 250;
+
 export function useLatestViewWarmup({
   activeLayers,
   anchorValidTimeIso,
@@ -64,10 +66,14 @@ export function useLatestViewWarmup({
         }
       });
     };
-    warm(false);
+    // The panel-local prefetch engine reprioritizes immediately. Cross-model
+    // discovery is background work, so wait for a scrub gesture to settle;
+    // otherwise every range-input tick probes all four model manifests.
+    const warmupId = window.setTimeout(() => warm(false), LATEST_VIEW_WARMUP_DEBOUNCE_MS);
     const intervalId = window.setInterval(() => warm(true), 60_000);
     return () => {
       cancelled = true;
+      window.clearTimeout(warmupId);
       window.clearInterval(intervalId);
     };
   }, [activeLayers, anchorValidTimeIso, ready, reflectivityGate, synopticDetailMode, viewKey]);

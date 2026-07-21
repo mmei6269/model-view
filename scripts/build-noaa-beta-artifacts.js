@@ -46,12 +46,56 @@ const {
 } = require("./lib/noaa-build/run-resolution");
 const { loadDotEnv, resolveCacheRootEnv } = require("./lib/env-config");
 const { parseRenderSelectionFromArgs } = require("./lib/noaa-build/render-selection-args");
+const { getWgrib2ProvenanceIdentity } = require("./lib/noaa-beta/grib-source");
+const { filterNoaaForecastHoursForCycle } = require("./lib/noaa-beta/model-config");
+const { buildRunSourceProvenanceCatalog } = require("./lib/noaa-beta/source-provenance");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 const DEFAULT_CACHE_ROOT = path.join(ROOT_DIR, "output/noaa-beta-cache");
 const DEFAULT_LOCAL_WGRIB2_PATH = path.join(ROOT_DIR, "output/noaa-beta-tools/bin/wgrib2");
 const DEFAULT_NOAA_WORKER_PATH = path.join(ROOT_DIR, "scripts/noaa-beta-frame-worker.js");
 const FRAME_PROGRESS_STARTS = new Map();
+
+function formatCycleHorizonCapMessage(modelKey, run, cycleAwareHours) {
+  const prefix = `[noaa-beta] ${modelKey} ${run.date} ${run.cycle}Z cycle horizon`;
+  if (!Array.isArray(cycleAwareHours) || cycleAwareHours.length === 0) {
+    return `${prefix} removed all requested hours`;
+  }
+  return `${prefix} capped at F${String(cycleAwareHours.at(-1)).padStart(3, "0")}`;
+}
+
+// Mirrors resolveHoursByModel's precedence for the two channels a user can
+// request custom hours through: a per-model --hours-<model> /
+// MODELVIEW_NOAA_<MODEL>_HOURS always means custom hours, and the global
+// --hours / MODELVIEW_NOAA_BETA_HOURS does unless it spells "full" (fullRun),
+// where the roster is a computed default rather than a user-picked list.
+function modelHasExplicitHoursRequest({ args, modelKey, fullRun, env = process.env }) {
+  const envKey = `MODELVIEW_NOAA_${modelKey.toUpperCase()}_HOURS`;
+  if (args[`hours-${modelKey}`] || env[envKey]) {
+    return true;
+  }
+  return Boolean(!fullRun && (args.hours || env.MODELVIEW_NOAA_BETA_HOURS));
+}
+
+// The cycle filter trimming a default roster is routine (HRRR standard
+// cycles end at F018) and keeps the historical log-and-proceed behavior. But
+// EMPTYING an explicitly requested roster means the user asked only for
+// hours this cycle cannot serve; proceeding would "succeed" with a zero-frame
+// model build, so fail loudly instead (the --max-hour empty-roster check in
+// resolveHoursByModel is the precedent).
+function applyCycleHorizonFilter({ modelKey, run, hours, explicitHours, log = console.log }) {
+  const cycleAwareHours = filterNoaaForecastHoursForCycle(modelKey, run.cycle, hours);
+  if (cycleAwareHours.length !== hours.length) {
+    log(formatCycleHorizonCapMessage(modelKey, run, cycleAwareHours));
+  }
+  if (cycleAwareHours.length === 0 && explicitHours) {
+    throw new Error(
+      `${modelKey} ${run.date} ${run.cycle}Z cycle horizon removed all explicitly requested hours (${hours.join(",")}); ` +
+        `request hours within this cycle's horizon or drop the --hours/--hours-${modelKey} override.`,
+    );
+  }
+  return cycleAwareHours;
+}
 
 async function main() {
   loadDotEnv(path.join(ROOT_DIR, ".env"));
@@ -72,12 +116,22 @@ async function main() {
       .filter(([, value]) => (typeof value === "object" ? value.enabled : value))
       .map(([id, value]) => (typeof value === "object" ? `${id}:${value.tier}` : id));
     console.log(`[noaa-beta] render selection categories=${enabledCategories.join(",") || "(none)"}`);
+    if (renderSelection.sciencePrototypes?.length) {
+      console.log(`[noaa-beta] science prototypes=${renderSelection.sciencePrototypes.join(",")}`);
+    }
   }
 
   const fullRun = isFullRunRequest(args);
-  const capAvailableHours =
-    fullRun &&
-    !parseBooleanOption(args["require-full-horizon"] || process.env.MODELVIEW_NOAA_REQUIRE_FULL_HORIZON, false);
+  const requireFullHorizon = parseBooleanOption(
+    args["require-full-horizon"] || process.env.MODELVIEW_NOAA_REQUIRE_FULL_HORIZON,
+    false,
+  );
+  const gfsHourlyThrough120 = parseBooleanOption(
+    args["gfs-hourly-through-120"] || process.env.MODELVIEW_NOAA_GFS_HOURLY_THROUGH_120,
+    false,
+  );
+  const explicitRun = args.date !== undefined || args.cycle !== undefined;
+  const capAvailableHours = shouldCapAvailableHours({ fullRun, requireFullHorizon, explicitRun });
   const hoursByModel = resolveHoursByModel({ args, models, fullRun });
   const runOffset = clampInt(numberFlag(args["run-offset"], process.env.MODELVIEW_NOAA_RUN_OFFSET, 0), 0, 24, 0);
   const resources = getResourceSnapshot();
@@ -93,8 +147,41 @@ async function main() {
     frameRetries,
     retryDelayMs,
     retryFrameConcurrency,
+    retryFrameConcurrencyExplicit,
   } = resolveParallelism({ args, resources, models });
-  const cacheRoot = path.resolve(String(args["cache-root"] || resolveCacheRootEnv() || DEFAULT_CACHE_ROOT));
+  // Intra-frame derived-grid parallelism is a latency tool for builds whose
+  // planned frame count leaves cores idle (interactive/selective builds,
+  // short rosters). The default "auto" resolves once rosters are final —
+  // see resolveDerivedCellConcurrency; builds with at least a pool-width of
+  // frames, and builds with explicit frame throttles, resolve to 1 (off,
+  // exactly the pre-auto behavior).
+  const derivedCellConcurrencyInput =
+    args["derived-cell-concurrency"] !== undefined
+      ? args["derived-cell-concurrency"]
+      : process.env.MODELVIEW_NOAA_DERIVED_CELL_CONCURRENCY;
+  // Compression helper threads per render worker (PNG deflate + hover gzip
+  // move off the render thread; bytes identical, inline fallback on any pool
+  // failure). 0 disables the pool and compresses inline exactly as before.
+  const compressThreads = clampInt(
+    numberFlag(args["compress-threads"], process.env.MODELVIEW_NOAA_COMPRESS_THREADS, 1),
+    0,
+    4,
+    1,
+  );
+  const explicitFrameThrottle =
+    isExplicitNumberFlag(args["worker-count"]) ||
+    isExplicitNumberFlag(args["total-frame-concurrency"]) ||
+    isExplicitNumberFlag(process.env.MODELVIEW_NOAA_WORKER_COUNT) ||
+    isExplicitNumberFlag(process.env.MODELVIEW_NOAA_TOTAL_FRAME_CONCURRENCY);
+  // Background main-GRIB prefetch keeps the network busy while workers
+  // compute (cold builds otherwise alternate fetch waves with compute
+  // waves). Cache-warming only — the worker fetch path is unchanged and
+  // authoritative — so it defaults on; 0/"off" disables, unrecognized
+  // values warn and disable.
+  const inputPrefetchConcurrency = resolveInputPrefetchConcurrency(
+    args["input-prefetch"] !== undefined ? args["input-prefetch"] : process.env.MODELVIEW_NOAA_INPUT_PREFETCH,
+  );
+  const cacheRoot = resolveBuilderCacheRoot(args["cache-root"]);
   const artifactPrefix = String(
     args["artifact-prefix"] || process.env.MODELVIEW_ARTIFACT_PREFIX || DEFAULT_ARTIFACT_PREFIX,
   ).trim();
@@ -121,6 +208,15 @@ async function main() {
     96,
     Math.max(frameConcurrency, workerCount * 2),
   );
+  // The global queue historically raised retry concurrency to pool width;
+  // keep that as its DEFAULT, but an explicit --retry-frame-concurrency /
+  // MODELVIEW_NOAA_RETRY_FRAME_CONCURRENCY wins — a user throttling retries
+  // during NOMADS throttling means it. The per-model path always honored the
+  // resolved value; both schedulers now agree on explicit flags.
+  const effectiveRetryFrameConcurrency =
+    globalFrameQueue && !retryFrameConcurrencyExplicit
+      ? Math.max(retryFrameConcurrency, Math.min(workerCount, globalFrameConcurrency))
+      : retryFrameConcurrency;
   const persistManifestEachFrame = parseBooleanOption(
     args["persist-manifest-each-frame"] ?? process.env.MODELVIEW_NOAA_PERSIST_MANIFEST_EACH_FRAME,
     !globalFrameQueue,
@@ -187,6 +283,9 @@ async function main() {
   const renderHeight = parseOptionalNumber(args.height, null);
 
   await ensureWgrib2Available(wgrib2Path);
+  const sourceProvenanceCatalog = buildRunSourceProvenanceCatalog({
+    toolIdentity: await getWgrib2ProvenanceIdentity(wgrib2Path),
+  });
   const latestMetadataByModel = new Map();
   await runWithConcurrency(models, Math.min(models.length, 4), async (modelKey) => {
     const noaaBaseUrl = noaaBaseUrls[modelKey];
@@ -200,17 +299,40 @@ async function main() {
       runOffset,
       requireAllHours: !capAvailableHours,
     });
+    hours = applyCycleHorizonFilter({
+      modelKey,
+      run,
+      hours,
+      explicitHours: modelHasExplicitHoursRequest({ args, modelKey, fullRun }),
+    });
+    hoursByModel[modelKey] = hours;
     if (capAvailableHours) {
       hours = await resolveAvailableNoaaHours({ modelKey, noaaBaseUrl, run, hours });
       hoursByModel[modelKey] = hours;
     }
-    const parameterSet = await resolveNoaaParameterSetForRun({ modelKey, noaaBaseUrl, run, hours });
+    const parameterSet = await resolveNoaaParameterSetForRun({
+      modelKey,
+      noaaBaseUrl,
+      run,
+      hours,
+      renderSelection,
+    });
     latestMetadataByModel.set(
       modelKey,
-      buildNoaaModelMetadata({ modelKey, run, hours, noaaBaseUrl, ...parameterSet, renderSelection }),
+      buildNoaaModelMetadata({
+        modelKey,
+        run,
+        hours,
+        noaaBaseUrl,
+        ...parameterSet,
+        renderSelection,
+        gfsHourlyThrough120,
+        sourceProvenanceCatalog,
+        reflectivityGates,
+      }),
     );
   });
-  const fullParameterOrder = getNoaaNamParameterOrder();
+  const fullParameterOrder = getNoaaNamParameterOrder(renderSelection);
   for (const modelKey of models) {
     const metadata = latestMetadataByModel.get(modelKey);
     const parameterOrder = Array.isArray(metadata?.parameterOrder) ? metadata.parameterOrder : [];
@@ -221,6 +343,20 @@ async function main() {
       }`,
     );
   }
+  // Rosters are final here (capAvailableHours may have shrunk them), so the
+  // auto rule sees the frame count the queue will actually run.
+  const plannedFrameCount = models.reduce(
+    (sum, modelKey) => sum + (Array.isArray(hoursByModel[modelKey]) ? hoursByModel[modelKey].length : 0),
+    0,
+  );
+  const derivedCellConcurrency = resolveDerivedCellConcurrency({
+    input: derivedCellConcurrencyInput,
+    cpuCount: resources.cpuCount,
+    totalFrameConcurrency,
+    workerCount,
+    plannedFrameCount,
+    explicitFrameThrottle,
+  });
   const rawCacheDir = path.join(cacheRoot, "raw-noaa");
   const noaaWorkerPool = new FrameWorkerPool({
     workerPath: String(args["worker-script"] || process.env.MODELVIEW_NOAA_WORKER_SCRIPT || DEFAULT_NOAA_WORKER_PATH),
@@ -250,13 +386,15 @@ async function main() {
         rawCacheDir,
         rangeFetchConcurrency,
         decodeConcurrency,
+        derivedCellConcurrency,
+        compressThreads,
       }),
   });
 
   await runtime.init();
   try {
     console.log(
-      `[noaa-beta] resources cpu=${resources.cpuCount} mem=${resources.memGb.toFixed(1)}GB free=${resources.freeGb.toFixed(1)}GB scheduler=${globalFrameQueue ? "global-frame-queue" : "per-model"} model-concurrency=${modelConcurrency} frame-concurrency=${frameConcurrency} global-frame-concurrency=${globalFrameConcurrency} global-persist-queue=${globalPersistQueue} global-persist-concurrency=${globalPersistConcurrency} global-persist-backlog=${globalPersistBacklog} snow-persist-concurrency=${snowPersistConcurrency} snow-persist-backlog=${snowPersistBacklog} artifact-write-concurrency=${artifactWriteConcurrency || "off"} worker-count=${workerCount} total-frame-concurrency=${totalFrameConcurrency} decode-concurrency=${decodeConcurrency} total-decode-concurrency=${totalDecodeConcurrency} range-concurrency=${rangeFetchConcurrency} total-range-concurrency=${totalRangeFetchConcurrency} persist-manifest-each-frame=${persistManifestEachFrame} run-offset=${runOffset}`,
+      `[noaa-beta] resources cpu=${resources.cpuCount} mem=${resources.memGb.toFixed(1)}GB free=${resources.freeGb.toFixed(1)}GB scheduler=${globalFrameQueue ? "global-frame-queue" : "per-model"} model-concurrency=${modelConcurrency} frame-concurrency=${frameConcurrency} global-frame-concurrency=${globalFrameConcurrency} global-persist-queue=${globalPersistQueue} global-persist-concurrency=${globalPersistConcurrency} global-persist-backlog=${globalPersistBacklog} snow-persist-concurrency=${snowPersistConcurrency} snow-persist-backlog=${snowPersistBacklog} artifact-write-concurrency=${artifactWriteConcurrency || "off"} worker-count=${workerCount} total-frame-concurrency=${totalFrameConcurrency} derived-cell-concurrency=${derivedCellConcurrency} decode-concurrency=${decodeConcurrency} total-decode-concurrency=${totalDecodeConcurrency} range-concurrency=${rangeFetchConcurrency} total-range-concurrency=${totalRangeFetchConcurrency} persist-manifest-each-frame=${persistManifestEachFrame} run-offset=${runOffset}`,
     );
     console.log(
       `[noaa-beta] building models=${models.join(",")} view=${viewKey} hours=${formatHoursByModel(hoursByModel, models)} cache=${cacheRoot}`,
@@ -269,10 +407,16 @@ async function main() {
       }
       results = await buildLatestStatesWithGlobalFrameQueue(runtime, models, viewKey, {
         renderSelection,
+        inputPrefetch: {
+          concurrency: inputPrefetchConcurrency,
+          rawCacheDir,
+          noaaBaseUrls,
+          rangeFetchConcurrency,
+        },
         frameConcurrency: globalFrameConcurrency,
         frameRetries,
         retryDelayMs,
-        retryFrameConcurrency: Math.max(retryFrameConcurrency, Math.min(workerCount, globalFrameConcurrency)),
+        retryFrameConcurrency: effectiveRetryFrameConcurrency,
         forceFrames,
         persistManifestEachFrame,
         persistQueueEnabled: globalPersistQueue,
@@ -296,6 +440,12 @@ async function main() {
         console.log(`[noaa-beta] ${modelKey}/${viewKey} run=${latestMetadata.runId} start`);
         const [summary] = await buildLatestStatesWithGlobalFrameQueue(runtime, [modelKey], viewKey, {
           renderSelection,
+          inputPrefetch: {
+            concurrency: inputPrefetchConcurrency,
+            rawCacheDir,
+            noaaBaseUrls,
+            rangeFetchConcurrency,
+          },
           frameConcurrency,
           frameRetries,
           retryDelayMs,
@@ -341,7 +491,7 @@ async function main() {
           rangeFetchConcurrency,
           totalRangeFetchConcurrency,
           frameRetries,
-          retryFrameConcurrency,
+          retryFrameConcurrency: effectiveRetryFrameConcurrency,
           persistManifestEachFrame,
           forceFrames,
           profileFrames,
@@ -367,6 +517,112 @@ async function main() {
   }
 }
 
+// Intra-frame derived parallelism is byte-identical to serial compute
+// (identical code over disjoint cell ranges), so "auto" is purely a core
+// budgeting question. Auto engages ONLY when the planned frame count is
+// what leaves cores idle (fewer frames than the frame-worker pool is wide):
+// a full build keeps its pool saturated for its whole duration and resolves
+// to 1 on every machine — including hosts with more cores than the pool cap,
+// where the extra cores were never this feature's to spend. An explicit
+// --worker-count / --total-frame-concurrency is a user statement about
+// machine footprint, so auto never spends cores the user withheld — combine
+// an explicit throttle with an explicit --derived-cell-concurrency=N to get
+// both. Explicit numbers force a mode; "off"/"false"/"no"/"" disable (empty
+// string kept the pre-auto off semantics) and "true"/"on"/"yes" mean auto —
+// the same boolean vocabulary resolveInputPrefetchConcurrency honors, so the
+// two knobs never read the same spelling differently; anything unrecognized
+// warns and stays off.
+// Input prefetch is a pure cache warmer (see startFrameInputPrefetch in
+// scripts/lib/noaa-build/frame-queue.js), so its only knob is how many
+// frames' selected GRIBs may download concurrently ahead of the workers.
+// The default of 8 slots is sized so one compute wave's worth of frames can
+// be warmed during that wave (3 range connections per slot, 24 total): at 3
+// slots the pump warmed ~3 frames per wave while 18 workers consumed 18, so
+// most of every wave still fell back to synchronized cold worker fetches.
+// One boolean-WORD vocabulary for both build-parallelism knobs:
+// true/on/yes mean auto, false/no mean off, and anything else passes
+// through for numeric/garbage handling. Unlike parseBooleanOption, the
+// digits "1"/"0" are NOT booleans here — they are numeric values by
+// design ("1" = one unit/serial, "0" = zero/off per each resolver's
+// numeric contract), pinned by the resolver tests. The empty string is
+// deliberately NOT normalized here either — the two knobs diverge on it
+// (derived keeps the pre-auto off semantics, prefetch treats set-but-empty
+// as auto) and each resolver owns that decision explicitly.
+function normalizeParallelismOption(input) {
+  const raw = input === undefined || input === null || input === true ? "auto" : String(input).trim().toLowerCase();
+  if (raw === "true" || raw === "on" || raw === "yes") {
+    return "auto";
+  }
+  if (raw === "false" || raw === "no") {
+    return "off";
+  }
+  return raw;
+}
+
+function resolveInputPrefetchConcurrency(input) {
+  const mode = normalizeParallelismOption(input);
+  if (mode === "auto" || mode === "") {
+    return 8;
+  }
+  if (mode === "off") {
+    return 0;
+  }
+  const numeric = Number(mode);
+  if (Number.isFinite(numeric)) {
+    return clampInt(numeric, 0, 16, 0);
+  }
+  console.warn(
+    `[noaa-beta] unrecognized --input-prefetch / MODELVIEW_NOAA_INPUT_PREFETCH value '${input}'; input prefetch disabled (use 0-16, "auto", or "off")`,
+  );
+  return 0;
+}
+
+function resolveDerivedCellConcurrency({
+  input,
+  cpuCount,
+  totalFrameConcurrency,
+  workerCount,
+  plannedFrameCount,
+  explicitFrameThrottle,
+}) {
+  const mode = normalizeParallelismOption(input);
+  if (mode === "off" || mode === "") {
+    return 1;
+  }
+  const poolWidth = Math.max(1, Math.min(totalFrameConcurrency, workerCount));
+  if (mode !== "auto") {
+    const numeric = Number(mode);
+    if (Number.isFinite(numeric)) {
+      const value = clampInt(numeric, 1, 16, 1);
+      // Explicit values are honored verbatim (a throttled pool plus an
+      // explicit sub-pool width is a sanctioned combination), but flag the
+      // regime where the multiplication oversubscribes the machine: a
+      // saturated frame pool times per-frame sub-pools is value x workers
+      // threads, which auto would never spend.
+      if (value > 1 && plannedFrameCount >= poolWidth && value * workerCount > cpuCount) {
+        console.warn(
+          `[noaa-beta] explicit --derived-cell-concurrency=${value} with a saturated frame pool (${plannedFrameCount} frames, pool width ${poolWidth}) can spawn ${value} sub-workers in each of ${workerCount} frame workers (${value * workerCount} threads on ${cpuCount} cores); auto picks 1 in this regime`,
+        );
+      }
+      return value;
+    }
+    console.warn(
+      `[noaa-beta] unrecognized --derived-cell-concurrency value '${input}'; intra-frame derived parallelism stays off (use "auto", "off", or 1-16)`,
+    );
+    return 1;
+  }
+  if (explicitFrameThrottle) {
+    return 1;
+  }
+  if (!(plannedFrameCount >= 1) || plannedFrameCount >= poolWidth) {
+    return 1;
+  }
+  // Pull-based chunk dispatch scales cleanly onto efficiency cores (measured
+  // parallel-stage 591 -> 330 ms going 8 -> 16 on a 6P+12E machine), so the
+  // cap matches the explicit-override clamp rather than stopping at 8.
+  return clampInt(Math.floor(cpuCount / plannedFrameCount), 1, 16, 1);
+}
+
 function resolveParallelism({ args, resources, models }) {
   const defaultTotalFrameConcurrency = Math.max(1, Math.min(32, Math.ceil(resources.cpuCount * 1.33)));
   const defaultWorkerCount = Math.min(18, defaultTotalFrameConcurrency);
@@ -389,17 +645,24 @@ function resolveParallelism({ args, resources, models }) {
     models.length,
     defaultModelConcurrency,
   );
+  // --total-frame-concurrency is a machine-footprint statement: unless the
+  // user also sets the finer knobs explicitly, it must cap the frame and
+  // worker defaults (the old code put the cap in clampInt's non-finite
+  // fallback slot, which numberFlag's finite default made unreachable — the
+  // flag scheduled nothing).
+  const cappedFrameConcurrencyDefault = Math.min(defaultFrameConcurrency, totalFrameConcurrency);
+  const cappedWorkerCountDefault = Math.min(defaultWorkerCount, totalFrameConcurrency);
   const frameConcurrency = clampInt(
-    numberFlag(args["frame-concurrency"], process.env.MODELVIEW_NOAA_FRAME_CONCURRENCY, defaultFrameConcurrency),
+    numberFlag(args["frame-concurrency"], process.env.MODELVIEW_NOAA_FRAME_CONCURRENCY, cappedFrameConcurrencyDefault),
     1,
     64,
-    Math.min(defaultFrameConcurrency, totalFrameConcurrency),
+    cappedFrameConcurrencyDefault,
   );
   const workerCount = clampInt(
-    numberFlag(args["worker-count"], process.env.MODELVIEW_NOAA_WORKER_COUNT, defaultWorkerCount),
+    numberFlag(args["worker-count"], process.env.MODELVIEW_NOAA_WORKER_COUNT, cappedWorkerCountDefault),
     1,
     48,
-    defaultWorkerCount,
+    cappedWorkerCountDefault,
   );
   const totalRangeFetchConcurrency = clampInt(
     numberFlag(
@@ -440,6 +703,9 @@ function resolveParallelism({ args, resources, models }) {
     60_000,
     DEFAULT_RETRY_DELAY_MS,
   );
+  const retryFrameConcurrencyExplicit =
+    isExplicitNumberFlag(args["retry-frame-concurrency"]) ||
+    isExplicitNumberFlag(process.env.MODELVIEW_NOAA_RETRY_FRAME_CONCURRENCY);
   const retryFrameConcurrency = clampInt(
     numberFlag(
       args["retry-frame-concurrency"],
@@ -462,11 +728,8 @@ function resolveParallelism({ args, resources, models }) {
     frameRetries,
     retryDelayMs,
     retryFrameConcurrency,
+    retryFrameConcurrencyExplicit,
   };
-}
-
-function resolveNoaaNamRun({ noaaBaseUrl, date, cycle, hours }) {
-  return resolveNoaaModelRun({ modelKey: "nam", noaaBaseUrl, date, cycle, hours });
 }
 
 function resolveNoaaParameterSetFromIdxText(indexText, options = {}) {
@@ -601,6 +864,7 @@ function formatRenderProfile(profile) {
     "snowfallCumulativeMs",
     "profileDecodeMs",
     "derivedGridMs",
+    "derivedGridParallelMs",
     "wgribRegridMs",
     "wgribExportMs",
     "gridMapMs",
@@ -610,6 +874,7 @@ function formatRenderProfile(profile) {
     "catalogPngMs",
     "synopticMs",
     "hoverGridMs",
+    "compressWaitMs",
     "persistMs",
   ];
   const parts = [];
@@ -632,6 +897,10 @@ function formatRenderProfile(profile) {
   }
   appendHitMissCounter(parts, "regridBin", profile.regridBinCacheHits, profile.regridBinCacheMisses);
   appendPositiveCounter(parts, "regridBinWriteFailures", profile.regridBinCacheWriteFailures);
+  appendHitMissCounter(parts, "derivedGrids", profile.derivedGridCacheHits, profile.derivedGridCacheMisses);
+  if (Number(profile.derivedParallelChunks) > 0) {
+    parts.push(`derivedParallel=${profile.derivedParallelChunks}chunks/${profile.derivedParallelWorkers}workers`);
+  }
   appendPositiveCounter(parts, "bulkDecodeFallbacks", profile.bulkDecodeFallbacks);
   appendHitMissCounter(parts, "runMaxCache", profile.runMaxGridCacheHits, profile.runMaxGridCacheMisses);
   appendHitMissCounter(parts, "runMaxSrcCache", profile.runMaxSourceCacheHits, profile.runMaxSourceCacheMisses);
@@ -691,6 +960,12 @@ function appendSnowfallProfileCounters(parts, profile) {
       `snowLiquidCache=${profile.snowLiquidGridCacheHits}/${profile.snowLiquidSourceCount}`,
     );
   }
+  if (Number(profile.freezingRainLiquidSourceCount) > 0) {
+    parts.push(
+      `frzrLiquidSrc=${profile.freezingRainLiquidSourceCount}`,
+      `frzrLiquidCache=${profile.freezingRainLiquidGridCacheHits}/${profile.freezingRainLiquidSourceCount}`,
+    );
+  }
   if (Number(profile.snowfallIntervalCount) > 0) {
     parts.push(
       `snowIntervals=${profile.snowfallIntervalActiveCount || 0}/${profile.snowfallIntervalCount}`,
@@ -705,6 +980,9 @@ function appendSnowfallProfileCounters(parts, profile) {
   );
   appendHitMissCounter(parts, "snowDeltaCache", profile.snowfallDeltaCacheHits, profile.snowfallDeltaCacheMisses);
   appendHitMissCounter(parts, "profileCache", profile.profileGridCacheHits, profile.profileGridCacheMisses);
+  appendPositiveCounter(parts, "compressJobs", profile.compressPoolJobs);
+  appendPositiveCounter(parts, "compressFallbacks", profile.compressPoolFallbacks);
+  appendPositiveCounter(parts, "frzrChunkGaps", profile.freezingRainLiquidChunkGaps);
   appendPositiveCounter(parts, "snowLiquidLockTimeouts", profile.snowLiquidGridLockTimeouts);
   appendPositiveCounter(parts, "snowCumLockTimeouts", profile.snowfallCumulativeLockTimeouts);
   appendPositiveCounter(parts, "snowDeltaLockTimeouts", profile.snowfallDeltaLockTimeouts);
@@ -743,8 +1021,31 @@ function formatBytes(value) {
 
 function numberFlag(argValue, envValue, fallback) {
   const candidate = argValue ?? envValue;
-  const value = Number(candidate);
+  // A blank value (`--worker-count=`, `KEY=` in .env) or a bare valueless
+  // flag (argv yields boolean true) means "unset", not Number("")=0 or
+  // Number(true)=1 — matching parseBooleanOption's fallback-on-blank
+  // contract. A blank .env template line must not collapse the build to one
+  // worker.
+  if (candidate === undefined || candidate === null || typeof candidate === "boolean") {
+    return fallback;
+  }
+  const text = String(candidate).trim();
+  if (text === "") {
+    return fallback;
+  }
+  const value = Number(text);
   return Number.isFinite(value) ? value : fallback;
+}
+
+// The explicit-throttle and explicit-retry contracts key off whether the user
+// actually supplied a number, under the same notion of "supplied" numberFlag
+// uses (blank and bare-boolean spellings are unset).
+function isExplicitNumberFlag(value) {
+  if (value === undefined || value === null || typeof value === "boolean") {
+    return false;
+  }
+  const text = String(value).trim();
+  return text !== "" && Number.isFinite(Number(text));
 }
 
 function parseReflectivityGates(raw) {
@@ -753,6 +1054,20 @@ function parseReflectivityGates(raw) {
     .map((value) => Number(value.trim()))
     .filter((value) => value === 10 || value === 15 || value === 20);
   return gates.length > 0 ? Array.from(new Set(gates)).sort((left, right) => left - right) : [10, 15, 20];
+}
+
+function shouldCapAvailableHours({ fullRun, requireFullHorizon, explicitRun }) {
+  return Boolean(fullRun && (!requireFullHorizon || explicitRun));
+}
+
+// A relative cache root (.env.example ships MODELVIEW_CACHE_ROOT=output/...)
+// must name the same directory regardless of the invoking cwd: anchor it on
+// the repo root, matching prune-render-cache.js and noaa-update.js, so a
+// builder started from a foreign cwd can never fork the cache namespace away
+// from the pruner's retention/budget logic. Absolute paths pass through
+// path.resolve unchanged.
+function resolveBuilderCacheRoot(cacheRootArg, env = process.env) {
+  return path.resolve(ROOT_DIR, String(cacheRootArg || resolveCacheRootEnv(env) || DEFAULT_CACHE_ROOT));
 }
 
 function defaultWgrib2Path() {
@@ -804,6 +1119,14 @@ module.exports = {
   _testRunGlobalFrameTaskQueue: runGlobalFrameTaskQueue,
   _testCanStartFrameTaskWithDependencies: canStartFrameTaskWithDependencies,
   _testMarkFrameTaskDependencyComplete: markFrameTaskDependencyComplete,
+  _testFormatCycleHorizonCapMessage: formatCycleHorizonCapMessage,
+  _testApplyCycleHorizonFilter: applyCycleHorizonFilter,
+  _testModelHasExplicitHoursRequest: modelHasExplicitHoursRequest,
+  _testResolveBuilderCacheRoot: resolveBuilderCacheRoot,
+  _testResolveDerivedCellConcurrency: resolveDerivedCellConcurrency,
+  _testResolveInputPrefetchConcurrency: resolveInputPrefetchConcurrency,
+  _testNumberFlag: numberFlag,
+  _testIsExplicitNumberFlag: isExplicitNumberFlag,
   parseArgs,
   parseHours,
   parseReflectivityGates,
@@ -811,9 +1134,9 @@ module.exports = {
   resolveNoaaParameterSetFromIdxText,
   resolveNoaaParameterSetFromIdxTexts,
   resolveParallelism,
+  shouldCapAvailableHours,
   resolveHoursByModel,
   resolveModels,
   resolveNoaaModelRun,
-  resolveNoaaNamRun,
   selectNoaaParameterProbeHours,
 };

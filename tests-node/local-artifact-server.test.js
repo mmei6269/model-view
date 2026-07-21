@@ -141,3 +141,103 @@ test("sounding ?view= traversal cannot read a file outside the artifact root", a
     assert.ok(!response.body.includes("secret"), "the out-of-root sentinel must never be served");
   });
 });
+
+function rawPost(port, rawPath, payload) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port,
+        path: rawPath,
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Content-Length": payload.length },
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString("utf8") }));
+      },
+    );
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+test("sounding requests without lat/lon 400 instead of sounding (0, 0)", async () => {
+  await withServer(async ({ port }) => {
+    // Number(null) === 0, so absent (or blank) lat/lon used to pass the
+    // finite gate as a real coordinate.
+    for (const query of ["view=conus", "view=conus&lat=40", "view=conus&lat=&lon=-100"]) {
+      const response = await rawGet(port, `/soundings/gfs/20260313-0000Z/0?${query}`);
+      assert.equal(response.status, 400, `missing/blank coordinate rejected: ${query}`);
+      assert.match(response.body, /require finite hour, lat, and lon/);
+    }
+    // Fully-specified finite coordinates still reach the manifest lookup.
+    const valid = await rawGet(port, "/soundings/gfs/20260313-0000Z/0?view=conus&lat=40&lon=-100");
+    assert.equal(valid.status, 404, "valid coordinates proceed past the gate to the manifest lookup");
+  });
+});
+
+test("an oversized POST body gets its 400 delivered instead of a reset connection", async () => {
+  await withServer(async ({ port }) => {
+    // The 400 must reach the client: destroying the request mid-read used to
+    // kill the socket before the response flushed (clients saw ECONNRESET).
+    const payload = Buffer.from(JSON.stringify({ models: ["hrrr"], pad: "x".repeat(300 * 1024) }));
+    const response = await rawPost(port, "/actions/render", payload);
+    assert.equal(response.status, 400, "the oversized body is answered, not connection-reset");
+    assert.match(response.body, /Request body too large/);
+
+    // The listener stays healthy afterwards.
+    const health = await rawGet(port, "/healthz");
+    assert.equal(health.status, 200);
+  });
+});
+
+test("the post-reject body drain is bounded, never a connection-lifetime sink", async () => {
+  // The grace window exists so the 400 can flush; an endless streaming body
+  // must not be drained forever (one client could hold the socket and burn
+  // read bandwidth indefinitely). Driven on a mock stream so the byte
+  // accounting is deterministic.
+  const { EventEmitter } = require("node:events");
+  const { readJsonBody } = require("../scripts/lib/local-artifact-server");
+  const req = new EventEmitter();
+  req.destroyed = false;
+  req.destroy = () => {
+    req.destroyed = true;
+  };
+  req.resume = () => {};
+
+  const maxBytes = 1024;
+  const chunk = Buffer.alloc(256, "x");
+  const pending = readJsonBody(req, maxBytes);
+  const rejected = pending.then(
+    () => assert.fail("oversize body must reject"),
+    (error) => error,
+  );
+
+  // Trip the cap, then keep streaming: the drain must absorb the grace
+  // window (so the 400 can flush) and then cut the socket.
+  let sent = 0;
+  while (sent <= maxBytes) {
+    req.emit("data", chunk);
+    sent += chunk.length;
+  }
+  assert.match(String(await rejected), /Request body too large/);
+  assert.equal(req.destroyed, false, "the reject itself never destroys (the 400 must flush first)");
+
+  let drainedPastReject = 0;
+  while (!req.destroyed && drainedPastReject < maxBytes * 32) {
+    req.emit("data", chunk);
+    drainedPastReject += chunk.length;
+  }
+  assert.equal(req.destroyed, true, "a body streaming past the grace window is cut off");
+  assert.ok(
+    drainedPastReject <= maxBytes * 8 + chunk.length,
+    `drained ${drainedPastReject} bytes past the reject; the grace window is 8x maxBytes`,
+  );
+  assert.ok(
+    drainedPastReject > maxBytes * 4,
+    "a realistic accidental oversend (a few multiples of the cap) drains fully so its 400 can flush",
+  );
+});

@@ -99,42 +99,77 @@ async function buildLatestStatesWithGlobalFrameQueue(runtime, models, viewKey, o
     });
   });
 
-  await runWithConcurrency(stateEntries.filter(Boolean), Math.min(models.length, 4), async (entry) => {
-    await runtime.prefetchFrameInputsForState(entry.state, entry.targetFrames, { onProgress });
-  });
-
   const initialTasks = buildFrameRenderTasks(buildGlobalFrameQueue(stateEntries.filter(Boolean)), {
     splitSnowfall: splitSnowfallFrames,
   });
-  await runGlobalFrameTaskQueue(
-    initialTasks,
-    frameConcurrency,
-    (task) =>
-      processGlobalFrameTask(runtime, task.entry, task.frame, {
-        retryAttempt: 0,
-        forceFrames,
-        renderSelection,
-        persistManifestEachFrame,
-        persistQueue,
-        snowPersistQueue,
-        failFast,
-        onProgress,
-        task,
-      }),
-    {
-      label: "initial",
-      entries: stateEntries.filter(Boolean),
-      profileFrames: options.profileFrames,
-      workerPoolStats: options.workerPoolStats,
-      persistQueueStats: persistQueue
-        ? () => persistQueue.getStats()
-        : snowPersistQueue
-          ? () => snowPersistQueue.getStats()
-          : null,
-      canStartTask: canStartFrameTaskWithDependencies,
-      onTaskFinished: markFrameTaskDependencyComplete,
-    },
-  );
+  const inputPrefetch = startFrameInputPrefetch(runtime, initialTasks, {
+    ...(options.inputPrefetch || {}),
+    dispatchWidth: frameConcurrency,
+    forceFrames,
+    renderSelection,
+  });
+  try {
+    await runGlobalFrameTaskQueue(
+      initialTasks,
+      frameConcurrency,
+      (task) =>
+        processGlobalFrameTask(runtime, task.entry, task.frame, {
+          retryAttempt: 0,
+          forceFrames,
+          renderSelection,
+          persistManifestEachFrame,
+          persistQueue,
+          snowPersistQueue,
+          failFast,
+          onProgress,
+          task,
+        }),
+      {
+        label: "initial",
+        entries: stateEntries.filter(Boolean),
+        profileFrames: options.profileFrames,
+        workerPoolStats: options.workerPoolStats,
+        persistQueueStats: persistQueue
+          ? () => persistQueue.getStats()
+          : snowPersistQueue
+            ? () => snowPersistQueue.getStats()
+            : null,
+        canStartTask: canStartFrameTaskWithDependencies,
+        // Warm-first dispatch: defer cold main frames while the pump warms
+        // them, so compute slots stay on warm work. Retries below stay FIFO
+        // (by then inputs are cached or persistently failing).
+        taskPriority: inputPrefetch ? inputPrefetch.taskPriority : null,
+        onTaskFinished: markFrameTaskDependencyComplete,
+      },
+    );
+  } finally {
+    if (inputPrefetch) {
+      // Stop even when the queue throws (failFast): a long-lived process
+      // must not keep downloading for a build that already failed. In-flight
+      // prefetches check the stop flag between stages and never lock-wait,
+      // so the settle is normally a few seconds at most — but a stalled
+      // network read must not hold the build (or a failFast error) hostage,
+      // hence the bounded wait.
+      inputPrefetch.stop();
+      let settleTimer = null;
+      const settled = await Promise.race([
+        inputPrefetch.done.then(() => true),
+        new Promise((resolve) => {
+          settleTimer = setTimeout(() => resolve(false), 30_000);
+          settleTimer.unref?.();
+        }),
+      ]);
+      if (settleTimer) {
+        clearTimeout(settleTimer);
+      }
+      const stats = inputPrefetch.stats;
+      if (stats.prefetched > 0 || stats.failed > 0 || !settled) {
+        console.log(
+          `[noaa-beta] input prefetch: prefetched=${stats.prefetched} skipped=${stats.skipped} failed=${stats.failed}${settled ? "" : " (still settling; continuing)"}`,
+        );
+      }
+    }
+  }
   if (persistQueue) {
     await persistQueue.drain();
   }
@@ -180,14 +215,14 @@ async function buildLatestStatesWithGlobalFrameQueue(runtime, models, viewKey, o
       await sleepMs(delayMs);
     }
     for (const task of retryTasks) {
-      task.entry.state.primaryOmPrefetchFailures?.delete(Number(task.frame.hour));
+      task.retryAttempt = retryAttempt;
     }
-    await runWithConcurrency(retryEntries, Math.min(retryEntries.length, 4), async (entry) => {
-      await runtime.prefetchFrameInputsForState(entry.state, entry.queueFrames, {
-        onProgress,
-        concurrency: Math.max(1, Math.min(4, retryFrameConcurrency)),
-      });
-    });
+    for (const entry of retryEntries) {
+      rearmFrameDependencyGatesForRetry(
+        entry,
+        entry.queueFrames.map((frame) => frame.hour),
+      );
+    }
     await runGlobalFrameTaskQueue(
       retryTasks,
       retryFrameConcurrency,
@@ -279,28 +314,35 @@ async function processGlobalFrameTask(runtime, entry, frame, options = {}) {
   const renderPart = task.renderPart || "all";
   const renderMode = task.renderMode || "all";
   const partialFrame = renderPart === "base" && task.completesFrame === false;
-  const deltaOnlyFrame = renderPart === "snow-delta";
   const prefixOnlyFrame = renderPart === "snow-prefix";
   const runMaxPrefixOnlyFrame = renderPart === "runmax-prefix";
   const hour = Number(frame.hour);
   const retryAttempt = Math.max(0, Math.round(Number(options.retryAttempt) || 0));
-  if (entry.finishedFrameHours?.has(hour) || (retryAttempt === 0 && entry.failedFrames?.has(hour))) {
+  const currentFailure = entry.failedFrames?.get(hour);
+  const failedThisAttempt =
+    currentFailure && Math.max(0, Math.round(Number(currentFailure.retryAttempt) || 0)) === retryAttempt;
+  if (entry.finishedFrameHours?.has(hour) || failedThisAttempt) {
     return true;
   }
   const forceFrames = parseBooleanOption(options.forceFrames ?? options.force, false);
   const renderSelection = options.renderSelection || null;
   const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
-  const prefetchFailure = state.primaryOmPrefetchFailures?.get(hour);
-  if (prefetchFailure && (forceFrames || !(await runtime.isFrameCompleteForState(state, frame)))) {
-    emitGlobalFrameFailure(entry, frame, framePlan, prefetchFailure, retryAttempt, retryAttempt === 0, onProgress);
-    if (options.failFast) {
-      throw new Error(prefetchFailure);
-    }
-    return false;
-  }
-  if (!forceFrames && (await runtime.isFrameCompleteForState(state, frame))) {
+  // Per-invocation index: the reuse probe and the byte refresh share one
+  // directory listing; each task invocation re-indexes so freshness matches
+  // the per-key probes it replaces. Duck-typed runtimes without the factory
+  // keep the per-key path.
+  const statIndex = typeof runtime.createFrameStatIndex === "function" ? runtime.createFrameStatIndex() : null;
+  if (!forceFrames && (await runtime.isFrameCompleteForState(state, frame, { statIndex }))) {
     state.manifest.hourStatus[String(frame.hour)] = "loaded";
-    await runtime.refreshFrameArtifactBytes(frame);
+    // The frameDir hint only feeds the stat index; duck-typed runtimes
+    // without the factory keep the optionless per-key refresh and are never
+    // required to implement getFrameDirectory.
+    await runtime.refreshFrameArtifactBytes(
+      frame,
+      statIndex
+        ? { statIndex, frameDir: runtime.getFrameDirectory(state.modelKey, state.runId, state.viewKey, frame.hour) }
+        : {},
+    );
     runtime.stats.frameRenderCacheHits += 1;
     markGlobalFrameRecovered(entry, frame);
     entry.finishedFrameHours?.add(hour);
@@ -346,7 +388,7 @@ async function processGlobalFrameTask(runtime, entry, frame, options = {}) {
     renderPart,
   });
   try {
-    if (deltaOnlyFrame || prefixOnlyFrame || runMaxPrefixOnlyFrame) {
+    if (prefixOnlyFrame || runMaxPrefixOnlyFrame) {
       const rendered = await runtime.renderFrameArtifactsForState(state, frame, {
         forceFrames,
         persistManifestEachFrame: options.persistManifestEachFrame,
@@ -354,9 +396,6 @@ async function processGlobalFrameTask(runtime, entry, frame, options = {}) {
         renderSelection,
         normalize: false,
       });
-      if (deltaOnlyFrame) {
-        entry.completedDeltaHours?.add(hour);
-      }
       if (prefixOnlyFrame) {
         entry.completedSnowPrefixHours?.add(hour);
       }
@@ -610,10 +649,15 @@ function configureRunMaxFrameDependency(entry) {
 
 function canStartFrameTaskWithDependencies(task) {
   const hour = Math.round(Number(task?.frame?.hour));
-  if (Number.isFinite(hour) && (task.entry?.finishedFrameHours?.has(hour) || task.entry?.failedFrames?.has(hour))) {
-    return true;
-  }
-  if (task?.renderPart === "snow-delta") {
+  // Once one part fails in an attempt, every remaining part of that hour is
+  // skipped by processGlobalFrameTask. Fast-path only failures stamped with
+  // THIS task's attempt: an older failure must flow through the real gates so
+  // the retry can run base/snow-prefix/snow in order, while a fresh retry
+  // failure must release the parked sibling parts so they can drain as skips.
+  const taskAttempt = Math.max(0, Math.round(Number(task?.retryAttempt) || 0));
+  const failure = Number.isFinite(hour) ? task.entry?.failedFrames?.get(hour) : null;
+  const failedThisAttempt = failure && Math.max(0, Math.round(Number(failure.retryAttempt) || 0)) === taskAttempt;
+  if (Number.isFinite(hour) && (task.entry?.finishedFrameHours?.has(hour) || failedThisAttempt)) {
     return true;
   }
   if (task?.renderPart === "runmax-prefix") {
@@ -685,6 +729,25 @@ function previousRunMaxDependencyHour(entry, hour) {
   return previous;
 }
 
+// Retried hours must pass through the real dependency gates again, but the
+// initial pass marked every part of a failed hour complete (onTaskFinished
+// runs in the runner's finally even for failed and skipped tasks). Re-arm the
+// gates for exactly the hours being retried; earlier successful hours keep
+// their marks so chain gates (previous snow/runmax hour) stay satisfied.
+function rearmFrameDependencyGatesForRetry(entry, hours) {
+  for (const hour of hours) {
+    const rounded = Math.round(Number(hour));
+    if (!Number.isFinite(rounded)) {
+      continue;
+    }
+    entry.completedBaseHours?.delete(rounded);
+    entry.completedDeltaHours?.delete(rounded);
+    entry.completedSnowPrefixHours?.delete(rounded);
+    entry.completedRunMaxPrefixHours?.delete(rounded);
+    entry.completedDependencyHours?.delete(rounded);
+  }
+}
+
 function markFrameTaskDependencyComplete(task) {
   const hour = Math.round(Number(task?.frame?.hour));
   if (!Number.isFinite(hour)) {
@@ -718,7 +781,7 @@ function emitGlobalFrameFailure(entry, frame, framePlan, error, retryAttempt, co
     entry.failed += 1;
     entry.completed += 1;
   }
-  entry.failedFrames.set(hour, { frame, error: errorMessage });
+  entry.failedFrames.set(hour, { frame, error: errorMessage, retryAttempt });
   entry.state.manifest.hourStatus[String(frame.hour)] = "error";
   emitGlobalProgress(onProgress, {
     type: "frame-error",
@@ -786,6 +849,135 @@ function buildGlobalFrameQueue(entries) {
     }
   }
   return tasks.sort(compareGlobalFrameTasks);
+}
+
+// Background main-GRIB prefetch: walks the queue-ordered main tasks
+// (renderMode all/base — exactly one per frame; snow/prefix parts never
+// materialize the main GRIB) and warms the content-addressed selected-GRIB
+// cache ahead of worker dispatch, so the network runs while earlier frames
+// compute instead of alternating fetch waves with compute waves. The worker
+// fetch path is unchanged and authoritative: every pump failure is
+// swallowed and counted, and prefetch/worker races settle through the
+// selected-GRIB locks. Besides warming the cache, the controller is the
+// warm-first dispatch oracle — taskPriority tells the queue which main
+// frames cost no network right now. Returns a controller ({stop, done,
+// stats, warmedTaskKeys, taskPriority}) or null when disabled or the
+// prefetch module is unavailable.
+function startFrameInputPrefetch(runtime, tasks, options = {}) {
+  const concurrency = clampInt(options.concurrency, 0, 16, 0);
+  if (concurrency < 1) {
+    return null;
+  }
+  let prefetchFrameMainGribInput = options._prefetchImpl || null;
+  if (!prefetchFrameMainGribInput) {
+    try {
+      ({ prefetchFrameMainGribInput } = require("./input-prefetch"));
+    } catch (error) {
+      // The module ships in-repo, so a load failure is always a regression
+      // (e.g. the CATALOG_VERSION guard tripping). Stay fail-safe — a build
+      // without prefetch is merely slower — but never silently: the only
+      // other symptom is a missing summary line nobody would miss.
+      console.warn(`[noaa-beta] input prefetch disabled: module load failed: ${String(error?.message || error)}`);
+      return null;
+    }
+  }
+  let mainTasks = (Array.isArray(tasks) ? tasks : []).filter(
+    (task) => task && (task.renderMode === "all" || task.renderMode === "base"),
+  );
+  if (mainTasks.length === 0) {
+    return null;
+  }
+  // The first ~dispatchWidth main tasks go straight to frame workers, which
+  // fetch them concurrently with this pump; prefetching those first would
+  // park every pump slot in a lock-wait behind a worker's own download.
+  // Start the pump just past the initial dispatch wave and circle back to
+  // the head tasks last (by then they are complete and skip cheaply).
+  const dispatchWidth = clampInt(options.dispatchWidth, 0, mainTasks.length, 0);
+  if (dispatchWidth > 0 && dispatchWidth < mainTasks.length) {
+    mainTasks = mainTasks.slice(dispatchWidth).concat(mainTasks.slice(0, dispatchWidth));
+  }
+  // The workers' totalRangeFetchConcurrency budget is enforced by per-worker
+  // allowances that cannot span this main-process pump, so the pump rides on
+  // top of that budget at up to concurrency x 3 connections (24 at the
+  // default 8 slots, against the 72-connection default worker budget and
+  // its 128 cap). That is not additive in steady state: warm-first dispatch
+  // routes most fetching THROUGH the pump, so pump connections replace
+  // worker connections rather than stack on them — overlap is confined to
+  // the cold first wave and pump-failure fallbacks.
+  const rangeFetchConcurrency = Math.min(3, clampInt(options.rangeFetchConcurrency, 1, 64, 1));
+  const warmTaskKey = (task) => `${task?.entry?.index ?? "?"}:${Math.round(Number(task?.frame?.hour))}`;
+  const controller = {
+    stopped: false,
+    stats: { prefetched: 0, skipped: 0, failed: 0 },
+    warmedTaskKeys: new Set(),
+  };
+  controller.stop = () => {
+    controller.stopped = true;
+  };
+  // Dispatch priority for warm-first scheduling: 0 = start freely (part
+  // tasks and dependency chains keep their natural order; main frames whose
+  // selected GRIB the pump has warmed, or that are already finished, cost
+  // no network), 1 = cold main frame (defer while preferred work exists —
+  // the pump is likely already downloading it). Reuse-eligible frames the
+  // pump has not probed yet are labeled cold until their probe lands; that
+  // only delays a cheap task, never blocks it.
+  controller.taskPriority = (task) => {
+    if (!task || (task.renderMode !== "all" && task.renderMode !== "base")) {
+      return 0;
+    }
+    const hour = Math.round(Number(task?.frame?.hour));
+    if (task.entry?.finishedFrameHours?.has(hour)) {
+      return 0;
+    }
+    return controller.warmedTaskKeys.has(warmTaskKey(task)) ? 0 : 1;
+  };
+  controller.done = runWithConcurrency(mainTasks, concurrency, async (task) => {
+    if (controller.stopped) {
+      return;
+    }
+    const entry = task.entry;
+    const frame = task.frame;
+    const hour = Math.round(Number(frame?.hour));
+    try {
+      if (entry.finishedFrameHours?.has(hour)) {
+        controller.stats.skipped += 1;
+        return;
+      }
+      const statIndex = typeof runtime.createFrameStatIndex === "function" ? runtime.createFrameStatIndex() : null;
+      if (!options.forceFrames && (await runtime.isFrameCompleteForState(entry.state, frame, { statIndex }))) {
+        // Complete on disk: the render task will reuse it without fetching,
+        // so it dispatches as warm work.
+        controller.warmedTaskKeys.add(warmTaskKey(task));
+        controller.stats.skipped += 1;
+        return;
+      }
+      if (controller.stopped) {
+        return;
+      }
+      const warmed = await prefetchFrameMainGribInput({
+        latestMetadata: entry.state.latestMetadata,
+        modelKey: entry.modelKey,
+        hour,
+        renderMode: task.renderMode,
+        renderSelection: options.renderSelection || null,
+        rawCacheDir: options.rawCacheDir || null,
+        noaaBaseUrl: options.noaaBaseUrls?.[entry.modelKey] || null,
+        rangeFetchConcurrency,
+        shouldStop: () => controller.stopped,
+      });
+      if (warmed) {
+        controller.warmedTaskKeys.add(warmTaskKey(task));
+        controller.stats.prefetched += 1;
+      } else {
+        // Declined without warming: missing metadata, a stop request, or a
+        // lock already held by whoever is fetching these bytes right now.
+        controller.stats.skipped += 1;
+      }
+    } catch {
+      controller.stats.failed += 1;
+    }
+  }).catch(() => {});
+  return controller;
 }
 
 function buildFrameRenderTasks(tasks, options = {}) {
@@ -959,6 +1151,7 @@ async function runGlobalFrameTaskQueue(tasks, concurrency, worker, options = {})
   const workerCount = clampInt(concurrency, 1, list.length, 1);
   const pending = [...list];
   const canStartTask = typeof options.canStartTask === "function" ? options.canStartTask : null;
+  const taskPriority = typeof options.taskPriority === "function" ? options.taskPriority : null;
   const onTaskFinished = typeof options.onTaskFinished === "function" ? options.onTaskFinished : null;
   const waiters = [];
   const notifyWaiters = () => {
@@ -976,11 +1169,18 @@ async function runGlobalFrameTaskQueue(tasks, concurrency, worker, options = {})
     active: 0,
     concurrency: workerCount,
     lastLoggedAt: 0,
+    warmPicks: 0,
+    coldPicks: 0,
   };
   logGlobalQueueProgress(metrics, options, true);
+  // A worker throw fails the whole queue (Promise.all rejects), so every
+  // other runner must stop dispatching new frames: a long-lived process must
+  // not keep downloading and rendering for a build that already failed.
+  // In-flight tasks finish; parked runners wake via the thrower's finally.
+  let aborted = false;
   const runners = Array.from({ length: workerCount }, async () => {
-    while (metrics.completed < metrics.total) {
-      const current = takeNextReadyTask(pending, canStartTask, metrics.active);
+    while (!aborted && metrics.completed < metrics.total) {
+      const current = takeNextReadyTask(pending, canStartTask, metrics.active, taskPriority);
       if (!current) {
         if (pending.length === 0) {
           break;
@@ -988,10 +1188,20 @@ async function runGlobalFrameTaskQueue(tasks, concurrency, worker, options = {})
         await waitForReadyChange();
         continue;
       }
+      if (taskPriority && (current.task?.renderMode === "all" || current.task?.renderMode === "base")) {
+        if (taskPriority(current.task) === 0) {
+          metrics.warmPicks += 1;
+        } else {
+          metrics.coldPicks += 1;
+        }
+      }
       metrics.started += 1;
       metrics.active += 1;
       try {
         await worker(current.task, current.index);
+      } catch (error) {
+        aborted = true;
+        throw error;
       } finally {
         if (onTaskFinished) {
           onTaskFinished(current.task, current.index);
@@ -1007,14 +1217,38 @@ async function runGlobalFrameTaskQueue(tasks, concurrency, worker, options = {})
   logGlobalQueueProgress(metrics, options, true);
 }
 
-function takeNextReadyTask(pending, canStartTask, activeCount) {
+function takeNextReadyTask(pending, canStartTask, activeCount, taskPriority) {
   if (!Array.isArray(pending) || pending.length === 0) {
     return null;
   }
-  const readyIndex = canStartTask ? pending.findIndex((task) => canStartTask(task)) : 0;
-  if (readyIndex >= 0) {
-    const task = pending.splice(readyIndex, 1)[0];
-    return { task, index: task?.queueIndex ?? readyIndex };
+  // Warm-first dispatch: among ready tasks, prefer priority 0 (part tasks,
+  // dependency chains, and main frames whose input the prefetch pump has
+  // already warmed) over priority 1 (cold main frames). Picking a cold main
+  // parks a compute slot in a network fetch the pump could run concurrently;
+  // deferring it keeps CPUs on warm work while the pump drains the network.
+  // Deferred, never starved: when no preferred task is ready, the first
+  // ready task is taken regardless of priority. Exact old-FIFO degradation
+  // holds only when no taskPriority hook is installed (pump disabled); a
+  // live pump that never warms anything (no cache root, declined locks)
+  // still prefers ready part tasks over earlier cold mains — an accepted,
+  // order-safe reordering (dependency gates are consulted per candidate).
+  let firstReadyIndex = -1;
+  for (let index = 0; index < pending.length; index += 1) {
+    const task = pending[index];
+    if (canStartTask && !canStartTask(task)) {
+      continue;
+    }
+    if (firstReadyIndex < 0) {
+      firstReadyIndex = index;
+    }
+    if (!taskPriority || taskPriority(task) === 0) {
+      const picked = pending.splice(index, 1)[0];
+      return { task: picked, index: picked?.queueIndex ?? index };
+    }
+  }
+  if (firstReadyIndex >= 0) {
+    const task = pending.splice(firstReadyIndex, 1)[0];
+    return { task, index: task?.queueIndex ?? firstReadyIndex };
   }
   if (activeCount <= 0) {
     const task = pending.shift();
@@ -1047,8 +1281,10 @@ function logGlobalQueueProgress(metrics, options = {}, force = false) {
   const persistLabel = persistStats
     ? ` persist=${persistStats.active}/${persistStats.concurrency} persistQueue=${persistStats.queued}/${persistStats.backlogLimit} persisted=${persistStats.completed}/${persistStats.scheduled}`
     : "";
+  const dispatchLabel =
+    metrics.warmPicks + metrics.coldPicks > 0 ? ` dispatch=warm:${metrics.warmPicks}/cold:${metrics.coldPicks}` : "";
   console.log(
-    `[noaa-beta] frame queue ${metrics.label} active=${metrics.active}/${metrics.concurrency} queued=${Math.max(0, metrics.total - metrics.started)} completed=${metrics.completed}/${metrics.total}${workerLabel}${persistLabel} built=${built} reused=${reused} failed=${failed}${byModel ? ` byModel=${byModel}` : ""}`,
+    `[noaa-beta] frame queue ${metrics.label} active=${metrics.active}/${metrics.concurrency} queued=${Math.max(0, metrics.total - metrics.started)} completed=${metrics.completed}/${metrics.total}${workerLabel}${persistLabel} built=${built} reused=${reused} failed=${failed}${dispatchLabel}${byModel ? ` byModel=${byModel}` : ""}`,
   );
 }
 
@@ -1094,12 +1330,14 @@ module.exports = {
   buildFrameRenderTasks,
   buildGlobalFrameQueue,
   buildLatestStatesWithGlobalFrameQueue,
+  startFrameInputPrefetch,
   canStartFrameTaskWithDependencies,
   clampInt,
   compareGlobalFrameTasks,
   configureRunMaxFrameDependency,
   configureSnowfallFrameDependency,
   emitGlobalFrameFailure,
+  rearmFrameDependencyGatesForRetry,
   emitGlobalProgress,
   logGlobalQueueProgress,
   markFrameTaskDependencyComplete,

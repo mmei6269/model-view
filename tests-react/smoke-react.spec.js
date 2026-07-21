@@ -1,7 +1,7 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 const ONE_BY_ONE =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s0NkgAAAABJRU5ErkJggg==";
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNoaGj4DwAFhAKAfr3l1AAAAABJRU5ErkJggg==";
 const ONE_BY_ONE_BYTES = Buffer.from(ONE_BY_ONE.split(",")[1], "base64");
 
 function encodeInt16(values) {
@@ -192,9 +192,11 @@ test("run selector defaults to latest and can pin an older available run", async
   await page.goto("/");
   const panel = page.locator("article").first();
   await expect(panel.getByText(/Run\s+2026-03-14\s+00z/)).toBeVisible();
+  await expect(panel.getByTestId("run-age-chip")).not.toContainText("newer available");
 
   await panel.getByLabel("Run", { exact: true }).selectOption("20260313-0000Z");
   await expect(panel.getByText(/Run\s+2026-03-13\s+00z/)).toBeVisible();
+  await expect(panel.getByTestId("run-age-chip")).toContainText("newer available");
 });
 
 test("initial load renders at least one weather overlay without layer toggles", async ({ page }) => {
@@ -202,24 +204,23 @@ test("initial load renders at least one weather overlay without layer toggles", 
   const panel = page.locator("article").first();
   await expect(panel).toBeVisible();
 
+  // Bridge view of the invariant: at least one weather image is registered
+  // with the engine, its current URL has decoded (load fired), and the
+  // weather group is visible.
   await expect
     .poll(
       async () =>
-        page.$$eval(
-          ".leaflet-image-layer.wx-weather-overlay",
-          (elements) =>
-            elements.filter((element) => {
-              const image = element;
-              const style = window.getComputedStyle(image);
-              return (
-                style.display !== "none" &&
-                style.visibility !== "hidden" &&
-                Number(style.opacity || "1") > 0 &&
-                image.naturalWidth > 0 &&
-                image.naturalHeight > 0
-              );
-            }).length,
-        ),
+        page.evaluate(() => {
+          const bridge = window.__wx;
+          if (!bridge || bridge.panels().length === 0) {
+            return 0;
+          }
+          const id = bridge.panels()[0];
+          if (!(bridge.getGroupOpacity(id, "weather") > 0)) {
+            return 0;
+          }
+          return bridge.getActiveWeatherLayers(id).filter((key) => bridge.isWeatherLoaded(id, key)).length;
+        }),
       { timeout: 10_000 },
     )
     .toBeGreaterThan(0);
@@ -231,35 +232,73 @@ test("synoptic remains above parameter panes after toggles", async ({ page }) =>
 
   await setCheckboxState(page, panel.getByRole("checkbox", { name: /Composite Reflectivity/ }), true);
   await setCheckboxState(page, panel.getByRole("checkbox", { name: /1-h Precip/ }), true);
-  await page.waitForTimeout(1200);
 
-  const paneOrder = await page.evaluate(() => {
-    const paneNames = [
-      "leaflet-wx-temp-pane-pane",
-      "leaflet-wx-wind-pane-pane",
-      "leaflet-wx-precip-pane-pane",
-      "leaflet-wx-reflectivity-pane-pane",
-      "leaflet-wx-synoptic-thickness-pane-pane",
-      "leaflet-wx-synoptic-isobar-pane-pane",
-      "leaflet-wx-synoptic-marker-pane-pane",
-    ];
-    const order = {};
-    for (const name of paneNames) {
-      const pane = document.querySelector(`.${name}`);
-      order[name] = pane ? Number(getComputedStyle(pane).zIndex || 0) : null;
-    }
-    return order;
+  // The synoptic stack renders as native line layers (Task 4.2; the loaded
+  // vector payload suppresses the raster synoptic, and markers are symbol
+  // layers since Task 4.3). Invariant: every parameter raster renders below
+  // the whole synoptic stack.
+  const expectedWeatherKeys = ["reflectivityComposite", "precip"];
+
+  // Wait for the toggled rasters to reach the engine, then read the applied
+  // render order off the bridge.
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const bridge = window.__wx;
+          if (!bridge || bridge.panels().length === 0) {
+            return [];
+          }
+          return bridge.getActiveWeatherLayers(bridge.panels()[0]);
+        }),
+      { timeout: 10_000 },
+    )
+    .toEqual(expect.arrayContaining(expectedWeatherKeys));
+
+  // The bottom of the synoptic stack: the first of the seven native synoptic
+  // line layers (set together once the vector payload loads — poll for it).
+  const synopticFloor = "synoptic-thickness-cold";
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const bridge = window.__wx;
+          return bridge && bridge.panels().length > 0 ? bridge.getLayerOrder(bridge.panels()[0]) : [];
+        }),
+      { timeout: 10_000 },
+    )
+    .toContain(synopticFloor);
+
+  const { layerOrder, weatherKeys } = await page.evaluate(() => {
+    const bridge = window.__wx;
+    const id = bridge.panels()[0];
+    return { layerOrder: bridge.getLayerOrder(id), weatherKeys: bridge.getActiveWeatherLayers(id) };
   });
+  const orderIndex = (layerId) => layerOrder.indexOf(layerId);
 
-  expect(paneOrder["leaflet-wx-synoptic-thickness-pane-pane"]).toBeGreaterThan(
-    paneOrder["leaflet-wx-reflectivity-pane-pane"],
-  );
-  expect(paneOrder["leaflet-wx-synoptic-isobar-pane-pane"]).toBeGreaterThan(
-    paneOrder["leaflet-wx-synoptic-thickness-pane-pane"],
-  );
-  expect(paneOrder["leaflet-wx-synoptic-marker-pane-pane"]).toBeGreaterThan(
-    paneOrder["leaflet-wx-synoptic-isobar-pane-pane"],
-  );
+  // Every weather raster renders below the synoptic stack. (The raster
+  // synoptic twin is suppressed by the loaded vector payload, hence the
+  // filter.)
+  expect(orderIndex(synopticFloor)).toBeGreaterThanOrEqual(0);
+  for (const key of weatherKeys.filter((layerKey) => layerKey !== "synoptic")) {
+    expect(orderIndex(key)).toBeGreaterThanOrEqual(0);
+    expect(orderIndex(key)).toBeLessThan(orderIndex(synopticFloor));
+  }
+  // Native stack order: every thickness class below the isobar classes,
+  // the 540 boundary above its thickness band-mates, majors above minors.
+  const thicknessIds = [
+    "synoptic-thickness-cold",
+    "synoptic-thickness-cold-major",
+    "synoptic-thickness-warm",
+    "synoptic-thickness-warm-major",
+    "synoptic-thickness-540",
+  ];
+  for (const thicknessId of thicknessIds) {
+    expect(orderIndex(thicknessId)).toBeGreaterThanOrEqual(0);
+    expect(orderIndex("synoptic-isobars")).toBeGreaterThan(orderIndex(thicknessId));
+  }
+  expect(orderIndex("synoptic-thickness-540")).toBeGreaterThan(orderIndex("synoptic-thickness-warm-major"));
+  expect(orderIndex("synoptic-isobars-major")).toBeGreaterThan(orderIndex("synoptic-isobars"));
 });
 
 test("reflectivity gate selector switches gate mode", async ({ page }) => {
@@ -380,23 +419,34 @@ test("isobar detail selector switches synoptic vector key from simple to detaile
 
 test("weather overlays render in raw pixel mode", async ({ page }) => {
   await page.goto("/");
-  const css = await page.evaluate(() => {
-    for (const sheet of Array.from(document.styleSheets)) {
-      let rules;
-      try {
-        rules = sheet.cssRules;
-      } catch {
-        continue;
-      }
-      for (const rule of Array.from(rules)) {
-        if (rule.selectorText === ".leaflet-image-layer.wx-weather-overlay") {
-          return rule.cssText;
-        }
-      }
-    }
-    return "";
+  // Wait for a decoded weather overlay via the bridge, then assert the
+  // APPLIED raw-pixel rendering for EVERY active weather layer
+  // (RAW_PIXEL_MODE is build-wide) through the bridge, which reads the live
+  // raster-resampling paint value off the rendered style.
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const bridge = window.__wx;
+          if (!bridge || bridge.panels().length === 0) {
+            return 0;
+          }
+          const id = bridge.panels()[0];
+          return bridge.getActiveWeatherLayers(id).filter((key) => bridge.isWeatherLoaded(id, key)).length;
+        }),
+      { timeout: 10_000 },
+    )
+    .toBeGreaterThan(0);
+
+  const pixelFlags = await page.evaluate(() => {
+    const bridge = window.__wx;
+    const id = bridge.panels()[0];
+    return bridge.getActiveWeatherLayers(id).map((key) => [key, bridge.isWeatherPixelated(id, key)]);
   });
-  expect(css).toContain("image-rendering: pixelated");
+  expect(pixelFlags.length).toBeGreaterThan(0);
+  for (const [key, pixelated] of pixelFlags) {
+    expect(pixelated, `weather layer "${key}" must render raw pixels`).toBe(true);
+  }
 });
 
 test("panel timeline mode tracks selected panel independently", async ({ page }) => {
@@ -498,7 +548,7 @@ test("hover values render instantly from local hover grid and never hit a point 
 
   await page.goto("/");
   const panel = page.locator("article").first();
-  const map = panel.locator(".leaflet-container").first();
+  const map = panel.locator('[data-testid="map-canvas-host"]').first();
   const mapBox = await map.boundingBox();
   if (!mapBox) {
     throw new Error("Map container bounding box is unavailable.");
@@ -551,16 +601,18 @@ test("hover temperature sampling follows Mercator row mapping", async ({ page })
     });
   });
   await page.route("**/__cf/fixtures/gfs/hover-mercator/hover-grid.json.gz**", async (route) => {
+    const rows = 101;
+    const temperatureF = Array.from({ length: rows }, (_, row) => [row, row]).flat();
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(
-        buildHoverGridPayload(2, 2, {
-          temperatureF: [0, 0, 100, 100],
-          windKt: [0, 0, 0, 0],
-          precipMm: [0, 0, 0, 0],
-          capeJkg: [0, 0, 0, 0],
-          pressureHpa: [1000, 1000, 1000, 1000],
+        buildHoverGridPayload(rows, 2, {
+          temperatureF,
+          windKt: temperatureF.map(() => 0),
+          precipMm: temperatureF.map(() => 0),
+          capeJkg: temperatureF.map(() => 0),
+          pressureHpa: temperatureF.map(() => 1000),
         }),
       ),
     });
@@ -568,7 +620,7 @@ test("hover temperature sampling follows Mercator row mapping", async ({ page })
 
   await page.goto("/");
   const panel = page.locator("article").first();
-  const map = panel.locator(".leaflet-container").first();
+  const map = panel.locator('[data-testid="map-canvas-host"]').first();
   const mapBox = await map.boundingBox();
   if (!mapBox) {
     throw new Error("Map container bounding box is unavailable.");
@@ -592,9 +644,9 @@ test("hover temperature sampling follows Mercator row mapping", async ({ page })
   const linearFraction = (bounds.north - lat) / (bounds.north - bounds.south);
   const mercatorFraction = mercatorSouthwardFraction(lat, bounds.north, bounds.south);
   const linearExpected = linearFraction * 100;
-  const mercatorExpected = mercatorFraction * 100;
+  const mercatorExpected = Math.round(mercatorFraction * 100);
 
-  expect(Math.abs(sampledTemp - mercatorExpected)).toBeLessThanOrEqual(1.2);
+  expect(Math.abs(sampledTemp - mercatorExpected)).toBeLessThanOrEqual(0.6);
   expect(Math.abs(sampledTemp - linearExpected)).toBeGreaterThan(2);
 });
 
@@ -685,7 +737,7 @@ test("frame status reaches loaded after visual assets even while hover is pendin
     .getByRole("button", { name: /Frames/ })
     .first()
     .click();
-  const frameChip = panel.getByRole("button", { name: "000" }).first();
+  const frameChip = panel.getByRole("button", { name: /^Forecast hour 0:/ });
 
   await expect.poll(async () => (await frameChip.getAttribute("class")) || "").not.toContain("bg-cyan-500/20");
   releaseVector();
@@ -698,8 +750,9 @@ test("frame status reaches loaded after visual assets even while hover is pendin
     .not.toContain("bg-rose-500/20");
 });
 
-test("transient prefetch failures stay selectable and recover after direct frame load", async ({ page }) => {
+test("transient prefetch failures stay selectable and retry when their hour is selected", async ({ page }) => {
   let futureTempHits = 0;
+  let allowFutureTempSuccess = false;
   let releaseFirstFutureTempAttempt;
   const firstFutureTempAttemptGate = new Promise((resolve) => {
     releaseFirstFutureTempAttempt = resolve;
@@ -780,7 +833,7 @@ test("transient prefetch failures stay selectable and recover after direct frame
       // deterministically observable before the transient failures begin.
       await firstFutureTempAttemptGate;
     }
-    if (futureTempHits <= 2) {
+    if (!allowFutureTempSuccess) {
       await route.fulfill({
         status: 503,
         contentType: "text/plain",
@@ -806,7 +859,7 @@ test("transient prefetch failures stay selectable and recover after direct frame
     .getByRole("button", { name: /Frames/ })
     .first()
     .click();
-  const futureFrameChip = panel.getByRole("button", { name: "003" }).first();
+  const futureFrameChip = panel.getByRole("button", { name: /^Forecast hour 3:/ });
 
   // P1.11 loading state: the first hour-3 fetch is gated open above, so the
   // chip must show the in-flight "loading" class (hourChipClass) before the
@@ -817,18 +870,25 @@ test("transient prefetch failures stay selectable and recover after direct frame
     .toContain("bg-sky-500/20");
   releaseFirstFutureTempAttempt();
 
-  await expect.poll(() => futureTempHits, { timeout: 5_000 }).toBeGreaterThanOrEqual(2);
   await expect
     .poll(async () => (await futureFrameChip.getAttribute("class")) || "", { timeout: 5_000 })
     .toContain("bg-rose-500/20");
   await expect(futureFrameChip).toBeEnabled();
 
+  // Let the panel-local and delayed whole-view warmup consumers finish their
+  // initial failed attempts. Once selection permits success, raster recovery
+  // should add only MapLibre's one visible request—not a parallel prefetch.
+  await page.waitForTimeout(750);
+  const failuresBeforeSelection = futureTempHits;
+  allowFutureTempSuccess = true;
   await futureFrameChip.click();
-  await expect.poll(() => futureTempHits, { timeout: 5_000 }).toBeGreaterThan(2);
+  await expect.poll(() => futureTempHits, { timeout: 5_000 }).toBe(failuresBeforeSelection + 1);
   await expect
     .poll(async () => (await futureFrameChip.getAttribute("class")) || "", { timeout: 5_000 })
     .toContain("bg-cyan-500/20");
   await expect(page.getByText("Loaded 2/2")).toBeVisible({ timeout: 5_000 });
+  await page.waitForTimeout(250);
+  expect(futureTempHits).toBe(failuresBeforeSelection + 1);
 });
 
 test("layer deselect/reselect during in-flight prefetch does not turn error or false-loaded", async ({ page }) => {
@@ -908,7 +968,7 @@ test("layer deselect/reselect during in-flight prefetch does not turn error or f
     .getByRole("button", { name: /Frames/ })
     .first()
     .click();
-  const frameChip = panel.getByRole("button", { name: "000" }).first();
+  const frameChip = panel.getByRole("button", { name: /^Forecast hour 0:/ });
   await expect
     .poll(async () => (await frameChip.getAttribute("class")) || "", { timeout: 5_000 })
     .toContain("bg-sky-500/20");
@@ -1039,7 +1099,7 @@ test("model switch does not inherit stale error from aborted prior prefetch run"
     .getByRole("button", { name: /Frames/ })
     .first()
     .click();
-  const frameChip = panel.getByRole("button", { name: "000" }).first();
+  const frameChip = panel.getByRole("button", { name: /^Forecast hour 0:/ });
   await expect
     .poll(async () => (await frameChip.getAttribute("class")) || "", { timeout: 5_000 })
     .toContain("bg-sky-500/20");
@@ -1166,7 +1226,7 @@ test("switching away and back reuses prefetched gfs layer for instant return", a
     .getByRole("button", { name: /Frames/ })
     .first()
     .click();
-  const frameChip = panel.getByRole("button", { name: "000" }).first();
+  const frameChip = panel.getByRole("button", { name: /^Forecast hour 0:/ });
   await expect
     .poll(async () => (await frameChip.getAttribute("class")) || "", { timeout: 5_000 })
     .toContain("bg-cyan-500/20");
@@ -1236,7 +1296,7 @@ test("center marker pressure stays consistent with hover pressure at marker loca
         styleVersion: "v4-operational-contrast",
         isobars: { lines: [], labels: [] },
         thickness: { lines: [], labels: [] },
-        centers: { highs: [], lows: [] },
+        centers: { highs: [], lows: [{ lat: 38, lon: -97, valueHpa: 985 }] },
       }),
     });
   });
@@ -1258,20 +1318,33 @@ test("center marker pressure stays consistent with hover pressure at marker loca
 
   await page.goto("/");
   const panel = page.locator("article").first();
-  const markerValueEl = panel.locator(".pressure-marker-value").first();
-  await expect(markerValueEl).toBeVisible();
-  const markerValue = extractLastNumber(await markerValueEl.textContent());
-  expect(Number.isFinite(markerValue)).toBeTruthy();
-
-  const markerBox = await panel.locator(".pressure-marker-icon").first().boundingBox();
-  if (!markerBox) {
-    throw new Error("Pressure marker bounding box is unavailable.");
+  // Task 4.3: the H/L centers are engine symbol layers placed by the GL
+  // collision engine — no marker DOM to scrape. Assert through the bridge
+  // that the low-center layer is applied to the live style (getLayerOrder
+  // reads rendered style order) carrying exactly the fixture's one low and
+  // no highs, then cross-check hover pressure against that center's value
+  // (985 hPa); the fixture hover grid is uniform 985, so any on-map cursor
+  // position samples the marker location's pressure.
+  await expect
+    .poll(() => page.evaluate(() => window.__wx.getLayerOrder(window.__wx.panels()[0])), { timeout: 15_000 })
+    .toContain("synoptic-centers-low");
+  await expect
+    .poll(() => page.evaluate(() => window.__wx.getSymbolFeatureCount(window.__wx.panels()[0], "synoptic-centers-low")))
+    .toBe(1);
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__wx.getSymbolFeatureCount(window.__wx.panels()[0], "synoptic-centers-high")),
+    )
+    .toBe(0);
+  const hostBox = await panel.locator('[data-testid="map-canvas-host"]').boundingBox();
+  if (!hostBox) {
+    throw new Error("Map host bounding box is unavailable.");
   }
-  await page.mouse.move(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
+  await page.mouse.move(hostBox.x + hostBox.width / 2, hostBox.y + hostBox.height / 2);
   const mslpLine = panel.locator("p", { hasText: "MSLP" }).first();
   await expect(mslpLine).toContainText("hPa");
   const hoverPressure = extractLastNumber(await mslpLine.textContent());
-  expect(Math.abs(hoverPressure - markerValue)).toBeLessThanOrEqual(1);
+  expect(Math.abs(hoverPressure - 985)).toBeLessThanOrEqual(1);
 });
 
 test("frame chips stay pending until a prefetch actually starts and load after release", async ({ page }) => {
@@ -1341,14 +1414,16 @@ test("frame chips stay pending until a prefetch actually starts and load after r
     });
   });
 
-  await page.goto("/");
+  // Pin F000: nearest-to-now correctly chooses the latest fixture frame once
+  // this dated test run is older than the current clock.
+  await page.goto("/?hour=2026-02-16T06:00:00Z");
   const panel = page.locator("article").first();
   await panel
     .getByRole("button", { name: /Frames/ })
     .first()
     .click();
-  const nearChip = panel.getByRole("button", { name: "000" }).first();
-  const farChip = panel.getByRole("button", { name: "045" }).first();
+  const nearChip = panel.getByRole("button", { name: /^Forecast hour 0:/ });
+  const farChip = panel.getByRole("button", { name: /^Forecast hour 45:/ });
 
   // Prefetch concurrency is 12 (frame-prefetch DEFAULT_CONCURRENCY): hours 000-033
   // start fetching immediately; 036-045 are queued and must NOT claim "loading".
@@ -1448,7 +1523,7 @@ test("mixed cached/uncached hour stays loading while the uncached layer is in fl
     .getByRole("button", { name: /Frames/ })
     .first()
     .click();
-  const frameChip = panel.getByRole("button", { name: "000" }).first();
+  const frameChip = panel.getByRole("button", { name: /^Forecast hour 0:/ });
   await expect(frameChip).toBeVisible();
 
   // Phase 1: temperature off -> plan is synoptic-only, the vector loads and is cached

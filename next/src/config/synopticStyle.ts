@@ -27,6 +27,8 @@ export interface SynopticLabelStyle {
 }
 
 export interface SynopticMslpStyle {
+  minorIntervalHpa?: number;
+  majorIntervalHpa?: number;
   showMinorAtZoomGte?: number;
   major?: SynopticLineStyle;
   minor?: SynopticLineStyle;
@@ -35,6 +37,8 @@ export interface SynopticMslpStyle {
 }
 
 export interface SynopticThicknessStyle {
+  minorIntervalDam?: number;
+  majorIntervalDam?: number;
   showMinorAtZoomGte?: number;
   emphasisDam?: number;
   boundaryColor?: string;
@@ -73,18 +77,11 @@ export interface SynopticStyleConfig {
 
 export const SYNOPTIC_STYLE = rawStyle as SynopticStyleConfig;
 
-export function getZoomBucketId(zoom: number): string {
-  const z = Number.isFinite(zoom) ? zoom : 6;
-  const bucket = (SYNOPTIC_STYLE.zoomBuckets || []).find((item) => z >= Number(item.min) && z <= Number(item.max));
-  return bucket?.id || "z4_6";
-}
-
-export function bucketNumber(table: unknown, zoom: number, fallback: number): number {
-  if (!table || typeof table !== "object") {
-    return fallback;
-  }
-  const bucketId = getZoomBucketId(zoom);
-  const raw = (table as Record<string, unknown>)[bucketId];
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : fallback;
-}
+// DOMAIN NOTE: the shared style JSON — zoomBuckets included — is consumed
+// byte-identically by the server-side renderer (scripts/lib/
+// synoptic-style.js) and is public-mirrored, so it must never change shape
+// here. Its bucket ranges (and thickness.showMinorAtZoomGte) stay in the
+// renderer's historical zoom domain (= native maplibre zoom + 1, the retired
+// leaflet scale); the app's remaining consumers (synoptic-geojson interval
+// constants, the Task 4.2/4.3 ZoomCurves derived from the bucket tables)
+// already account for that offset at their definition site.

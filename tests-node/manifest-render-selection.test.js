@@ -45,6 +45,20 @@ test("partial selection records categories + builtAt", () => {
   }
 });
 
+test("science-prototype intent is normalized and recorded without changing the all-category default", () => {
+  const manifest = buildManifestTemplate({
+    ...BASE,
+    renderSelection: {
+      sciencePrototypes: ["rowAwareCenterValidation", "camDcape21Level", "rowAwareCenterValidation"],
+    },
+  });
+  assert.deepEqual(manifest.renderSelection.sciencePrototypes, ["camDcape21Level", "rowAwareCenterValidation"]);
+  for (const id of RENDER_CATEGORY_IDS) {
+    assert.equal(manifest.renderSelection.categories[id].enabled, true);
+    assert.equal(manifest.renderSelection.categories[id].tier, "full");
+  }
+});
+
 test("full-selection manifest equals default manifest except for the additive renderSelection field", () => {
   const categories = {};
   for (const id of RENDER_CATEGORY_IDS) categories[id] = { enabled: true, tier: "full" };

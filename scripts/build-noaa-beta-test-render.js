@@ -50,9 +50,16 @@ function parseWrapperArgs(argv) {
     const token = argv[index];
     const parsed = parseOptionToken(token);
     if (parsed && ["frames", "frame-count", "test-frames"].includes(parsed.name)) {
-      const value = parsed.hasInlineValue ? parsed.value : argv[index + 1];
-      frameCount = clampFrameCount(value);
-      if (!parsed.hasInlineValue) {
+      if (parsed.hasInlineValue) {
+        frameCount = clampFrameCount(parsed.value);
+        continue;
+      }
+      // Only consume the next token as the value when it is not another flag;
+      // an unguarded lookahead would silently swallow that flag from
+      // passthrough. A bare --frames with no value keeps the default.
+      const next = argv[index + 1];
+      if (next !== undefined && !String(next).startsWith("--")) {
+        frameCount = clampFrameCount(next);
         index += 1;
       }
       continue;
@@ -140,7 +147,10 @@ function optionValue(argv, names) {
     if (parsed.hasInlineValue) {
       return parsed.value;
     }
-    return argv[index + 1];
+    // Same lookahead guard as parseWrapperArgs: a following flag is not this
+    // option's value.
+    const next = argv[index + 1];
+    return next !== undefined && !String(next).startsWith("--") ? next : null;
   }
   return null;
 }
@@ -178,3 +188,5 @@ if (require.main === module) {
     process.exit(1);
   }
 }
+
+module.exports = { DEFAULT_FRAME_COUNT, clampFrameCount, optionValue, parseWrapperArgs };

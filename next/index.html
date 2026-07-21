@@ -9,12 +9,9 @@
       name="description"
       content="Model View — a local NOAA forecast workbench: multi-model map overlays, point soundings, and synoptic analysis for CONUS."
     />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+    <!-- Vendored app-origin UI fonts (Task 5.2 offline-boot guarantee): the
+         app boots with zero network requests, so no fonts.googleapis.com. -->
+    <link href="/fonts/ibm-plex.css" rel="stylesheet" />
     <title>Model View</title>
   </head>
   <body>

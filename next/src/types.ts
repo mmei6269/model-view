@@ -4,6 +4,7 @@ export type ModelKey = "gfs" | "nam" | "nam3km" | "hrrr";
 export type ViewKey = "conus" | "na";
 export type LayerKey = string;
 export type FrameHourStatus = "loaded" | "loading" | "error" | "pending" | "unavailable";
+export type FrameParameterAvailability = "available" | "unavailable";
 export type ValidTimeIso = string;
 export type PrefetchState = "idle" | "loading" | "loaded" | "error";
 export type TimelineMode = "overlap" | "panel";
@@ -314,6 +315,8 @@ export interface PointSoundingIndices {
   mslpHpa?: number | null;
   pblHeightM?: number | null;
   cloudCeilingM?: number | null;
+  cloudCeilingState?: "none" | "reported" | "unavailable" | string | null;
+  cloudCeilingDatum?: "AGL" | "MSL" | string | null;
   surfaceThetaEK?: number | null;
   pwatMm?: number | null;
   lclM?: number | null;
@@ -404,9 +407,18 @@ export interface PointSoundingIndices {
   maxWindKt?: number | null;
 }
 
+export interface PointSoundingWindReference {
+  sourceFrame?: string | null;
+  outputFrame?: string | null;
+  projection?: string | null;
+  rotationApplied?: boolean | null;
+  rotationAngleDeg?: number | null;
+}
+
 export interface PointSoundingPayload {
   schemaVersion?: number;
   source?: string;
+  methodVersion?: string | null;
   model: ModelKey | string;
   modelLabel?: string;
   run: string;
@@ -417,6 +429,7 @@ export interface PointSoundingPayload {
   lon: number;
   sampleLat?: number | null;
   sampleLon?: number | null;
+  windReference?: PointSoundingWindReference | null;
   selectedRecordCount?: number | null;
   surface?: PointSoundingSurface | null;
   levels: PointSoundingLevel[];
@@ -443,6 +456,7 @@ export interface FrameRecord {
   synopticStyleVersion?: string | null;
   synopticStyleVersions?: SynopticStyleVersions | null;
   pressureUploadMeta?: PressureUploadMeta | null;
+  parameterAvailability?: Record<string, FrameParameterAvailability> | null;
   hoverGridKey?: string | null;
   hoverGridBytes?: number | null;
   hoverGridSchemaVersion?: number | null;
@@ -480,6 +494,14 @@ export interface ModelManifest {
   parameterOrder?: string[];
   source?: string;
   renderSelection?: ManifestRenderSelection | null;
+  forecastHourPolicy?: {
+    policy?: string;
+    maxRenderedHour?: number | null;
+    frameCount?: number;
+    cadence?: string;
+    officialMaxHour?: number | null;
+    disclosure?: string;
+  } | null;
   frames: FrameRecord[];
 }
 
@@ -514,6 +536,9 @@ export interface ViewportState {
 export interface ManifestUiInfo {
   runLabel: string;
   validLabel: string;
+  // Manifest lifecycle for composite timeline statuses: "loading" panels hold
+  // the shared axis (transient), "error"/"empty" panels never block it.
+  manifestPhase?: "loading" | "ready" | "error" | "empty";
   validHourKey?: ValidTimeIso | null;
   resolvedHour?: number | null;
   frameStatusByValidTime?: Partial<Record<ValidTimeIso, FrameHourStatus>>;

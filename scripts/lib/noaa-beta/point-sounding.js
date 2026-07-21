@@ -7,7 +7,6 @@ const { NOAA_NAM_PARAMETER_CATALOG } = require("../noaa-nam-parameter-catalog");
 const { MPS_TO_KT, M_TO_IN, clamp, clamp01 } = require("./util");
 const {
   CP_OVER_RD,
-  DRY_ADIABATIC_LAPSE_K_M,
   GRAVITY_M_S2,
   RD_OVER_CP,
   boltonLclTemperatureK,
@@ -18,7 +17,6 @@ const {
   moistLiftTemperatureK,
   saturationMixingRatioHpa,
   virtualTemperatureK,
-  wetBulbTemperatureC,
   wetBulbTemperatureCAtPressure,
 } = require("./thermo");
 const {
@@ -55,9 +53,9 @@ const {
   finalizeNoaaRenderProfile,
   getSelectedRecordPlan,
   materializeSelectedGrib,
-  parseNoaaIdx,
-  readOrFetchNoaaIdxTextCached,
+  readOrFetchNoaaIdxRecordsCached,
   runCommand,
+  selectedGribSharedCacheDir,
 } = require("./grib-source");
 const { padHour, recordProfileStage } = require("./cache-io");
 const {
@@ -78,7 +76,7 @@ const { ensureSelectedRecordByteRangesForHour } = require("./accumulation");
 
 const M_TO_FT = 3.280839895;
 
-const POINT_SOUNDING_CACHE_VERSION = "point-sounding-selected-v1";
+const POINT_SOUNDING_CACHE_VERSION = "point-sounding-selected-v3-verified-earth-winds";
 
 async function buildNoaaPointSounding({
   modelKey,
@@ -133,9 +131,8 @@ async function buildNoaaPointSounding({
     rawCacheDir,
   });
   let stageStartedAt = performance.now();
-  const indexText = await readOrFetchNoaaIdxTextCached(`${gribUrl}.idx`, indexCacheContext, targetHour, profile);
+  const records = await readOrFetchNoaaIdxRecordsCached(`${gribUrl}.idx`, indexCacheContext, targetHour, profile);
   recordProfileStage(profile, "indexMs", stageStartedAt);
-  const records = parseNoaaIdx(indexText, null);
   const soundingSelection = selectPointSoundingRecords(records);
   const renderedSelection = selectNoaaNamParameterRecords(records, {
     catalog: NOAA_NAM_PARAMETER_CATALOG,
@@ -182,9 +179,10 @@ async function buildNoaaPointSounding({
   const tempDir = await fs.promises.mkdtemp(
     path.join(tempRoot, `noaa-sounding-${resolvedModelKey}-${runParts.date}-${runParts.cycle}-${padHour(targetHour)}-`),
   );
+  let gribPath = null;
   try {
     stageStartedAt = performance.now();
-    const gribPath = await materializeSelectedGrib({
+    gribPath = await materializeSelectedGrib({
       modelKey: resolvedModelKey,
       productKey: modelConfig.productKey,
       gribUrl,
@@ -202,6 +200,8 @@ async function buildNoaaPointSounding({
     recordProfileStage(profile, "materializeMs", stageStartedAt);
 
     stageStartedAt = performance.now();
+    const gridOutput = await runCommand(wgrib2Path, [gribPath, "-d", "1", "-grid"]);
+    const gridDefinition = parsePointSoundingGridDefinition(gridOutput.stdout);
     const output = await runCommand(wgrib2Path, [
       gribPath,
       "-s",
@@ -221,12 +221,28 @@ async function buildNoaaPointSounding({
       requestLon: targetLon,
       selectedRecordCount: selectedRecords.length,
       sampled,
+      gridDefinition,
       selection: soundingSelection,
       renderProfile: finalizeNoaaRenderProfile(profile),
     });
   } finally {
+    // A cached selected GRIB is shared across requests and must be left in
+    // place; an uncached one (rawCacheDir null) is a private os.tmpdir()
+    // file outside tempDir that nothing else would remove.
+    if (gribPath && !isSelectedGribCachePath(gribPath, rawCacheDir)) {
+      await fs.promises.rm(gribPath, { force: true }).catch(() => {});
+    }
     await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+function isSelectedGribCachePath(gribPath, rawCacheDir) {
+  const cacheDir = selectedGribSharedCacheDir(rawCacheDir);
+  if (!cacheDir) {
+    return false;
+  }
+  const relative = path.relative(path.resolve(cacheDir), path.resolve(gribPath));
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 function resolvePointSoundingRunParts({ runId, date, cycle }) {
@@ -276,6 +292,121 @@ function parsePointSoundingLonOutput(text) {
   return { values, sampleLat, sampleLon };
 }
 
+function parsePointSoundingGridDefinition(text) {
+  const source = String(text || "");
+  // wgrib2 -grid documents winds(N/S) as earth-relative; some transformed
+  // inventories instead print winds(earth). Accept both spellings, plus the
+  // historical winds(grids) spelling, without silently downgrading valid GFS
+  // winds to an unknown reference frame.
+  const windMatch = source.match(/winds\((grid|grids|earth|N\/S)\)/i);
+  const windToken = String(windMatch?.[1] || "unknown").toLowerCase();
+  const windFrame =
+    windToken === "n/s" || windToken === "earth" ? "earth" : /^grids?$/.test(windToken) ? "grid" : "unknown";
+  if (windFrame !== "grid") {
+    return {
+      windFrame,
+      projection: /lat-?lon/i.test(source) ? "latitude-longitude" : "unknown",
+      rotationSupported: windFrame === "earth",
+    };
+  }
+  if (!/Lambert Conformal/i.test(source)) {
+    return { windFrame, projection: "unknown", rotationSupported: false };
+  }
+  const centralLongitudeDeg = Number(source.match(/\bLoV\s+(-?\d+(?:\.\d+)?)/i)?.[1]);
+  const latin1Deg = Number(source.match(/\bLatin1\s+(-?\d+(?:\.\d+)?)/i)?.[1]);
+  const latin2Deg = Number(source.match(/\bLatin2\s+(-?\d+(?:\.\d+)?)/i)?.[1]);
+  const coneFactor = lambertConeFactor(latin1Deg, latin2Deg);
+  const rotationSupported = [centralLongitudeDeg, latin1Deg, latin2Deg, coneFactor].every(Number.isFinite);
+  return {
+    windFrame,
+    projection: "lambert-conformal",
+    rotationSupported,
+    centralLongitudeDeg: normalizeLongitudeForDisplay(centralLongitudeDeg),
+    latin1Deg,
+    latin2Deg,
+    coneFactor,
+  };
+}
+
+function lambertConeFactor(latin1Deg, latin2Deg) {
+  const phi1 = (Number(latin1Deg) * Math.PI) / 180;
+  const phi2 = (Number(latin2Deg) * Math.PI) / 180;
+  if (![phi1, phi2].every(Number.isFinite) || Math.abs(Math.cos(phi1)) < 1e-12 || Math.abs(Math.cos(phi2)) < 1e-12) {
+    return Number.NaN;
+  }
+  if (Math.abs(phi1 - phi2) < 1e-10) {
+    return Math.sin(phi1);
+  }
+  const numerator = Math.log(Math.cos(phi1) / Math.cos(phi2));
+  const denominator = Math.log(Math.tan(Math.PI / 4 + phi2 / 2) / Math.tan(Math.PI / 4 + phi1 / 2));
+  return Math.abs(denominator) > 1e-12 ? numerator / denominator : Number.NaN;
+}
+
+function resolvePointSoundingWindRotation(gridDefinition, sampleLon) {
+  const definition = gridDefinition || {};
+  if (definition.windFrame !== "grid") {
+    return {
+      applied: false,
+      sourceFrame: definition.windFrame || "unknown",
+      outputFrame: definition.windFrame === "earth" ? "earth-relative" : "unknown",
+      projection: definition.projection || "unknown",
+      angleDeg: 0,
+    };
+  }
+  if (!definition.rotationSupported || definition.projection !== "lambert-conformal") {
+    return {
+      applied: false,
+      sourceFrame: "grid",
+      outputFrame: "unknown",
+      projection: definition.projection || "unknown",
+      angleDeg: Number.NaN,
+    };
+  }
+  const longitudeDeltaDeg = normalizeLongitudeDelta(Number(sampleLon) - Number(definition.centralLongitudeDeg));
+  const angleDeg = Number(definition.coneFactor) * longitudeDeltaDeg;
+  return {
+    applied: true,
+    sourceFrame: "grid",
+    outputFrame: "earth-relative",
+    projection: "lambert-conformal",
+    centralLongitudeDeg: definition.centralLongitudeDeg,
+    coneFactor: definition.coneFactor,
+    angleDeg,
+  };
+}
+
+function normalizeLongitudeDelta(value) {
+  const normalized = ((((Number(value) + 180) % 360) + 360) % 360) - 180;
+  return normalized === -180 ? 180 : normalized;
+}
+
+function rotatePointSoundingWindComponents(uGrid, vGrid, rotation) {
+  const u = Number(uGrid);
+  const v = Number(vGrid);
+  if (![u, v].every(Number.isFinite)) {
+    return { u: Number.NaN, v: Number.NaN };
+  }
+  if (rotation?.outputFrame !== "earth-relative") {
+    // Fail closed: an unknown/grid-relative output frame must never feed a
+    // hodograph, shear, storm-motion, SRH, SCP, or STP calculation. Preserve
+    // the thermodynamic sounding and expose an explicit warning instead.
+    return { u: Number.NaN, v: Number.NaN };
+  }
+  if (!rotation.applied) {
+    return { u, v };
+  }
+  const angleRad = (Number(rotation.angleDeg) * Math.PI) / 180;
+  if (!Number.isFinite(angleRad)) {
+    return { u: Number.NaN, v: Number.NaN };
+  }
+  const cosine = Math.cos(angleRad);
+  const sine = Math.sin(angleRad);
+  return {
+    u: u * cosine + v * sine,
+    v: -u * sine + v * cosine,
+  };
+}
+
 function buildPointSoundingPayload({
   modelKey,
   modelConfig,
@@ -286,13 +417,20 @@ function buildPointSoundingPayload({
   requestLon,
   selectedRecordCount,
   sampled,
+  gridDefinition = null,
   selection,
   renderProfile,
 }) {
   const values = sampled.values || new Map();
   const warnings = [];
-  const surface = buildPointSoundingSurface(values);
-  const direct = buildPointSoundingDirectDiagnostics(values, surface);
+  const windRotation = resolvePointSoundingWindRotation(gridDefinition, finiteOrNumber(sampled.sampleLon, requestLon));
+  if (windRotation.outputFrame !== "earth-relative") {
+    warnings.push(
+      "Wind reference metadata was unresolved; profile winds and profile-wind-derived diagnostics were suppressed rather than treated as earth-relative. Independently sampled model-native scalar diagnostics may remain.",
+    );
+  }
+  const surface = buildPointSoundingSurface(values, windRotation);
+  const direct = buildPointSoundingDirectDiagnostics(values, surface, { modelKey });
   if (!Number.isFinite(surface.press)) {
     warnings.push("Surface pressure was unavailable; pressure-level rows are shown without a plotted surface parcel.");
   }
@@ -301,7 +439,7 @@ function buildPointSoundingPayload({
     levels.push(surface);
   }
   for (const level of selection.availableLevels || POINT_SOUNDING_PROFILE_LEVELS) {
-    const profileLevel = buildPointSoundingPressureLevel(values, level, surface.press);
+    const profileLevel = buildPointSoundingPressureLevel(values, level, surface.press, windRotation);
     if (profileLevel) {
       levels.push(profileLevel);
     }
@@ -315,8 +453,9 @@ function buildPointSoundingPayload({
   const parcelDiagnostics = buildPointSoundingParcelDiagnostics(analysisRows);
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: "noaa-grib2-point",
+    methodVersion: "point-sounding-verified-earth-winds-ceiling-datum-effective-scp-v3",
     model: modelKey,
     modelLabel: modelConfig.label,
     run: formatNoaaRunId(date, cycle),
@@ -327,6 +466,13 @@ function buildPointSoundingPayload({
     lon: roundNullable(requestLon, 4),
     sampleLat: roundNullable(sampled.sampleLat, 4),
     sampleLon: roundNullable(sampled.sampleLon, 4),
+    windReference: {
+      sourceFrame: windRotation.sourceFrame,
+      outputFrame: windRotation.outputFrame,
+      projection: windRotation.projection,
+      rotationApplied: Boolean(windRotation.applied),
+      rotationAngleDeg: roundNullable(windRotation.angleDeg, 3),
+    },
     selectedRecordCount,
     surface: buildPointSoundingSurfaceSummary(surface, direct),
     levels: dedupedLevels,
@@ -337,20 +483,35 @@ function buildPointSoundingPayload({
   };
 }
 
-function buildPointSoundingDirectDiagnostics(values, surface) {
-  const surfaceHeightM = Number(surface?.hght);
+function buildPointSoundingDirectDiagnostics(values, surface, { modelKey = null } = {}) {
+  // Missing HGT:surface arrives as null from normalizePointSoundingLevel;
+  // Number(null) === 0 would fabricate 0 m terrain and relabel MSL fields
+  // (cloud ceiling, LCL) as AGL. Keep it missing so those fields fail closed.
+  const surfaceHeightM = finiteOptionalNumber(surface?.hght);
   const mslpPa = pointSoundingValue(values, "PRMSL", "mean sea level");
   const lclMsl = pointSoundingValue(values, "HGT", "level of adiabatic condensation from sfc");
   const wetBulbZeroMsl = pointSoundingValue(values, "HGT", "lowest level of the wet bulb zero");
   const cloudCeilingMsl = pointSoundingValue(values, "HGT", "cloud ceiling");
+  const cloudCoverPct = pointSoundingValueByLevelPattern(values, "TCDC", /entire atmosphere/i);
+  const noCeiling =
+    (Number.isFinite(cloudCoverPct) && cloudCoverPct < 50) ||
+    (Number.isFinite(cloudCeilingMsl) && cloudCeilingMsl >= 19900 && cloudCeilingMsl <= 20100);
+  const cloudCeilingIsAgl = String(modelKey || "").toLowerCase() === "hrrr";
+  const cloudCeilingM = noCeiling
+    ? Number.NaN
+    : cloudCeilingIsAgl
+      ? cloudCeilingMsl
+      : Number.isFinite(cloudCeilingMsl) && Number.isFinite(surfaceHeightM)
+        ? Math.max(0, cloudCeilingMsl - surfaceHeightM)
+        : Number.NaN;
+  const updraftHelicity = pointSoundingValue(values, "MXUPHL", "5000-2000 m above ground");
   const direct = {
     mslpHpa: Number.isFinite(mslpPa) ? mslpPa / 100 : Number.NaN,
     pblHeightM: pointSoundingValue(values, "HPBL", "surface"),
     pwatMm: pointSoundingValueByLevelPattern(values, "PWAT", /entire atmosphere/i),
-    cloudCeilingM:
-      Number.isFinite(cloudCeilingMsl) && Number.isFinite(surfaceHeightM)
-        ? Math.max(0, cloudCeilingMsl - surfaceHeightM)
-        : cloudCeilingMsl,
+    cloudCeilingM,
+    cloudCeilingState: noCeiling ? "none" : Number.isFinite(cloudCeilingM) ? "reported" : "unavailable",
+    cloudCeilingDatum: "AGL",
     wetBulbZeroM: wetBulbZeroMsl,
     lclM:
       Number.isFinite(lclMsl) && Number.isFinite(surfaceHeightM) ? Math.max(0, lclMsl - surfaceHeightM) : Number.NaN,
@@ -365,7 +526,8 @@ function buildPointSoundingDirectDiagnostics(values, surface) {
     ),
     srh0to1kmM2S2: pointSoundingValue(values, "HLCY", "1000-0 m above ground"),
     srh0to3kmM2S2: pointSoundingValue(values, "HLCY", "3000-0 m above ground"),
-    updraftHelicity2to5kmM2S2: pointSoundingValue(values, "MXUPHL", "5000-2000 m above ground"),
+    updraftHelicity2to5kmM2S2:
+      Number.isFinite(updraftHelicity) && Math.abs(updraftHelicity + 999) <= 0.5 ? Number.NaN : updraftHelicity,
     maxHailSizeIn: pointSoundingValueByLevelPattern(values, "HAIL", /entire atmosphere/i) * M_TO_IN,
   };
   return direct;
@@ -384,17 +546,19 @@ function buildPointSoundingSurfaceSummary(surface, direct) {
   };
 }
 
-function buildPointSoundingSurface(values) {
+function buildPointSoundingSurface(values, windRotation = null) {
   const tempC = kelvinToCelsius(pointSoundingValue(values, "TMP", "2 m above ground"));
   const rhPct = pointSoundingValue(values, "RH", "2 m above ground");
   const dptC = finiteOrNumber(
     kelvinToCelsius(pointSoundingValue(values, "DPT", "2 m above ground")),
     dewpointCFromTemperatureRh(tempC, rhPct),
   );
-  const wind = windComponentsToMeteorological(
+  const surfaceWind = rotatePointSoundingWindComponents(
     pointSoundingValue(values, "UGRD", "10 m above ground"),
     pointSoundingValue(values, "VGRD", "10 m above ground"),
+    windRotation,
   );
+  const wind = windComponentsToMeteorological(surfaceWind.u, surfaceWind.v);
   const pressurePa = pointSoundingValue(values, "PRES", "surface");
   return normalizePointSoundingLevel({
     source: "surface",
@@ -407,7 +571,7 @@ function buildPointSoundingSurface(values) {
   });
 }
 
-function buildPointSoundingPressureLevel(values, pressureHpa, surfacePressureHpa) {
+function buildPointSoundingPressureLevel(values, pressureHpa, surfacePressureHpa, windRotation = null) {
   const pressure = Math.round(Number(pressureHpa));
   if (!Number.isFinite(pressure) || pressure <= 0) {
     return null;
@@ -425,10 +589,12 @@ function buildPointSoundingPressureLevel(values, pressureHpa, surfacePressureHpa
     kelvinToCelsius(pointSoundingValue(values, "DPT", levelName)),
     dewpointCFromTemperatureRh(tempC, rhPct),
   );
-  const wind = windComponentsToMeteorological(
+  const levelWind = rotatePointSoundingWindComponents(
     pointSoundingValue(values, "UGRD", levelName),
     pointSoundingValue(values, "VGRD", levelName),
+    windRotation,
   );
+  const wind = windComponentsToMeteorological(levelWind.u, levelWind.v);
   const level = normalizePointSoundingLevel({
     source: "pressure",
     press: pressure,
@@ -497,9 +663,10 @@ function buildPointSoundingIndices(levels, direct = {}, analysisRows = null, pre
   const tv700 = virtualTemperatureCAtPressure(levels, 700);
   const tv500 = virtualTemperatureCAtPressure(levels, 500);
   const tv850 = virtualTemperatureCAtPressure(levels, 850);
-  const tvSurface = surface
-    ? virtualTemperatureC(Number(surface.temp), Number(surface.dwpt), Number(surface.press))
-    : Number.NaN;
+  const tvSurface =
+    surface && Number.isFinite(surface.temp) && Number.isFinite(surface.dwpt) && Number.isFinite(surface.press)
+      ? virtualTemperatureC(Number(surface.temp), Number(surface.dwpt), Number(surface.press))
+      : Number.NaN;
   const tv3km = surface ? virtualTemperatureCAtHeight(usable, Number(surface.hght) + 3000) : Number.NaN;
   const tv6km = surface ? virtualTemperatureCAtHeight(usable, Number(surface.hght) + 6000) : Number.NaN;
   const lapse700to500 =
@@ -557,15 +724,7 @@ function buildPointSoundingIndices(levels, direct = {}, analysisRows = null, pre
   const mlcinJkg = finiteOrNumber(parcelDiagnostics.mixedLayerCinJkg, direct?.mlcinJkg);
   const mucapeJkg = finiteOrNumber(parcelDiagnostics.mostUnstableCapeJkg, direct?.mucapeJkg);
   const mucinJkg = parcelDiagnostics.mostUnstableCinJkg;
-  const stormDiagnostics = buildPointSoundingStormDiagnostics(rows, direct, {
-    surface,
-    sbcapeJkg,
-    sbcinJkg,
-    mucapeJkg,
-    mlcapeJkg,
-    mlcinJkg,
-    lclM,
-  });
+  const stormDiagnostics = buildPointSoundingStormDiagnostics(rows, { sbcapeJkg, sbcinJkg });
   const liftedIndexC = calculateLiftedIndexC(rows, 0);
   const showalterIndexC = calculateShowalterIndexC(rows);
   const calculatedPwatMm = calculatePrecipitableWaterMm(usable);
@@ -596,13 +755,13 @@ function buildPointSoundingIndices(levels, direct = {}, analysisRows = null, pre
     mucapeJkg,
     srh0to3kmM2S2: srh0to3km,
     effectiveBulkShearKt: shear0to6km,
-    mucinJkg: Number.NaN,
   });
   const scpEffective = calculatePointScp({
-    mucapeJkg,
+    mucapeJkg: stormDiagnostics.muCapeJkg,
     srh0to3kmM2S2: stormDiagnostics.effectiveSrhM2S2,
     effectiveBulkShearKt: stormDiagnostics.effectiveBulkShearKt,
-    mucinJkg: finiteOrNumber(stormDiagnostics.muCinJkg, mucinJkg),
+    mucinJkg: stormDiagnostics.muCinJkg,
+    applyCinTerm: true,
   });
   const effectiveStp = calculatePointEffectiveStp({
     mlcapeJkg,
@@ -627,6 +786,8 @@ function buildPointSoundingIndices(levels, direct = {}, analysisRows = null, pre
     mslpHpa: roundNullable(direct?.mslpHpa, 1),
     pblHeightM: roundNullable(direct?.pblHeightM, 0),
     cloudCeilingM: roundNullable(direct?.cloudCeilingM, 0),
+    cloudCeilingState: direct?.cloudCeilingState || "unavailable",
+    cloudCeilingDatum: direct?.cloudCeilingDatum || "AGL",
     surfaceThetaEK: roundNullable(surfaceThetaE, 1),
     pwatMm: roundNullable(finiteOrNumber(direct?.pwatMm, calculatedPwatMm), 1),
     lclM: roundNullable(lclM, 0),
@@ -1042,7 +1203,7 @@ function buildPointSoundingParcelDiagnostics(rows) {
   return out;
 }
 
-function buildPointSoundingStormDiagnostics(rows, direct = {}, options = {}) {
+function buildPointSoundingStormDiagnostics(rows, options = {}) {
   const scratch = createPointSoundingScratch(rows.length);
   const rowCount = fillPointSoundingScratch(rows, scratch);
   const out = {};
@@ -1196,9 +1357,9 @@ function interpolateHeightForWetBulbZero(levels) {
     .map((level) => ({
       hght: Number(level.hght),
       wetBulb: wetBulbTemperatureCAtPressure(
-        Number(level.temp) + 273.15,
-        Number(level.dwpt) + 273.15,
-        Number(level.press),
+        finiteOptionalNumber(level.temp) + 273.15,
+        finiteOptionalNumber(level.dwpt) + 273.15,
+        finiteOptionalNumber(level.press),
       ),
     }))
     .filter((level) => Number.isFinite(level.hght) && Number.isFinite(level.wetBulb))
@@ -1468,13 +1629,23 @@ function calculatePointFixedStp({ sbcapeJkg, lclM, srh0to1kmM2S2, shear0to6kmKt 
   return Math.max(0, (Math.max(0, sbcapeJkg) / 1500) * (Math.max(0, srh0to1kmM2S2) / 150) * shearTerm * lclTerm);
 }
 
-function calculatePointScp({ mucapeJkg, srh0to3kmM2S2, effectiveBulkShearKt }) {
-  if (![mucapeJkg, srh0to3kmM2S2, effectiveBulkShearKt].every(Number.isFinite)) {
+function calculatePointScp({
+  mucapeJkg,
+  srh0to3kmM2S2,
+  effectiveBulkShearKt,
+  mucinJkg = Number.NaN,
+  applyCinTerm = false,
+}) {
+  if (
+    ![mucapeJkg, srh0to3kmM2S2, effectiveBulkShearKt].every(Number.isFinite) ||
+    (applyCinTerm && !Number.isFinite(mucinJkg))
+  ) {
     return Number.NaN;
   }
   const shearMs = Math.max(0, effectiveBulkShearKt) / MPS_TO_KT;
   const shearTerm = shearMs < 10 ? 0 : clamp(shearMs / 20, 0, 1);
-  return Math.max(0, (Math.max(0, mucapeJkg) / 1000) * (Math.max(0, srh0to3kmM2S2) / 50) * shearTerm);
+  const cinTerm = applyCinTerm ? (mucinJkg > -40 ? 1 : clamp(-40 / mucinJkg, 0, 1)) : 1;
+  return Math.max(0, (Math.max(0, mucapeJkg) / 1000) * (Math.max(0, srh0to3kmM2S2) / 50) * shearTerm * cinTerm);
 }
 
 function calculatePointEffectiveStp({
@@ -1584,7 +1755,10 @@ function interpolateHeightForTemperature(levels, targetTempC) {
 function levelValueByPressure(levels, pressureHpa, key) {
   const target = Number(pressureHpa);
   const level = (Array.isArray(levels) ? levels : []).find((entry) => Math.abs(Number(entry.press) - target) < 0.6);
-  const value = level ? Number(level[key]) : Number.NaN;
+  // finiteOptionalNumber, not Number: optional payload fields (dwpt, winds)
+  // are null when the source record is absent, and Number(null) would
+  // fabricate 0 C / 0 kt into derived indices instead of failing closed.
+  const value = level ? finiteOptionalNumber(level[key]) : Number.NaN;
   return Number.isFinite(value) ? value : Number.NaN;
 }
 
@@ -1598,7 +1772,7 @@ function interpolateProfileValueByPressure(levels, pressureHpa, key) {
     return exact;
   }
   const profile = (Array.isArray(levels) ? levels : [])
-    .map((level) => ({ pressure: Number(level.press), value: Number(level[key]) }))
+    .map((level) => ({ pressure: Number(level.press), value: finiteOptionalNumber(level[key]) }))
     .filter((level) => Number.isFinite(level.pressure) && level.pressure > 0 && Number.isFinite(level.value))
     .sort((left, right) => right.pressure - left.pressure);
   for (let index = 1; index < profile.length; index += 1) {
@@ -1677,7 +1851,7 @@ function interpolateProfileValueByHeight(levels, targetHeightM, key) {
   let lower = null;
   for (const level of levels) {
     const height = Number(level.hght);
-    const value = Number(level[key]);
+    const value = finiteOptionalNumber(level[key]);
     if (!Number.isFinite(height) || !Number.isFinite(value)) {
       continue;
     }
@@ -1832,7 +2006,9 @@ module.exports = {
   levelValueByPressure,
   normalizeLongitudeForDisplay,
   normalizeLongitudeForRequest,
+  normalizeLongitudeDelta,
   normalizePointSoundingLevel,
+  parsePointSoundingGridDefinition,
   parsePointSoundingLonOutput,
   pointSoundingLayerShearKt,
   pointSoundingPressureShearKt,
@@ -1841,6 +2017,8 @@ module.exports = {
   pointSoundingValueByLevelPattern,
   pointSoundingValueKey,
   resolvePointSoundingRunParts,
+  resolvePointSoundingWindRotation,
+  rotatePointSoundingWindComponents,
   roundForCommand,
   roundNullable,
   selectPointSoundingParcelTraceSource,

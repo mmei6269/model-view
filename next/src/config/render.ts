@@ -5,6 +5,16 @@ export const RENDER_STORAGE_KEY = "modelview.render.v1";
 
 export type RenderCategoryId = "surface" | "precip" | "radar" | "cloud" | "severe" | "winter" | "upperAir";
 export type RenderTier = "simple" | "full";
+export type GfsTemporalTier = "three-hourly" | "hourly-through-120";
+export type SciencePrototypeId = "camDcape21Level" | "effectiveStp100mbReduced" | "rowAwareCenterValidation";
+
+export const SCIENCE_PROTOTYPE_IDS: readonly SciencePrototypeId[] = [
+  "camDcape21Level",
+  "effectiveStp100mbReduced",
+  "rowAwareCenterValidation",
+];
+
+const CAM_SCIENCE_PROTOTYPE_MODELS = new Set<ModelKey>(["hrrr", "nam3km"]);
 
 export interface RenderCategoryDescriptor {
   id: RenderCategoryId;
@@ -51,16 +61,53 @@ export interface RenderCategoryState {
   tier: RenderTier;
 }
 
+// Renderer tuning knobs forwarded per render. Bounds mirror the server's
+// RENDER_TUNING_FIELDS (which mirror the builder's clampInt ranges) so a value
+// accepted here is used verbatim. null tuning = builder auto-sizing.
+export interface RenderTuning {
+  workerCount?: number;
+  totalFrameConcurrency?: number;
+  rangeConcurrency?: number;
+  decodeConcurrency?: number;
+}
+
+export const RENDER_TUNING_BOUNDS: Record<keyof RenderTuning, { min: number; max: number }> = {
+  workerCount: { min: 1, max: 48 },
+  totalFrameConcurrency: { min: 1, max: 64 },
+  rangeConcurrency: { min: 1, max: 64 },
+  decodeConcurrency: { min: 1, max: 8 },
+};
+
+// The known-good full-render settings from scripts/build-noaa-beta-recent-runs.js.
+export const PRODUCTION_TUNING: Readonly<Required<RenderTuning>> = Object.freeze({
+  workerCount: 18,
+  totalFrameConcurrency: 24,
+  rangeConcurrency: 3,
+  decodeConcurrency: 2,
+});
+
+// Server-side cap for maxHour (matches the longest model horizon, GFS 384h).
+export const MAX_HOUR_LIMIT = 384;
+
 export interface RenderSelection {
   models: ModelKey[];
   view: ViewKey;
   // Per-model picked run ids (e.g. "20260703-1200Z"), consulted when
   // runMode === "pick". Run cycles differ per model (HRRR hourly, NAM3km
   // 4×/day) so one shared run id cannot be valid across models. A model with
-  // no entry (or "latest") renders its latest available run.
-  runs: Partial<Record<ModelKey, string>>;
+  // an empty list renders its latest available run; multiple picks queue one
+  // build per run, newest first (server ordering).
+  runs: Partial<Record<ModelKey, string[]>>;
   runMode: "latest" | "pick";
   categories: Record<RenderCategoryId, RenderCategoryState>;
+  // Prefix frame cap (f000..fN) applied to every selected model; null = full
+  // horizon. Prefix-only keeps run-cumulative products byte-identical.
+  maxHour: number | null;
+  tuning: RenderTuning | null;
+  // Optional build expansions. Defaults retain the established renderer
+  // cadence and science methods byte-for-byte.
+  gfsTemporalTier: GfsTemporalTier;
+  sciencePrototypes: SciencePrototypeId[];
 }
 
 function buildDefaultCategories(): Record<RenderCategoryId, RenderCategoryState> {
@@ -77,6 +124,10 @@ export const DEFAULT_RENDER_SELECTION: RenderSelection = {
   runs: {},
   runMode: "latest",
   categories: buildDefaultCategories(),
+  maxHour: null,
+  tuning: null,
+  gfsTemporalTier: "three-hourly",
+  sciencePrototypes: [],
 };
 
 export function cloneRenderSelection(selection: RenderSelection): RenderSelection {
@@ -84,12 +135,22 @@ export function cloneRenderSelection(selection: RenderSelection): RenderSelectio
   for (const id of RENDER_CATEGORY_IDS) {
     categories[id] = { ...selection.categories[id] };
   }
+  const runs: Partial<Record<ModelKey, string[]>> = {};
+  for (const [model, picked] of Object.entries(selection.runs)) {
+    if (Array.isArray(picked) && picked.length > 0) {
+      runs[model as ModelKey] = [...picked];
+    }
+  }
   return {
     models: [...selection.models],
     view: selection.view,
-    runs: { ...selection.runs },
+    runs,
     runMode: selection.runMode,
     categories,
+    maxHour: selection.maxHour,
+    tuning: selection.tuning ? { ...selection.tuning } : null,
+    gfsTemporalTier: selection.gfsTemporalTier,
+    sciencePrototypes: [...selection.sciencePrototypes],
   };
 }
 
@@ -134,69 +195,185 @@ export function normalizeRenderSelection(candidate: unknown): RenderSelection {
   }
   const runMode = raw.runMode === "pick" ? "pick" : "latest";
   const models = normalizeModels(raw.models);
-  const runs: Partial<Record<ModelKey, string>> = {};
+  const runs: Partial<Record<ModelKey, string[]>> = {};
   if (runMode === "pick") {
     const rawRuns = raw.runs && typeof raw.runs === "object" ? (raw.runs as Record<string, unknown>) : null;
     if (rawRuns) {
       for (const model of models) {
-        const value = rawRuns[model];
-        if (typeof value === "string" && value.trim() && value.trim() !== "latest") {
-          runs[model] = value.trim();
+        const picked = normalizeRunList(rawRuns[model]);
+        if (picked.length > 0) {
+          runs[model] = picked;
         }
       }
     } else {
       // Legacy stored shape (single `run` applied to every model): migrate it
       // onto each selected model so an existing pick survives the upgrade.
-      const legacy = (raw as { run?: unknown }).run;
-      if (typeof legacy === "string" && legacy.trim() && legacy.trim() !== "latest") {
+      const legacy = normalizeRunList((raw as { run?: unknown }).run);
+      if (legacy.length > 0) {
         for (const model of models) {
-          runs[model] = legacy.trim();
+          runs[model] = [...legacy];
         }
       }
     }
   }
+  const sciencePrototypes = normalizeSciencePrototypes(raw.sciencePrototypes, models, categories);
+  const gfsTemporalTier: GfsTemporalTier =
+    models.includes("gfs") && raw.gfsTemporalTier === "hourly-through-120" ? "hourly-through-120" : "three-hourly";
   return {
     models,
     view: raw.view === "na" ? "na" : "conus",
     runs,
     runMode,
     categories,
+    maxHour: normalizeMaxHour((raw as { maxHour?: unknown }).maxHour),
+    tuning: normalizeTuning((raw as { tuning?: unknown }).tuning),
+    gfsTemporalTier,
+    sciencePrototypes,
   };
+}
+
+function normalizeSciencePrototypes(
+  candidate: unknown,
+  models: readonly ModelKey[],
+  categories: Record<RenderCategoryId, RenderCategoryState>,
+): SciencePrototypeId[] {
+  if (!Array.isArray(candidate)) {
+    return [];
+  }
+  const selected = new Set(candidate);
+  const severeFull = categories.severe.enabled && categories.severe.tier === "full";
+  const hasCam = models.some((model) => CAM_SCIENCE_PROTOTYPE_MODELS.has(model));
+  return SCIENCE_PROTOTYPE_IDS.filter((id) => {
+    if (!selected.has(id)) {
+      return false;
+    }
+    if (id === "camDcape21Level") {
+      return hasCam && severeFull;
+    }
+    if (id === "effectiveStp100mbReduced") {
+      return severeFull;
+    }
+    // MSLP/height support selectors and synoptic center detection are core
+    // artifacts in every category selection, so the row-aware diagnostic has
+    // no category prerequisite to normalize away.
+    return true;
+  });
+}
+
+// Accepts a single run id or a list (multi-run queue); drops "latest" (an
+// empty pick list means latest) and anything that is not a non-empty string.
+function normalizeRunList(candidate: unknown): string[] {
+  const raw = Array.isArray(candidate) ? candidate : [candidate];
+  const out: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed && trimmed !== "latest" && !out.includes(trimmed)) {
+      out.push(trimmed);
+    }
+  }
+  return out;
+}
+
+function normalizeMaxHour(candidate: unknown): number | null {
+  // Number(null) === 0 and Number("") === 0: without this guard the default
+  // "no cap" (null) would round-trip through storage as an explicit 0-hour
+  // cap and every subsequent render would silently build only f000.
+  if (candidate === null || candidate === undefined || candidate === "") {
+    return null;
+  }
+  const value = Number(candidate);
+  if (!Number.isInteger(value) || value < 0 || value > MAX_HOUR_LIMIT) {
+    return null;
+  }
+  return value;
+}
+
+function normalizeTuning(candidate: unknown): RenderTuning | null {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return null;
+  }
+  const raw = candidate as Record<string, unknown>;
+  const out: RenderTuning = {};
+  for (const key of Object.keys(RENDER_TUNING_BOUNDS) as Array<keyof RenderTuning>) {
+    const bounds = RENDER_TUNING_BOUNDS[key];
+    const value = Number(raw[key]);
+    if (Number.isInteger(value) && value >= bounds.min && value <= bounds.max) {
+      out[key] = value;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+export interface RenderSelectionWire {
+  models: ModelKey[];
+  view: ViewKey;
+  run: string;
+  runs: Record<string, string[]>;
+  categories: Record<string, boolean | { enabled: boolean; tier: RenderTier }>;
+  maxHour?: number;
+  tuning?: RenderTuning;
+  gfsTemporalTier?: "hourly-through-120";
+  sciencePrototypes?: SciencePrototypeId[];
 }
 
 // The POST body for /actions/render (spec §1.4): tiered categories keep
 // {enabled, tier}; non-tiered ones collapse to a bare boolean so the server's
 // resolver treats their tier as "full" implicitly. Picked runs go per model
-// under `runs` (the server groups models by run and spawns one build per
-// distinct run); models the user left alone stay "latest".
-export function serializeRenderSelectionWire(selection: RenderSelection): {
-  models: ModelKey[];
-  view: ViewKey;
-  run: string;
-  runs: Record<string, string>;
-  categories: Record<string, boolean | { enabled: boolean; tier: RenderTier }>;
-} {
+// under `runs` as ARRAYS (the server spawns one chained build per distinct
+// run, newest first); models the user left alone stay ["latest"]. maxHour and
+// tuning are omitted entirely when unset so default builds stay byte-stable.
+export function serializeRenderSelectionWire(selection: RenderSelection): RenderSelectionWire {
+  const sciencePrototypes = normalizeSciencePrototypes(
+    selection.sciencePrototypes,
+    selection.models,
+    selection.categories,
+  );
   const categories: Record<string, boolean | { enabled: boolean; tier: RenderTier }> = {};
   for (const id of RENDER_CATEGORY_IDS) {
     const state = selection.categories[id];
     categories[id] = TIERED_CATEGORY_IDS.has(id) ? { enabled: state.enabled, tier: state.tier } : state.enabled;
   }
-  const runs: Record<string, string> = {};
+  const runs: Record<string, string[]> = {};
   for (const model of selection.models) {
-    runs[model] = selection.runMode === "pick" ? selection.runs[model] || "latest" : "latest";
+    const picked = selection.runMode === "pick" ? (selection.runs[model] ?? []) : [];
+    runs[model] = picked.length > 0 ? [...picked] : ["latest"];
   }
-  return {
+  const wire: RenderSelectionWire = {
     models: [...selection.models],
     view: selection.view,
     run: "latest",
     runs,
     categories,
   };
+  if (selection.maxHour !== null) {
+    wire.maxHour = selection.maxHour;
+  }
+  if (selection.tuning) {
+    wire.tuning = { ...selection.tuning };
+  }
+  if (selection.models.includes("gfs") && selection.gfsTemporalTier === "hourly-through-120") {
+    wire.gfsTemporalTier = "hourly-through-120";
+  }
+  if (sciencePrototypes.length > 0) {
+    wire.sciencePrototypes = sciencePrototypes;
+  }
+  return wire;
 }
 
-// The run a single-model action (sounding prefetch) should target.
+// The run a single-model action (sounding prefetch) should target: the newest
+// picked run (run ids sort lexicographically = chronologically), else latest.
 export function effectiveRunForModel(selection: RenderSelection, model: ModelKey): string {
-  return selection.runMode === "pick" ? selection.runs[model] || "latest" : "latest";
+  if (selection.runMode !== "pick") {
+    return "latest";
+  }
+  const picked = selection.runs[model] ?? [];
+  if (picked.length === 0) {
+    return "latest";
+  }
+  return [...picked].sort().reverse()[0];
 }
 
 export function loadStoredRenderSelection(): RenderSelection {

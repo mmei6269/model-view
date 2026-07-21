@@ -24,6 +24,18 @@ export function buildArtifactUrl(key: string): string {
   return `${getArtifactBaseUrl()}/${cleanKey}`;
 }
 
+// Absolute (non-proxy) artifact origin. Most fetches go through
+// getArtifactBaseUrl(), which in dev may resolve to the same-origin "/__cf"
+// Vite proxy — but the PMTiles basemap source must hit the artifact server's
+// Range route directly (Range/Content-Range pass-through via the proxy is
+// unverified, and a path prefix like "/__cf" is not a valid origin inside a
+// pmtiles:// URL). Picks the first http(s) candidate: VITE_ARTIFACT_BASE_URL
+// when set, else the localhost default.
+export function getAbsoluteArtifactBaseUrl(): string {
+  const absolute = getCandidateArtifactBaseUrls().find((value) => /^https?:\/\//i.test(value));
+  return absolute || DEFAULT_ARTIFACT_BASE;
+}
+
 export function getCandidateArtifactBaseUrls(): string[] {
   const direct = String(import.meta.env.VITE_ARTIFACT_BASE_URL || "")
     .trim()

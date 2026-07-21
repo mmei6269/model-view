@@ -1,7 +1,7 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 const ONE_BY_ONE =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s0NkgAAAABJRU5ErkJggg==";
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWNoaGj4DwAFhAKAfr3l1AAAAABJRU5ErkJggg==";
 
 // Frames at now-6h, now, now+6h. Nearest-to-now must select the middle frame.
 function frameSet() {
@@ -83,11 +83,9 @@ test("initial frame defaults to the frame nearest to now, not F000", async ({ pa
   );
 
   await page.goto("/");
-  // The current-frame chip shows F006 (middle frame), not F000. The label
-  // renders in the header summary, panel chip, and timeline chip, so pick the
-  // first match to satisfy strict mode.
-  await expect(page.locator("text=/F0*6\\b/").first()).toBeVisible({ timeout: 15000 });
-  await expect(page.locator("text=F000")).toHaveCount(0);
+  // Assert the dedicated timeline value rather than searching all page text;
+  // advanced render controls legitimately describe tiers beginning at F000.
+  await expect(page.getByTestId("frame-label")).toHaveText("F006", { timeout: 15000 });
 });
 
 test("URL hour param wins over nearest-to-now on load", async ({ page }) => {
@@ -98,9 +96,7 @@ test("URL hour param wins over nearest-to-now on load", async ({ page }) => {
   // F000 default and the nearest-to-now frame (F006), so this only passes if
   // the URL hour is actually applied.
   await page.goto(`/?hour=${encodeURIComponent(valids[2])}`);
-  await expect(page.locator("text=F012").first()).toBeVisible({ timeout: 15000 });
-  await expect(page.locator("text=F006")).toHaveCount(0);
-  await expect(page.locator("text=F000")).toHaveCount(0);
+  await expect(page.getByTestId("frame-label")).toHaveText("F012", { timeout: 15000 });
 });
 
 test("an unavailable nearest-to-now frame is skipped for the nearest available frame", async ({ page }) => {
@@ -111,6 +107,5 @@ test("an unavailable nearest-to-now frame is skipped for the nearest available f
   await routeGfs(page, valids, { 0: "loaded", 6: "unavailable", 12: "loaded" });
 
   await page.goto("/");
-  await expect(page.locator("text=F012").first()).toBeVisible({ timeout: 15000 });
-  await expect(page.locator("text=F006")).toHaveCount(0);
+  await expect(page.getByTestId("frame-label")).toHaveText("F012", { timeout: 15000 });
 });

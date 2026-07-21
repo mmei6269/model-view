@@ -1,9 +1,9 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 test("hover readout card stays mounted when the cursor moves onto it", async ({ page }) => {
   await page.goto("/");
   const panel = page.locator("article").first();
-  const map = panel.locator(".leaflet-container").first();
+  const map = panel.locator('[data-testid="map-canvas-host"]').first();
   await expect(map).toBeVisible();
   const mapBox = await map.boundingBox();
   if (!mapBox) {

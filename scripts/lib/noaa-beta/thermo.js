@@ -126,8 +126,11 @@ function integrateMoistParcelTemperatureK(startTempK, startHeightM, targetHeight
   const pressureUsable = pressureHpa > 0;
   let tempK = startTempK;
   for (let step = 0; step < steps; step += 1) {
-    // Inlined moistAdiabaticLapseRateKPerM/saturationMixingRatioHpa with
-    // identical operation order, guards, and NaN propagation.
+    // Saturated pseudoadiabatic lapse rate computed inline per Euler step:
+    // dT/dz = -g * (1 + L*rs / (Rd*T)) / (cp + L^2 * rs * eps / (Rd*T^2)),
+    // with rs from the Bolton saturation vapor pressure. The descent
+    // integrator below inlines the identical operation order, guards, and
+    // NaN propagation.
     const tempC = tempK - 273.15;
     const vapor = 6.112 * Math.exp((17.67 * tempC) / (tempC + 243.5));
     if (!pressureUsable || !Number.isFinite(vapor) || vapor <= 0 || vapor >= pressureHpa) {
@@ -186,22 +189,6 @@ function integrateMoistParcelDescentK(startTempK, startHeightM, targetHeightM, p
     tempK += ((GRAVITY_M_S2 * (1 + latentTerm)) / denominator) * stepDz;
   }
   return tempK;
-}
-
-function moistAdiabaticLapseRateKPerM(tempK, pressureHpa) {
-  const saturationMixingRatio = saturationMixingRatioHpa(tempK, pressureHpa);
-  if (!Number.isFinite(tempK) || !Number.isFinite(saturationMixingRatio)) {
-    return Number.NaN;
-  }
-  const latentTerm = (LATENT_HEAT_VAPORIZATION_J_KG * saturationMixingRatio) / (RD_DRY_AIR_J_KG_K * tempK);
-  const denominator =
-    CP_DRY_AIR_J_KG_K +
-    (LATENT_HEAT_VAPORIZATION_J_KG * LATENT_HEAT_VAPORIZATION_J_KG * saturationMixingRatio * EPSILON) /
-      (RD_DRY_AIR_J_KG_K * tempK * tempK);
-  if (!Number.isFinite(latentTerm) || !Number.isFinite(denominator) || denominator <= 0) {
-    return Number.NaN;
-  }
-  return (GRAVITY_M_S2 * (1 + latentTerm)) / denominator;
 }
 
 function mixingRatioFromDewpointK(dewpointK, pressureHpa) {
@@ -353,7 +340,6 @@ module.exports = {
   kelvinToFahrenheit,
   mixingRatioFromDewpointK,
   mixingRatioFromVaporPressureHpa,
-  moistAdiabaticLapseRateKPerM,
   moistLiftTemperatureK,
   pascalToHpa,
   potentialTemperatureC,

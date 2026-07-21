@@ -1,0 +1,30 @@
+{
+  "source": {
+    "repository": "https://github.com/mdpletcher/utahrfslr",
+    "commit": "2d35566fd41e99dcdc75a0f107ddb6bdc6a46b61",
+    "implementation": "scripts/utils/nbm_slr_funcs.py calc_layer_vars/calc_layer_slr",
+    "config": "scripts/configs/nbm_config.py",
+    "temperatureConvention": "Input C converted to K; upstream subtracts 274.15 and averages k=0,1,2, equivalent to C-1/C/C+1. Values were evaluated from the pinned Python source independently of the JavaScript implementation."
+  },
+  "cases": [
+    { "temperatureC": -24, "expectedSlr": 8.0427 },
+    { "temperatureC": -22, "expectedSlr": 9.721033333333333 },
+    { "temperatureC": -20, "expectedSlr": 16.46643333333333 },
+    { "temperatureC": -19, "expectedSlr": 20.927233333333334 },
+    { "temperatureC": -16, "expectedSlr": 29.013666666666666 },
+    { "temperatureC": -14, "expectedSlr": 25.124466666666667 },
+    { "temperatureC": -12, "expectedSlr": 18.198233333333334 },
+    { "temperatureC": -10, "expectedSlr": 10.408033333333334 },
+    { "temperatureC": -8, "expectedSlr": 8.3196 },
+    { "temperatureC": -7, "expectedSlr": 9.559433333333333 },
+    { "temperatureC": -5, "expectedSlr": 11.643666666666666 },
+    { "temperatureC": -4, "expectedSlr": 9.7509 },
+    { "temperatureC": -3, "expectedSlr": 6.532799999999999 },
+    { "temperatureC": -1, "expectedSlr": 2.8110500000000007 },
+    { "temperatureC": 0, "expectedSlr": 2.2764000000000006 },
+    { "temperatureC": 1, "expectedSlr": null },
+    { "temperatureC": 2, "expectedSlr": null },
+    { "temperatureC": 3, "expectedSlr": 0 },
+    { "temperatureC": 4, "expectedSlr": 0 }
+  ]
+}

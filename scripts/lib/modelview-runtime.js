@@ -12,8 +12,28 @@ const DEFAULT_VIEW_KEY = "conus";
 const DEFAULT_REFLECTIVITY_GATES = [10, 15, 20];
 const LOCAL_SOURCE_NAME = "noaa-grib2-beta";
 const MANIFEST_SCHEMA_VERSION = Number(SHARED_CONFIG.manifestSchemaVersion) || 4;
-const SYNOPTIC_STYLE_VERSION = String(SYNOPTIC_STYLE.styleVersion || "v1-operational-contrast");
-const HOVER_GRID_SCHEMA_VERSION = 1;
+const SYNOPTIC_STYLE_VERSION = String(SYNOPTIC_STYLE.styleVersion || "v4-operational-contrast");
+// Detailed-mode MSLP interval override (owner decision 2026-07-09): thin
+// isobar every 2 hPa, bold every 8 — high-density with WPC-style major
+// emphasis. The shared style JSON is shape-frozen (public mirror) and feeds
+// simple mode byte-identically, so the override lives in this derived object,
+// the single source for both the renderer's detailed pass and the manifest
+// stamp below. The +mslp2 styleVersion suffix marks detailed vectors AND
+// synopticStyleVersions.detailed so stale 4 hPa caches are distinguishable
+// from rebuilt ones.
+const DETAILED_SYNOPTIC_STYLE_VERSION = `${SYNOPTIC_STYLE_VERSION}+mslp2`;
+const DETAILED_SYNOPTIC_STYLE = Object.freeze({
+  ...SYNOPTIC_STYLE,
+  styleVersion: DETAILED_SYNOPTIC_STYLE_VERSION,
+  mslp: Object.freeze({ ...SYNOPTIC_STYLE.mslp, minorIntervalHpa: 2 }),
+});
+// Schema v3 (2026-07-12): the binary payload's Int16 data region is
+// delta-encoded globally (wrapping int16, previous value carried across
+// variable boundaries) before gzip. Lossless — the decoder prefix-sums the
+// region back; measured on a real 220MB HRRR payload: compressed size
+// 57.6 -> 46.6MB (-19%) and gzip time 855 -> 734ms at level 1. v1/v2
+// payloads (no delta) remain decodable; there are no legacy clients.
+const HOVER_GRID_SCHEMA_VERSION = 3;
 const LAYER_CONTENT_TYPE = "image/png";
 const JSON_CONTENT_TYPE = "application/json";
 const DEFAULT_REFLECTIVITY_LAYER_KEY = "reflectivity";
@@ -77,6 +97,7 @@ function buildManifestTemplate({
   parameterOrder = null,
   hoverGridFormat = null,
   renderSelection = null,
+  forecastHours = null,
 }) {
   const model = MODEL_CONFIG[modelKey];
   const view = VIEW_CONFIG[viewKey];
@@ -93,6 +114,7 @@ function buildManifestTemplate({
     referenceTime,
     maxHour: model.maxHour,
     hourStep: model.frameStepHours || 1,
+    forecastHours,
   });
   const manifestFrames = frames.map((framePlan) =>
     buildManifestFrame({
@@ -133,6 +155,9 @@ function buildManifestTemplate({
   if (normalizedSelection) {
     manifest.renderSelection = {
       categories: normalizedSelection.categories,
+      ...(normalizedSelection.sciencePrototypes?.length
+        ? { sciencePrototypes: [...normalizedSelection.sciencePrototypes] }
+        : {}),
       builtAt: new Date().toISOString(),
     };
   }
@@ -182,7 +207,7 @@ function buildManifestFrame({
     synopticStyleVersion: SYNOPTIC_STYLE_VERSION,
     synopticStyleVersions: {
       simple: SYNOPTIC_STYLE_VERSION,
-      detailed: SYNOPTIC_STYLE_VERSION,
+      detailed: DETAILED_SYNOPTIC_STYLE_VERSION,
     },
     weatherVectorRefs: assetKeys.weatherVectorRefs,
     pressureUploadMeta: {
@@ -193,6 +218,7 @@ function buildManifestFrame({
       hoverCols: width,
       fullResolutionInput: false,
     },
+    parameterAvailability: {},
     hoverGridKey: assetKeys.hoverGridKey,
     hoverGridBytes: 0,
     hoverGridSchemaVersion: HOVER_GRID_SCHEMA_VERSION,
@@ -280,10 +306,14 @@ function buildFrameAssetKeySet({
   };
 }
 
-function buildFramePlan({ validTimes, referenceTime, maxHour, hourStep = 1, maxHoursPerModel }) {
+function buildFramePlan({ validTimes, referenceTime, maxHour, hourStep = 1, maxHoursPerModel, forecastHours = null }) {
   const baseMs = Date.parse(referenceTime);
   const out = [];
   const step = Math.max(1, Math.min(24, Math.round(Number(hourStep) || 1)));
+  // A build's resolved forecast-hour roster (e.g. the GFS hourly-through-F120
+  // tier) is authoritative over the model's configured display step, which
+  // exists only as a guard for metadata that carries no roster.
+  const rosterHours = normalizeForecastHourSet(forecastHours);
   for (const validTime of Array.isArray(validTimes) ? validTimes : []) {
     const validMs = Date.parse(validTime);
     if (!Number.isFinite(baseMs) || !Number.isFinite(validMs)) {
@@ -293,7 +323,7 @@ function buildFramePlan({ validTimes, referenceTime, maxHour, hourStep = 1, maxH
     if (hour < 0 || hour > maxHour) {
       continue;
     }
-    if (hour % step !== 0) {
+    if (rosterHours ? !rosterHours.has(hour) : hour % step !== 0) {
       continue;
     }
     out.push({ hour, validTime });
@@ -303,6 +333,20 @@ function buildFramePlan({ validTimes, referenceTime, maxHour, hourStep = 1, maxH
     return out.filter((frame) => frame.hour <= maxHoursPerModel);
   }
   return out;
+}
+
+function normalizeForecastHourSet(forecastHours) {
+  if (!Array.isArray(forecastHours)) {
+    return null;
+  }
+  const hours = new Set();
+  for (const value of forecastHours) {
+    const hour = Math.round(Number(value));
+    if (Number.isFinite(hour) && hour >= 0) {
+      hours.add(hour);
+    }
+  }
+  return hours.size > 0 ? hours : null;
 }
 
 function normalizeHoverGridFormat(format) {
@@ -433,6 +477,8 @@ module.exports = {
   DEFAULT_CACHE_ROOT,
   DEFAULT_REFLECTIVITY_GATES,
   DEFAULT_VIEW_KEY,
+  DETAILED_SYNOPTIC_STYLE,
+  DETAILED_SYNOPTIC_STYLE_VERSION,
   HOVER_GRID_SCHEMA_VERSION,
   LAYER_ORDER,
   LOCAL_SOURCE_NAME,

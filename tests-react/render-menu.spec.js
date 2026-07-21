@@ -1,4 +1,4 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 
 const CATEGORY_LABELS = [
   "Surface (10)",
@@ -107,10 +107,10 @@ test("HRRR-only products grey out Winter full-tier note when no CAM model is sel
   const drawer = page.getByRole("dialog", { name: "Render" });
 
   // Deselect every CAM (hrrr, nam3km) so only non-CAM models remain selected.
-  await drawer.getByRole("checkbox", { name: "HRRR" }).uncheck();
-  await drawer.getByRole("checkbox", { name: "NAM 3km" }).uncheck();
+  await drawer.getByRole("checkbox", { name: "HRRR", exact: true }).uncheck();
+  await drawer.getByRole("checkbox", { name: "NAM 3km", exact: true }).uncheck();
   // Ensure at least one model stays selected.
-  await drawer.getByRole("checkbox", { name: "GFS" }).check();
+  await drawer.getByRole("checkbox", { name: "GFS", exact: true }).check();
 
   // The CAM-only Winter sub-note becomes greyed (data-cam-only marker).
   await expect(drawer.locator("[data-cam-only='true']").first()).toBeVisible();

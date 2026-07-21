@@ -2,8 +2,13 @@
 
 const zlib = require("zlib");
 const { PNG } = require("pngjs");
-const { HOVER_GRID_SCHEMA_VERSION, SYNOPTIC_STYLE_VERSION } = require("./modelview-runtime");
+const {
+  DETAILED_SYNOPTIC_STYLE_VERSION,
+  HOVER_GRID_SCHEMA_VERSION,
+  SYNOPTIC_STYLE_VERSION,
+} = require("./modelview-runtime");
 const { encodeHoverGridBinaryPayload, inferHoverGridFormatFromKey } = require("./hover-grid-binary");
+const { normalizeFrameSourceProvenance } = require("./noaa-beta/source-provenance");
 
 const HOVER_GRID_MISSING_VALUE = -32768;
 const LEGACY_REFLECTIVITY_LAYER_KEY = "reflectivity";
@@ -67,6 +72,10 @@ function mergeFrameRecord(existingFrame, templateFrame) {
     contourVectorRefs: mergeLayerRefs(existingFrame.contourVectorRefs, templateFrame.contourVectorRefs),
     weatherVectorRefs: mergeLayerRefs(existingFrame.weatherVectorRefs, templateFrame.weatherVectorRefs),
     pressureUploadMeta: existingFrame.pressureUploadMeta || templateFrame.pressureUploadMeta,
+    parameterAvailability: mergeParameterAvailability(
+      existingFrame.parameterAvailability,
+      templateFrame.parameterAvailability,
+    ),
     hoverGridBytes: Number(existingFrame.hoverGridBytes) || Number(templateFrame.hoverGridBytes) || 0,
     hoverGridSchemaVersion: Number(existingFrame.hoverGridSchemaVersion) || templateFrame.hoverGridSchemaVersion,
     hoverGridSupplemental: mergeHoverGridSupplementalRefs(
@@ -98,29 +107,57 @@ function mergeLayerRefs(existingRefs, templateRefs) {
   return out;
 }
 
+function mergeParameterAvailability(existingAvailability, incomingAvailability) {
+  const existing = normalizeParameterAvailability(existingAvailability);
+  const incoming = normalizeParameterAvailability(incomingAvailability);
+  const merged = { ...existing, ...incoming };
+  return Object.keys(merged).length > 0 ? merged : {};
+}
+
+function normalizeParameterAvailability(value) {
+  const out = {};
+  if (!value || typeof value !== "object") {
+    return out;
+  }
+  for (const [key, state] of Object.entries(value)) {
+    const normalizedKey = String(key || "").trim();
+    if (!normalizedKey) {
+      continue;
+    }
+    if (state === "available" || state === true) {
+      out[normalizedKey] = "available";
+    } else if (state === "unavailable" || state === false) {
+      out[normalizedKey] = "unavailable";
+    }
+  }
+  return out;
+}
+
 function collectFrameArtifactKeys(frame) {
   const keys = [];
   for (const ref of collectFrameByteRefs(frame)) {
     keys.push(ref.key);
   }
-  if (frame?.synopticVectorKeys?.simple) {
-    keys.push(frame.synopticVectorKeys.simple);
-  } else if (frame?.synopticVectorKey) {
-    keys.push(frame.synopticVectorKey);
-  }
-  if (frame?.synopticVectorKeys?.detailed) {
-    keys.push(frame.synopticVectorKeys.detailed);
+  if (!isFrameParameterExplicitlyUnavailable(frame, "synoptic")) {
+    if (frame?.synopticVectorKeys?.simple) {
+      keys.push(frame.synopticVectorKeys.simple);
+    } else if (frame?.synopticVectorKey) {
+      keys.push(frame.synopticVectorKey);
+    }
+    if (frame?.synopticVectorKeys?.detailed) {
+      keys.push(frame.synopticVectorKeys.detailed);
+    }
   }
   if (frame?.hoverGridKey) {
     keys.push(frame.hoverGridKey);
   }
-  for (const ref of Object.values(frame?.contourVectorRefs || {})) {
-    if (ref?.key) {
+  for (const [layerKey, ref] of Object.entries(frame?.contourVectorRefs || {})) {
+    if (ref?.key && !isFrameParameterExplicitlyUnavailable(frame, layerKey)) {
       keys.push(ref.key);
     }
   }
-  for (const ref of Object.values(frame?.weatherVectorRefs || {})) {
-    if (ref?.key) {
+  for (const [layerKey, ref] of Object.entries(frame?.weatherVectorRefs || {})) {
+    if (ref?.key && !isFrameParameterExplicitlyUnavailable(frame, layerKey)) {
       keys.push(ref.key);
     }
   }
@@ -134,46 +171,91 @@ function collectFrameArtifactKeys(frame) {
 
 function collectFrameByteRefs(frame) {
   const refs = [];
-  for (const ref of Object.values(frame?.layers || {})) {
-    if (ref?.key) {
+  for (const [layerKey, ref] of Object.entries(frame?.layers || {})) {
+    if (ref?.key && !isFrameParameterExplicitlyUnavailable(frame, layerKey)) {
       refs.push(ref);
     }
   }
   for (const ref of Object.values(frame?.reflectivityVariants || {})) {
-    if (ref?.key) {
+    if (ref?.key && !isFrameParameterExplicitlyUnavailable(frame, LEGACY_REFLECTIVITY_LAYER_KEY)) {
       refs.push(ref);
     }
   }
-  for (const variants of Object.values(frame?.reflectivityVariantsByLayer || {})) {
+  for (const [layerKey, variants] of Object.entries(frame?.reflectivityVariantsByLayer || {})) {
     for (const ref of Object.values(variants || {})) {
-      if (ref?.key) {
+      if (ref?.key && !isFrameParameterExplicitlyUnavailable(frame, layerKey)) {
         refs.push(ref);
       }
     }
   }
-  for (const ref of Object.values(frame?.contourVectorRefs || {})) {
-    if (ref?.key) {
+  for (const [layerKey, ref] of Object.entries(frame?.contourVectorRefs || {})) {
+    if (ref?.key && !isFrameParameterExplicitlyUnavailable(frame, layerKey)) {
       refs.push(ref);
     }
   }
-  for (const ref of Object.values(frame?.weatherVectorRefs || {})) {
-    if (ref?.key) {
+  for (const [layerKey, ref] of Object.entries(frame?.weatherVectorRefs || {})) {
+    if (ref?.key && !isFrameParameterExplicitlyUnavailable(frame, layerKey)) {
       refs.push(ref);
     }
   }
   return refs;
 }
 
+function isFrameParameterExplicitlyUnavailable(frame, layerKey) {
+  const availability = frame?.parameterAvailability;
+  if (!availability || typeof availability !== "object") {
+    return false;
+  }
+  const direct = availability[layerKey];
+  if (direct === "unavailable" || direct === false) {
+    return true;
+  }
+  if (direct === "available" || direct === true) {
+    return false;
+  }
+  if (layerKey === LEGACY_REFLECTIVITY_LAYER_KEY) {
+    return availability.reflectivityComposite === "unavailable" || availability.reflectivityComposite === false;
+  }
+  if (layerKey === "reflectivityComposite") {
+    return (
+      availability[LEGACY_REFLECTIVITY_LAYER_KEY] === "unavailable" ||
+      availability[LEGACY_REFLECTIVITY_LAYER_KEY] === false
+    );
+  }
+  return false;
+}
+
 function applyRenderedFrameToManifestFrame(frame, rendered) {
-  frame.synopticCenters = rendered.synopticCenters || { highs: [], lows: [] };
-  frame.pressureUploadMeta = rendered.pressureUploadMeta || {
-    source: "none",
-    inputRows: null,
-    inputCols: null,
-    hoverRows: frame.rows,
-    hoverCols: frame.cols,
-    fullResolutionInput: false,
-  };
+  // Partial renders (e.g. the snowfall part of a split frame, supplemental
+  // hover grids) carry only what they produced. Fields absent from `rendered`
+  // must not stomp manifest state written by the base/full render — the snow
+  // part historically cleared synopticCenters and pressureUploadMeta on every
+  // split hour (60 of 61 frames of a full nam3km run).
+  if (rendered.synopticCenters) {
+    frame.synopticCenters = rendered.synopticCenters;
+  } else if (!frame.synopticCenters) {
+    frame.synopticCenters = { highs: [], lows: [] };
+  }
+  if (rendered.pressureUploadMeta) {
+    frame.pressureUploadMeta = rendered.pressureUploadMeta;
+  } else if (!frame.pressureUploadMeta) {
+    frame.pressureUploadMeta = {
+      source: "none",
+      inputRows: null,
+      inputCols: null,
+      hoverRows: frame.rows,
+      hoverCols: frame.cols,
+      fullResolutionInput: false,
+    };
+  }
+  if (rendered.parameterAvailability && typeof rendered.parameterAvailability === "object") {
+    frame.parameterAvailability = mergeParameterAvailability(
+      frame.parameterAvailability,
+      rendered.parameterAvailability,
+    );
+  } else if (!frame.parameterAvailability) {
+    frame.parameterAvailability = {};
+  }
   if (rendered.hoverGrid) {
     frame.hoverGridSchemaVersion = Number(rendered.hoverGridSchemaVersion) || HOVER_GRID_SCHEMA_VERSION;
     frame.hoverGridBytes = Number(rendered.hoverGrid?.bytes) || Number(rendered.hoverGrid?.body?.length) || 0;
@@ -184,10 +266,12 @@ function applyRenderedFrameToManifestFrame(frame, rendered) {
       frame.hoverGridSupplemental,
     );
   }
-  frame.synopticVectorBytes = {
-    simple: Number(rendered.synopticVectorBytes?.simple) || byteLengthJson(rendered.synopticVectors?.simple),
-    detailed: Number(rendered.synopticVectorBytes?.detailed) || byteLengthJson(rendered.synopticVectors?.detailed),
-  };
+  if (rendered.synopticVectors || rendered.synopticVectorBytes) {
+    frame.synopticVectorBytes = {
+      simple: Number(rendered.synopticVectorBytes?.simple) || byteLengthJson(rendered.synopticVectors?.simple),
+      detailed: Number(rendered.synopticVectorBytes?.detailed) || byteLengthJson(rendered.synopticVectors?.detailed),
+    };
+  }
   for (const [layerKey, ref] of Object.entries(frame.contourVectorRefs || {})) {
     const payload = rendered.contourVectors?.[layerKey];
     if (!payload) {
@@ -241,6 +325,10 @@ function normalizeRenderedFrameArtifacts(rendered, frame, reflectivityGates) {
   const transparentPng = createTransparentPng(width, height);
   const emptyHoverGrid = buildEmptyHoverGridArtifact(width, height, inferHoverGridFormatFromKey(frame?.hoverGridKey));
   const emptyVector = buildEmptySynopticVectorPayload();
+  // Detailed slots fall back to a detailed-stamped empty payload so a frame
+  // that produced no detailed vector still reads truthfully (+mslp2) to
+  // operators diffing stale vs rebuilt artifacts.
+  const emptyDetailedVector = buildEmptySynopticVectorPayload(DETAILED_SYNOPTIC_STYLE_VERSION);
   const rawLayers = rendered?.layers || {};
   const rawVariants = rendered?.reflectivityVariants || {};
   const rawVariantsByLayer = rendered?.reflectivityVariantsByLayer || {};
@@ -289,7 +377,7 @@ function normalizeRenderedFrameArtifacts(rendered, frame, reflectivityGates) {
       ),
       detailed: normalizeSynopticVectorPayload(
         rendered?.synopticVectors?.detailed || rendered?.synopticVector || null,
-        emptyVector,
+        emptyDetailedVector,
       ),
     },
     contourVectors: normalizeContourVectorPayloads(rendered?.contourVectors, frame?.contourVectorRefs),
@@ -302,6 +390,8 @@ function normalizeRenderedFrameArtifacts(rendered, frame, reflectivityGates) {
       hoverCols: width,
       fullResolutionInput: false,
     },
+    sourceProvenance: normalizeFrameSourceProvenance(rendered?.sourceProvenance),
+    parameterAvailability: normalizeParameterAvailability(rendered?.parameterAvailability),
     hoverGrid: normalizeHoverGridArtifact(rendered?.hoverGrid, emptyHoverGrid),
     hoverGridSchemaVersion: Number(rendered?.hoverGridSchemaVersion) || HOVER_GRID_SCHEMA_VERSION,
     renderProfile: rendered?.renderProfile || null,
@@ -463,9 +553,9 @@ function normalizeHoverGridArtifact(artifact, fallbackArtifact) {
   return fallbackArtifact;
 }
 
-function buildEmptySynopticVectorPayload() {
+function buildEmptySynopticVectorPayload(styleVersion = SYNOPTIC_STYLE_VERSION) {
   return {
-    styleVersion: SYNOPTIC_STYLE_VERSION,
+    styleVersion,
     isobars: { lines: [], labels: [] },
     thickness: { lines: [], labels: [] },
     centers: { highs: [], lows: [] },
@@ -572,6 +662,8 @@ module.exports = {
   collectFrameByteRefs,
   createTransparentPng,
   mergeManifestWithTemplate,
+  mergeParameterAvailability,
   normalizeHourStatus,
+  normalizeParameterAvailability,
   normalizeRenderedFrameArtifacts,
 };

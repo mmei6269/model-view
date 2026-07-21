@@ -1,14 +1,13 @@
 import sharedConfig from "../../../shared/modelview-config.json";
 import type { LayerDefinition, LayerKey, ModelManifest, ParameterMetadata, PrecipTypeLegendRow } from "../types";
-import { scaleToGradient, TEMP_F_SCALE, WIND_MPH_SCALE } from "./colorMaps";
 import { groupToRenderCategory } from "./renderCategories";
-import { SYNOPTIC_STYLE } from "./synopticStyle";
 
 interface SharedLayerConfig {
   label: string;
   unit: string;
   thresholdNote: string | null;
   legendTicks: unknown[];
+  legendTickPositions?: unknown[];
   legendStops: unknown[];
 }
 
@@ -54,8 +53,6 @@ const KNOWN_LAYER_KEYS = new Set<string>([
 ]);
 
 const RAW_LAYERS = (sharedConfig.layers || {}) as Record<string, SharedLayerConfig>;
-const DYNAMIC_LAYER_PANE = "wx-dynamic-pane";
-const DYNAMIC_LAYER_Z_INDEX = 365;
 const HIDDEN_PARAMETER_OPTION_KEYS = new Set(["reflectivity", "synoptic"]);
 const SURFACE_BOUNDARY_GROUP = "Surface & Boundary Layer";
 const PRECIPITATION_GROUP = "Precipitation";
@@ -83,7 +80,7 @@ const PARAMETER_OPTION_FALLBACKS: LayerDefinition[] = [
   parameterFallback("gust", "Wind Gust", SURFACE_BOUNDARY_GROUP, "mph"),
   parameterFallback("wind80m", "80 m Wind", SURFACE_BOUNDARY_GROUP, "mph"),
   parameterFallback("pwat", "Precipitable Water", SURFACE_BOUNDARY_GROUP, "mm"),
-  parameterFallback("pblHeight", "PBL Height", SURFACE_BOUNDARY_GROUP, "m"),
+  parameterFallback("pblHeight", "PBL Height (AGL)", SURFACE_BOUNDARY_GROUP, "m"),
   parameterFallback("gustRunMax", "Run Max Gust", SURFACE_BOUNDARY_GROUP, "mph"),
   parameterFallback("precip", "1-h Precip", PRECIPITATION_GROUP, "in"),
   parameterFallback("precipRateAndType", "Precip Rate + Type", PRECIPITATION_GROUP, "in/hr"),
@@ -96,7 +93,7 @@ const PARAMETER_OPTION_FALLBACKS: LayerDefinition[] = [
   parameterFallback("reflectivity1km", "1 km AGL Reflectivity", RADAR_GROUP, "dBZ"),
   parameterFallback("reflectivity1kmPrecipType", "1 km Reflectivity + Precip Type", RADAR_GROUP, "dBZ"),
   parameterFallback("cloudCover", "Total Cloud Cover", CLOUD_GROUP, "%"),
-  parameterFallback("cloudCeiling", "Cloud Ceiling", CLOUD_GROUP, "ft"),
+  parameterFallback("cloudCeiling", "Cloud Ceiling (AGL)", CLOUD_GROUP, "ft"),
   parameterFallback("height850", "850 mb Height", UPPER_AIR_STANDARD_GROUP, "dam"),
   parameterFallback("wind850", "850 mb Wind", UPPER_AIR_STANDARD_GROUP, "kt"),
   parameterFallback("temp850", "850 mb Temp", UPPER_AIR_STANDARD_GROUP, "C"),
@@ -126,12 +123,12 @@ const PARAMETER_OPTION_FALLBACKS: LayerDefinition[] = [
   parameterFallback("mlcape", "MLCAPE", SEVERE_THERMO_GROUP, "J/kg"),
   parameterFallback("mlcin", "MLCIN", SEVERE_THERMO_GROUP, "J/kg"),
   parameterFallback("mucape", "MUCAPE", SEVERE_THERMO_GROUP, "J/kg"),
-  parameterFallback("surfaceBasedLclHeight", "Surface LCL", SEVERE_THERMO_GROUP, "m"),
+  parameterFallback("surfaceBasedLclHeight", "Surface LCL (AGL)", SEVERE_THERMO_GROUP, "m"),
   parameterFallback("surfaceThetaE", "Surface Theta-e", SEVERE_THERMO_GROUP, "K"),
   parameterFallback("lapseRate700to500", "700-500 mb Lapse Rate", SEVERE_THERMO_GROUP, "C/km"),
   parameterFallback("lapseRate0to3km", "0-3 km Lapse Rate", SEVERE_THERMO_GROUP, "C/km"),
   parameterFallback("dcape", "DCAPE", SEVERE_THERMO_GROUP, "J/kg"),
-  parameterFallback("maxSimulatedHailSize", "Max Hail Size", SEVERE_THERMO_GROUP, "in"),
+  parameterFallback("maxSimulatedHailSize", "Max Model-Simulated Hail", SEVERE_THERMO_GROUP, "in"),
   parameterFallback("srh0to1km", "0-1 km SRH", SEVERE_KINEMATICS_GROUP, "m2/s2"),
   parameterFallback("srh0to3km", "0-3 km SRH", SEVERE_KINEMATICS_GROUP, "m2/s2"),
   parameterFallback("bulkShear0to6km", "0-6 km Bulk Shear", SEVERE_KINEMATICS_GROUP, "kt"),
@@ -140,17 +137,17 @@ const PARAMETER_OPTION_FALLBACKS: LayerDefinition[] = [
   parameterFallback("effectiveLayerSupercellCompositeParameter", "SCP (Effective Layer)", SEVERE_KINEMATICS_GROUP),
   parameterFallback("significantTornadoParameter", "STP (Fixed Layer)", SEVERE_KINEMATICS_GROUP),
   parameterFallback("effectiveLayerSignificantTornadoParameter", "STP (Effective Layer)", SEVERE_KINEMATICS_GROUP),
-  parameterFallback("updraftHelicity2to5km1h", "2-5 km UH", SEVERE_KINEMATICS_GROUP, "m2/s2"),
-  parameterFallback("updraftHelicity2to5kmRunMax", "Run Max 2-5 km UH", SEVERE_KINEMATICS_GROUP, "m2/s2"),
-  parameterFallback("wetBulbZeroHeight", "Wet Bulb Zero", WINTER_GROUP, "ft"),
+  parameterFallback("updraftHelicity2to5km1h", "1-h Max 2-5 km UH", SEVERE_KINEMATICS_GROUP, "m2/s2"),
+  parameterFallback("updraftHelicity2to5kmRunMax", "Run Max of 1-h 2-5 km UH", SEVERE_KINEMATICS_GROUP, "m2/s2"),
+  parameterFallback("wetBulbZeroHeight", "Wet-Bulb Zero (MSL)", WINTER_GROUP, "ft"),
   parameterFallback("freezingRainLiquidTotal", "Freezing Rain Liquid", WINTER_GROUP, "in"),
-  parameterFallback("snowDepth", "Snow Depth", WINTER_GROUP, "in"),
-  parameterFallback("snowWaterEq", "Snow Water Eq", WINTER_GROUP, "in"),
+  parameterFallback("snowDepth", "Snow Depth (State)", WINTER_GROUP, "in"),
+  parameterFallback("snowWaterEq", "Snow Water Eq (State)", WINTER_GROUP, "in"),
   parameterFallback("snow10to1", "10:1 Snow", WINTER_GROUP, "in"),
   parameterFallback("snowKuchera", "Kuchera Snow", WINTER_GROUP, "in"),
   parameterFallback("snowCobb", "Cobb Snow", WINTER_GROUP, "in"),
-  parameterFallback("snowRfConus", "RF Snow", WINTER_GROUP, "in"),
-  parameterFallback("snowWesternLinear", "Western Linear Snow", WINTER_GROUP, "in"),
+  parameterFallback("snowRfConus", "CONUS RF Snow", WINTER_GROUP, "in"),
+  parameterFallback("snowWesternLinear", "Western HRRR Linear Snow", WINTER_GROUP, "in"),
   parameterFallback("snowHrrrAsnow", "HRRR ASNOW", WINTER_GROUP, "in"),
   parameterFallback("framFlatIce", "FRAM Flat Ice", WINTER_GROUP, "in"),
   parameterFallback("framRadialIce", "FRAM Radial Ice", WINTER_GROUP, "in"),
@@ -159,79 +156,124 @@ const PARAMETER_OPTION_FALLBACK_BY_KEY = new Map(PARAMETER_OPTION_FALLBACKS.map(
 
 export const MANIFEST_SCHEMA_VERSION = Number(sharedConfig.manifestSchemaVersion) || 2;
 export const RAW_PIXEL_MODE = true;
-export const WEATHER_OVERLAY_CLASS = "wx-weather-overlay";
-export const SYNOPTIC_STYLE_VERSION = String(SYNOPTIC_STYLE.styleVersion || "v1-operational-contrast");
 
 export const LAYER_STACK_ORDER: LayerKey[] = sanitizeOrder(sharedConfig.layerOrder as string[] | undefined);
 
-export const LAYER_PANES: Record<LayerKey, string> = {
-  temperature: "wx-temp-pane",
-  wind: "wx-wind-pane",
-  precip: "wx-precip-pane",
-  precip3h: "wx-precip-pane",
-  precip6h: "wx-precip-pane",
-  precip12h: "wx-precip-pane",
-  precip24h: "wx-precip-pane",
-  precipTotal: "wx-precip-pane",
-  reflectivityComposite: "wx-reflectivity-pane",
-  reflectivity1km: "wx-reflectivity-1km-pane",
-  reflectivity1kmPrecipType: "wx-reflectivity-ptype-pane",
-  reflectivity: "wx-reflectivity-pane",
-  synoptic: "wx-synoptic-isobar-pane",
-};
+// MapEngine line-layer ids for the reference boundaries: shared vocabulary
+// between the display hook and the engine.
+export const COUNTRY_BOUNDARY_LINE_LAYER_ID = "reference-country-borders";
+export const STATE_BOUNDARY_LINE_LAYER_ID = "reference-state-borders";
 
-export const LAYER_Z_INDEX: Record<LayerKey, number> = {
-  temperature: 340,
-  wind: 350,
-  precip: 360,
-  precip3h: 361,
-  precip6h: 362,
-  precip12h: 363,
-  precip24h: 364,
-  precipTotal: 365,
-  reflectivityComposite: 370,
-  reflectivity1km: 371,
-  reflectivity1kmPrecipType: 372,
-  reflectivity: 370,
-  synoptic: 410,
-};
+// Within-band stacking ranks for the engine's known line layers (consumed by
+// maplibre-engine's LINE_LAYER_BAND_RANK): higher rank renders above a lower
+// one inside the same anchor band, whatever order their fetches resolve. The
+// values are the historical leaflet pane z-indexes, kept verbatim so the
+// relative order (graticule < counties in the detail band; state < country in
+// the reference band) is provably unchanged by the leaflet deletion.
+export const GRATICULE_BAND_RANK = 375;
+export const COUNTY_LINES_BAND_RANK = 378;
+export const STATE_BORDERS_BAND_RANK = 380;
+export const COUNTRY_BORDERS_BAND_RANK = 382;
 
-export const DYNAMIC_PARAMETER_PANE = DYNAMIC_LAYER_PANE;
-export const HEIGHT_CONTOUR_PANE = "wx-height-contour-pane";
-export const HEIGHT_CONTOUR_Z_INDEX = 430;
-export const WEATHER_VECTOR_PANE = "wx-weather-vector-pane";
-export const WEATHER_VECTOR_Z_INDEX = 440;
+// Native GL synoptic line-layer ids (Task 4.2): one id per style class
+// (LineLayerStyle is a single paint, so classes that differ in color/weight/
+// dash are separate layers). The object-literal order IS the bottom -> top
+// stacking order inside the engine's synoptic band — the hook calls
+// setLineLayer in exactly this order, and all seven ids are always set (empty
+// collections included) so introspection layerOrder stays stable for specs.
+export const SYNOPTIC_LINE_LAYER_IDS = {
+  thicknessCold: "synoptic-thickness-cold",
+  thicknessColdMajor: "synoptic-thickness-cold-major",
+  thicknessWarm: "synoptic-thickness-warm",
+  thicknessWarmMajor: "synoptic-thickness-warm-major",
+  thicknessBoundary: "synoptic-thickness-540",
+  isobars: "synoptic-isobars",
+  isobarsMajor: "synoptic-isobars-major",
+} as const;
 
-export const SYNOPTIC_THICKNESS_PANE = "wx-synoptic-thickness-pane";
-export const SYNOPTIC_ISOBAR_PANE = "wx-synoptic-isobar-pane";
-export const SYNOPTIC_MARKER_PANE = "wx-synoptic-marker-pane";
-export const SYNOPTIC_THICKNESS_Z_INDEX = 390;
-export const SYNOPTIC_ISOBAR_Z_INDEX = 410;
-export const SYNOPTIC_MARKER_Z_INDEX = 650;
+// Ground-matched halo underlays for the SOLID synoptic strokes (Task 5.1):
+// a slightly wider line in the basemap's own ground tone, set BEFORE every
+// line/label layer above so it sits at the bottom of the synoptic band. Over
+// the plain basemap it is invisible (ground on ground); over bright weather
+// fills it materializes as the separation that keeps the stroke legible —
+// the same trick the label halos already use, applied to lines. Dashed
+// thickness lines deliberately get none (their chromatic inks stay legible
+// per the Task 5.1 evidence pass, and dash-on-dash halos read as casing).
+export const SYNOPTIC_LINE_HALO_LAYER_IDS = {
+  isobars: "synoptic-isobars-halo",
+  isobarsMajor: "synoptic-isobars-major-halo",
+} as const;
 
-export const STATE_BORDERS_PANE = "wx-state-borders-pane";
-export const STATE_BORDERS_Z_INDEX = 380;
-export const COUNTRY_BORDERS_PANE = "wx-country-borders-pane";
-export const COUNTRY_BORDERS_Z_INDEX = 382;
+// Native GL synoptic SYMBOL-layer ids (Task 4.3): contour value labels along
+// every line class, plus the H/L pressure centers. Same stability rule as
+// the line ids above — always set while synoptic is active (empty
+// collections during frame gaps), object-literal order == bottom -> top
+// stacking inside the synoptic band, ABOVE all seven line layers (the hook
+// sets lines first, then labels, then centers). MapLibre resolves symbol
+// collisions top-down, so the deliberate priority order is: centers (low
+// over high) > 540 > major thickness > major isobars > minor thickness >
+// minor isobars.
+export const SYNOPTIC_LABEL_LAYER_IDS = {
+  isobars: "synoptic-labels-isobars",
+  thicknessCold: "synoptic-labels-thickness-cold-minor",
+  thicknessWarm: "synoptic-labels-thickness-warm-minor",
+  isobarsMajor: "synoptic-labels-isobars-major",
+  thicknessWarmMajor: "synoptic-labels-thickness-warm",
+  thicknessColdMajor: "synoptic-labels-thickness-cold",
+  thicknessBoundary: "synoptic-labels-thickness-540",
+} as const;
 
-export const LABELS_PANE = "wx-labels-pane";
-export const LABELS_Z_INDEX = 450;
+export const SYNOPTIC_CENTER_LAYER_IDS = {
+  high: "synoptic-centers-high",
+  low: "synoptic-centers-low",
+} as const;
 
+// Native GL height-contour layer ids, per active contour parameter (e.g.
+// "height500"): single-stroke minor/major line cores and the along-line
+// value-label symbol layer above them (Task 4.3). The Task-4.2 white halo
+// underlay is gone — the owner round rejected the doubled/cased stroke; the
+// redesigned single-stroke inks carry the emphasis hierarchy alone.
+// Task 5.1 adds GROUND-MATCHED halo underlays (minorHalo/majorHalo, set
+// before the cores): unlike the rejected white underlay these carry the
+// basemap's own ground tone, so they are invisible over the basemap and
+// only materialize over bright weather fills, where the Task 5.1 contrast
+// audit showed the dark theme's platinum ink disappearing into white-hot
+// temperature pixels.
+export function heightContourLineLayerIds(layerKey: string): {
+  minorHalo: string;
+  majorHalo: string;
+  minor: string;
+  major: string;
+  labels: string;
+} {
+  return {
+    minorHalo: `contour-${layerKey}-halo`,
+    majorHalo: `contour-${layerKey}-major-halo`,
+    minor: `contour-${layerKey}`,
+    major: `contour-${layerKey}-major`,
+    labels: `contour-${layerKey}-labels`,
+  };
+}
+
+// MapEngine line-layer ids for the detail feature layers (Display menu
+// toggles), same scheme as the reference boundary ids above. Roads and place
+// labels have no app-side layer since Task 6.3 — the vector basemap renders
+// them and the Display toggles ride engine.setBasemapDetail instead.
+export const COUNTY_LINE_LAYER_ID = "feature-county-lines";
+export const GRATICULE_LINE_LAYER_ID = "feature-graticule";
+
+// Fallback legends for panels without manifest metadata (e.g. a model with no
+// built runs). All data comes straight from shared/modelview-config.json,
+// which is GENERATED from the parameter catalog (scripts/
+// generate-shared-layer-legends.js) — no hand-tuned gradients or tick lists
+// here, so the fallback can never drift from what the renderer paints.
 export const LEGEND_CONFIG: Record<Exclude<LayerKey, "synoptic">, LayerLegendConfig> = {
-  temperature: {
-    ...buildLegend("temperature", "Temp", "°F"),
-    legendGradientCss: buildTemperatureLegendGradient(),
-    legendTicks: [-60, -40, -20, 0, 32, 50, 70, 90, 110, 120],
-  },
+  temperature: buildLegend("temperature", "Temp", "°F"),
   reflectivityComposite: buildLegend("reflectivityComposite", "Composite Reflectivity", "dBZ"),
   reflectivity1km: buildLegend("reflectivity1km", "1 km AGL Reflectivity", "dBZ"),
   reflectivity1kmPrecipType: buildLegend("reflectivity1kmPrecipType", "1 km Refl + Type", "dBZ"),
   reflectivity: buildLegend("reflectivity", "Reflectivity", "dBZ*"),
-  wind: {
-    ...buildLegend("wind", "Wind", "mph"),
-    legendGradientCss: buildWindLegendGradient(),
-    legendTicks: [0, 10, 20, 30, 40, 50, 60],
-  },
+  wind: buildLegend("wind", "Wind", "mph"),
   precip: buildLegend("precip", "1-h Precip", "in"),
   precip3h: buildLegend("precip3h", "3-h Precip", "in"),
   precip6h: buildLegend("precip6h", "6-h Precip", "in"),
@@ -386,14 +428,6 @@ export function getLayerStackOrder(manifest: ModelManifest | null | undefined, a
   return order;
 }
 
-export function getLayerPane(layerKey: LayerKey): string {
-  return LAYER_PANES[layerKey] || DYNAMIC_LAYER_PANE;
-}
-
-export function getLayerZIndex(layerKey: LayerKey, indexOffset = 0): number {
-  return LAYER_Z_INDEX[layerKey] || DYNAMIC_LAYER_Z_INDEX + indexOffset;
-}
-
 export function shouldUseRawPixelRendering(_layerKey: LayerKey): boolean {
   return RAW_PIXEL_MODE;
 }
@@ -408,6 +442,42 @@ export function getLayerLegendConfig(
   }
   const fixed = LEGEND_CONFIG[layerKey as Exclude<LayerKey, "synoptic">];
   return fixed || null;
+}
+
+const ROLLING_ACCUMULATION_WINDOWS: Readonly<Record<string, number>> = Object.freeze({
+  precip: 1,
+  precip3h: 3,
+  precip6h: 6,
+  precip12h: 12,
+  precip24h: 24,
+});
+
+export function getFrameAwareLayerLegendConfig(
+  layerKey: LayerKey,
+  manifest: ModelManifest | null | undefined,
+  frameHour: number | null | undefined,
+): LayerLegendConfig | null {
+  const legend = getLayerLegendConfig(layerKey, manifest);
+  if (!legend || !Number.isFinite(frameHour)) {
+    return legend;
+  }
+  const metadata = manifest?.parameters?.[layerKey];
+  const windowHours = Number(metadata?.accumulationWindowHours ?? ROLLING_ACCUMULATION_WINDOWS[layerKey]);
+  const hour = Math.max(0, Math.round(Number(frameHour)));
+  const rolling = metadata?.accumulationMode
+    ? metadata.accumulationMode === "rolling"
+    : layerKey in ROLLING_ACCUMULATION_WINDOWS;
+  if (!rolling || !Number.isFinite(windowHours) || windowHours <= 0 || hour >= windowHours) {
+    return legend;
+  }
+  const frameLabel = `F${String(hour).padStart(3, "0")}`;
+  const label = hour > 0 ? `Run-to-${frameLabel} Precip (0-${hour} h)` : `Run-start Precip (${frameLabel})`;
+  const earlyWindowNote = `Partial ${windowHours}-h window: only run start through ${frameLabel} is accumulated`;
+  return {
+    ...legend,
+    label,
+    thresholdNote: legend.thresholdNote ? `${earlyWindowNote}; ${legend.thresholdNote}` : earlyWindowNote,
+  };
 }
 
 function buildLegend(
@@ -428,7 +498,7 @@ function buildLegend(
     unit: layer?.unit || fallbackUnit,
     thresholdNote: layer?.thresholdNote || null,
     legendTicks: parseLegendTicks(layer?.legendTicks),
-    legendTickPositions: [],
+    legendTickPositions: parseLegendTickPositions(layer?.legendTickPositions),
     legendGradientCss: legendStopsToGradient(finalStops),
     legendType: null,
     precipTypeLegend: undefined,
@@ -606,27 +676,14 @@ function legendStopsToGradient(stops: [number, LegendColor][]): string {
   return `linear-gradient(90deg, ${segments.join(", ")})`;
 }
 
-function buildWindLegendGradient(): string {
-  const min = WIND_MPH_SCALE.min;
-  const max = WIND_MPH_SCALE.max;
-  const span = Math.max(1e-9, max - min);
-  const segments = [];
-  for (const stop of WIND_MPH_SCALE.valueStops) {
-    const pct = ((stop.value - min) / span) * 100;
-    segments.push(`${legendColorToCss([...stop.rgb, stop.alpha])} ${pct.toFixed(1)}%`);
-  }
-  return `linear-gradient(90deg, ${segments.join(", ")})`;
-}
-
-function buildTemperatureLegendGradient(): string {
-  return scaleToGradient(TEMP_F_SCALE.valueStops);
-}
-
 function parseLegendTicks(candidate: unknown): number[] {
   if (!Array.isArray(candidate)) {
     return [];
   }
-  return candidate.map((value) => Number(value)).filter(Number.isFinite);
+  return candidate
+    .filter((value) => value !== null && value !== undefined && value !== "")
+    .map((value) => Number(value))
+    .filter(Number.isFinite);
 }
 
 function parseLegendTickPositions(candidate: unknown): number[] {
@@ -634,6 +691,7 @@ function parseLegendTickPositions(candidate: unknown): number[] {
     return [];
   }
   return candidate
+    .filter((value) => value !== null && value !== undefined && value !== "")
     .map((value) => Number(value))
     .filter(Number.isFinite)
     .map((value) => Math.max(0, Math.min(1, value)));
@@ -648,9 +706,15 @@ function parseLegendStops(candidate: unknown): [number, LegendColor][] {
     if (!Array.isArray(stop) || stop.length !== 2) {
       continue;
     }
+    if (stop[0] === null || stop[0] === undefined || stop[0] === "") {
+      continue;
+    }
     const position = Number(stop[0]);
     const colorRaw = stop[1];
     if (!Number.isFinite(position) || !Array.isArray(colorRaw) || colorRaw.length < 3) {
+      continue;
+    }
+    if (colorRaw.slice(0, 3).some((value) => value === null || value === undefined || value === "")) {
       continue;
     }
     const color = colorRaw.map((value) => Number(value));

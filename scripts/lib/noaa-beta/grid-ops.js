@@ -371,7 +371,30 @@ function gridIsAllFinite(values, cellCount) {
   return true;
 }
 
+// The wasm smoothing port is an EXACT f64 replay of the loops below
+// (including the f32 intermediate rounding of the scratch stores and the
+// finiteness-flag semantics); the loader memoizes per thread and degrades
+// to null when the kernel is unavailable, keeping the JS loops
+// authoritative.
+const { getParcelKernel } = require("./parcel-kernel");
+
 function smoothFiniteNonnegativeGrid(values, width, height, passes) {
+  const port = getParcelKernel()?.smooth || null;
+  if (
+    port &&
+    passes > 0 &&
+    values instanceof Float32Array &&
+    values.length <= port.cap &&
+    Number(width) * Number(height) === values.length
+  ) {
+    // Same output contract as the JS path with passes >= 1: the input is
+    // never mutated and the returned buffer is a fresh Float32Array.
+    port.input.set(values);
+    port.run(values.length, width, height, passes);
+    const out = new Float32Array(values.length);
+    out.set(port.output.subarray(0, values.length));
+    return out;
+  }
   const kernel = SNOWFALL_PRESENTATION_SMOOTHING_KERNEL;
   const radius = Math.floor(kernel.length / 2);
   // Buffer strategy: masked cells now write NaN explicitly, so every cell of

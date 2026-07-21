@@ -3,7 +3,13 @@ import { MODEL_CONFIG } from "../config/constants";
 import { findNearestValidTime, pickInitialValidTime, toEpochMs } from "../core/time";
 import type { FrameHourStatus, ManifestUiInfo, PanelState, ResolvedFrame, TimelineMode, ValidTimeIso } from "../types";
 
-const PLAYBACK_BASE_INTERVAL_MS = 1200;
+// 600 ms at 1×: rebased 2026-07-07 (the old 1200 ms base read as sluggish;
+// what was 2× is now the default speed, with 0.5× recovering the old pace).
+// Exported for the play button's data-playback-interval-ms attribute: specs
+// assert the scheduled interval (base / speed) directly, because on slow CI
+// shards per-advance render cost dwarfs the timer and no wall-clock ratio
+// between speeds is observable.
+export const PLAYBACK_BASE_INTERVAL_MS = 600;
 const PLAYBACK_LAST_FRAME_DWELL_MS = 900;
 // While holding on an undecoded frame, re-check its status this often so
 // playback resumes promptly once the frame lands.
@@ -638,46 +644,90 @@ function getPanelTimelineStatus(
   panelId: string | null,
   manifestInfoByPanel: Record<string, ManifestUiInfo>,
 ): FrameHourStatus {
+  return normalizeTimelineStatus(getPanelTimelineStatusRaw(valid, panelId, manifestInfoByPanel));
+}
+
+// Raw per-panel status: undefined when the panel simply has no such frame
+// (no manifest yet, or the valid time is outside its run). Callers that
+// aggregate across panels must treat undefined as "not participating".
+function getPanelTimelineStatusRaw(
+  valid: ValidTimeIso,
+  panelId: string | null,
+  manifestInfoByPanel: Record<string, ManifestUiInfo>,
+): FrameHourStatus | undefined {
   const statuses = panelId
     ? manifestInfoByPanel[panelId]?.browserStatusByValidTime ||
       manifestInfoByPanel[panelId]?.frameStatusByValidTime ||
       {}
     : {};
-  return normalizeTimelineStatus(statuses[valid]);
+  const raw = statuses[valid];
+  return raw === undefined ? undefined : normalizeTimelineStatus(raw);
 }
 
+// Composite status across the panels that actually carry this valid time.
+// Panels that will NEVER have the frame (failed/empty manifests, disjoint
+// runs) never poison the composite — before this rule, one frameless panel
+// forced every chip to "pending" and the Loaded counter to 0 while imagery
+// was clearly on screen. A panel whose manifest is still LOADING is the
+// opposite case: it participates as "pending" so playback holds the brief
+// moment until its statuses arrive instead of animating past a blank panel.
+// "unavailable" panels can never load, so they must not block "loaded"
+// either: playback holds on loading/pending, and a permanent pending would
+// stall the loop forever on a frame one model simply does not publish.
 function getOverlapTimelineStatus(
   valid: ValidTimeIso,
   panels: PanelState[],
   manifestInfoByPanel: Record<string, ManifestUiInfo>,
 ): FrameHourStatus {
-  let sawAny = false;
-  let allLoaded = true;
-  let hasLoading = false;
-  let hasError = false;
+  let participants = 0;
+  let sawLoaded = false;
+  let sawLoading = false;
+  let sawPending = false;
+  let sawError = false;
   for (const panel of panels) {
-    const status = getPanelTimelineStatus(valid, panel.id, manifestInfoByPanel);
-    if (status === "loaded") {
-      sawAny = true;
+    const info = manifestInfoByPanel[panel.id];
+    const phase = info?.manifestPhase;
+    if (phase === "loading" || info === undefined) {
+      // Transient: manifest fetch in flight (or the panel just mounted and
+      // has not reported yet). Hold the composite.
+      participants += 1;
+      sawPending = true;
       continue;
     }
-    allLoaded = false;
-    if (status === "loading") {
-      hasLoading = true;
+    if (phase === "error" || phase === "empty") {
+      continue;
+    }
+    const status = getPanelTimelineStatusRaw(valid, panel.id, manifestInfoByPanel);
+    if (status === undefined) {
+      continue;
+    }
+    participants += 1;
+    if (status === "loaded") {
+      sawLoaded = true;
+    } else if (status === "loading") {
+      sawLoading = true;
+    } else if (status === "pending") {
+      sawPending = true;
     } else if (status === "error") {
-      hasError = true;
+      sawError = true;
     }
   }
-  if (allLoaded && sawAny) {
-    return "loaded";
+  if (participants === 0) {
+    return "pending";
   }
-  if (hasError) {
+  if (sawError) {
     return "error";
   }
-  if (hasLoading) {
+  if (sawLoading) {
     return "loading";
   }
-  return "pending";
+  if (sawPending) {
+    return "pending";
+  }
+  if (sawLoaded) {
+    return "loaded";
+  }
+  return "unavailable";
 }
 
 function normalizeTimelineStatus(value: unknown): FrameHourStatus {

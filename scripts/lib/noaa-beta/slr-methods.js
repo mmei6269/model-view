@@ -5,6 +5,7 @@ const { rowToLatMercator } = require("../mercator");
 const { SNOW_PROFILE_LEVELS } = require("../noaa-nam-parameter-catalog");
 const { gridValue, profileSpeedAtLevel, profileValue, resolveProfileGrid } = require("./profile-access");
 const { PLETCHER_RF_FEATURE_KEYS, WESTERN_LINEAR_FEATURE_KEYS } = require("./selection");
+const { isPointInLower48Mainland, lower48LongitudeIntervalsAtLatitude } = require("./lower48-domain-mask");
 
 const KUCHERA_PROFILE_LEVELS = Object.freeze(SNOW_PROFILE_LEVELS.filter((level) => level >= 500));
 
@@ -12,9 +13,22 @@ const COBB_PROFILE_LEVELS = Object.freeze(SNOW_PROFILE_LEVELS.filter((level) => 
 
 const PLETCHER_RF_AGL_LEVELS = Object.freeze([300, 600, 900, 1200, 1500, 1800, 2100, 2400]);
 
+const CONTIGUOUS_US_SNOW_DOMAIN_V1 = Object.freeze({
+  minLat: 24,
+  maxLat: 49,
+  minLon: -125,
+  maxLon: -66.5,
+});
+
+const PLETCHER_RF_DOMAIN_MASK_VERSION = "lower48-mainland-natural-earth-0p2deg-v2";
+
+const WESTERN_LINEAR_DOMAIN_MASK_VERSION = "western-lower48-mainland-natural-earth-0p2deg-elevation-v2";
+
 const WESTERN_LINEAR_WEST_OF_LON = -103;
 
 const WESTERN_LINEAR_MIN_ELEVATION_M = 1000;
+
+const WESTERN_LINEAR_MIN_LAT = 31;
 
 const COBB_TTHRESH = Object.freeze([-24, -21, -19, -16, -12, -10, -8, -7, -5, -3, 0]);
 
@@ -131,7 +145,11 @@ function calculateCobbSlrFromSources(sources, index) {
 function calculateCobbLayerSlr(tempC) {
   let total = 0;
   let count = 0;
-  for (let offset = 0; offset < 3; offset += 1) {
+  // The operational NBM implementation samples the fitted curve at
+  // T-1, T, and T+1 C. The former T, T+1, T+2 sampling introduced a
+  // systematic one-degree warm displacement and could turn a valid 0 C
+  // value into missing data.
+  for (let offset = -1; offset <= 1; offset += 1) {
     const value = calculateCobbLayerSlrAtTemp(tempC + offset);
     if (Number.isFinite(value)) {
       total += value;
@@ -173,6 +191,12 @@ function calculateCobbLayerSlrAtTemp(tempC) {
 function buildPletcherRfFeatures({ decoded, index, bounds, width, height, scratch = null }) {
   const elevation = profileValue(decoded, "HGT", "surface", index);
   if (!Number.isFinite(elevation)) {
+    // Ordered before the Mercator lat/lon derivation so cells without a
+    // surface height never pay the per-cell transcendental projection.
+    return null;
+  }
+  const latLon = latLonForGridIndex(index, bounds, width, height);
+  if (!isPletcherRfEligiblePixel({ latLon, index, bounds, width, height, scratch })) {
     return null;
   }
   const profile = buildAglProfileColumns(decoded, index, elevation, ["SPD", "TMP", "RH"], {
@@ -198,7 +222,6 @@ function buildPletcherRfFeatures({ decoded, index, bounds, width, height, scratc
     features[featureIndex] = interpolateAglProfileColumn(profile, "RH", agl, elevation);
     featureIndex += 1;
   }
-  const latLon = latLonForGridIndex(index, bounds, width, height);
   features[featureIndex] = elevation;
   features[featureIndex + 1] = latLon.lat;
   features[featureIndex + 2] = latLon.lon;
@@ -207,8 +230,13 @@ function buildPletcherRfFeatures({ decoded, index, bounds, width, height, scratc
 
 function buildWesternLinearFeatures({ decoded, index, bounds, width, height, scratch = null }) {
   const elevation = profileValue(decoded, "HGT", "surface", index);
+  if (!Number.isFinite(elevation) || elevation < WESTERN_LINEAR_MIN_ELEVATION_M) {
+    // Same short-circuit the eligibility helper applies first; evaluated
+    // before the per-cell Mercator projection (the helper re-checks it).
+    return null;
+  }
   const latLon = latLonForGridIndex(index, bounds, width, height);
-  if (!isWesternLinearEligiblePixel({ elevation, latLon })) {
+  if (!isWesternLinearEligiblePixel({ elevation, latLon, index, bounds, width, height, scratch })) {
     return null;
   }
   const profile = buildAglProfileColumns(decoded, index, elevation, ["TMP", "SPD"], {
@@ -228,13 +256,86 @@ function buildWesternLinearFeatures({ decoded, index, bounds, width, height, scr
   return features.every(Number.isFinite) ? features : null;
 }
 
-function isWesternLinearEligiblePixel({ elevation, latLon }) {
+function isWesternLinearEligiblePixel({ elevation, latLon, index, bounds, width, height, scratch }) {
   return (
     Number.isFinite(elevation) &&
     elevation >= WESTERN_LINEAR_MIN_ELEVATION_M &&
-    Number.isFinite(latLon?.lon) &&
+    isContiguousUsSnowDomainPixel(latLon, { index, bounds, width, height, scratch }) &&
+    Number(latLon?.lat) >= WESTERN_LINEAR_MIN_LAT &&
     latLon.lon <= WESTERN_LINEAR_WEST_OF_LON
   );
+}
+
+function isPletcherRfEligiblePixel({ latLon, index, bounds, width, height, scratch }) {
+  return isContiguousUsSnowDomainPixel(latLon, { index, bounds, width, height, scratch });
+}
+
+function isContiguousUsSnowDomainPixel(latLon, options = {}) {
+  const lat = Number(latLon?.lat);
+  const lon = Number(latLon?.lon);
+  const withinBounds =
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat >= CONTIGUOUS_US_SNOW_DOMAIN_V1.minLat &&
+    lat <= CONTIGUOUS_US_SNOW_DOMAIN_V1.maxLat &&
+    lon >= CONTIGUOUS_US_SNOW_DOMAIN_V1.minLon &&
+    lon <= CONTIGUOUS_US_SNOW_DOMAIN_V1.maxLon;
+  if (!withinBounds) {
+    return false;
+  }
+  const rowIntervals = resolveLower48RowIntervals(options);
+  const cols = Math.max(1, Math.round(Number(options.width) || 0));
+  const row = Number.isInteger(Number(options.index)) ? Math.floor(Number(options.index) / cols) : -1;
+  if (rowIntervals && row >= 0 && row < rowIntervals.length) {
+    const intervals = rowIntervals[row];
+    for (let intervalIndex = 0; intervalIndex < intervals.length; intervalIndex += 1) {
+      const interval = intervals[intervalIndex];
+      if (lon >= interval[0] && lon <= interval[1]) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return isPointInLower48Mainland(lat, lon);
+}
+
+function resolveLower48RowIntervals({ scratch, bounds, width, height }) {
+  if (!scratch || typeof scratch !== "object" || !bounds) {
+    return null;
+  }
+  const cols = Math.max(0, Math.round(Number(width) || 0));
+  const rows = Math.max(0, Math.round(Number(height) || 0));
+  if (cols <= 0 || rows <= 0) {
+    return null;
+  }
+  // Numeric memo comparison: this runs once per active cell, so the memo
+  // test must not allocate (the previous 6-element array + join built a
+  // fresh key string per cell).
+  const cached = scratch.lower48DomainMask;
+  if (
+    cached &&
+    cached.north === bounds.north &&
+    cached.south === bounds.south &&
+    cached.west === bounds.west &&
+    cached.east === bounds.east &&
+    cached.cols === cols &&
+    cached.rows === rows
+  ) {
+    return cached.rowIntervals;
+  }
+  const rowIntervals = Array.from({ length: rows }, (_, y) =>
+    lower48LongitudeIntervalsAtLatitude(rowToLatMercator(rows > 1 ? y : 0.5, rows > 1 ? rows : 2, bounds)),
+  );
+  scratch.lower48DomainMask = {
+    north: bounds.north,
+    south: bounds.south,
+    west: bounds.west,
+    east: bounds.east,
+    cols,
+    rows,
+    rowIntervals,
+  };
+  return rowIntervals;
 }
 
 function buildAglProfileColumns(decoded, index, elevation, variables, options = {}) {
@@ -246,6 +347,7 @@ function buildAglProfileColumns(decoded, index, elevation, variables, options = 
     Array.isArray(options.levels) && options.levels.length > 0 ? options.levels : SNOW_PROFILE_LEVELS;
   const profile = resolveAglProfileScratch(options.scratch, wanted, profileLevels.length + 1);
   profile.count = 0;
+  const columns = resolveAglProfileColumns(decoded, wanted, profileLevels, profile);
 
   const surfaceValues =
     profile.values instanceof Float64Array && profile.values.length >= wanted.length
@@ -253,7 +355,7 @@ function buildAglProfileColumns(decoded, index, elevation, variables, options = 
       : new Array(wanted.length);
   let hasSurfaceValue = false;
   for (let wantedIndex = 0; wantedIndex < wanted.length; wantedIndex += 1) {
-    const value = profileColumnValue(decoded, wanted[wantedIndex], "surface", index);
+    const value = aglProfileColumnValue(columns.surface[wantedIndex], index);
     surfaceValues[wantedIndex] = value;
     hasSurfaceValue = hasSurfaceValue || Number.isFinite(value);
   }
@@ -261,14 +363,15 @@ function buildAglProfileColumns(decoded, index, elevation, variables, options = 
     appendAglProfileRow(profile, wanted, elevation, surfaceValues);
   }
 
-  for (const level of profileLevels) {
-    const heightM = profileValue(decoded, "HGT", level, index);
+  for (let levelIndex = 0; levelIndex < columns.levels.length; levelIndex += 1) {
+    const levelColumns = columns.levels[levelIndex];
+    const heightM = aglProfileColumnValue(levelColumns.height, index);
     if (!Number.isFinite(heightM) || heightM <= elevation) {
       continue;
     }
     const values = surfaceValues;
     for (let wantedIndex = 0; wantedIndex < wanted.length; wantedIndex += 1) {
-      values[wantedIndex] = profileColumnValue(decoded, wanted[wantedIndex], level, index);
+      values[wantedIndex] = aglProfileColumnValue(levelColumns.values[wantedIndex], index);
     }
     appendAglProfileRow(profile, wanted, heightM, values);
   }
@@ -276,6 +379,60 @@ function buildAglProfileColumns(decoded, index, elevation, variables, options = 
     return null;
   }
   return profile;
+}
+
+// Per-(variable, level) grid resolution hoisted out of the per-cell calls: the
+// memo lives on the persistent profile scratch so decode-key strings are built
+// once per frame instead of once per active cell. A resolved column is
+// { grid } for scalar variables or { uGrid, vGrid } for SPD; the per-cell reads
+// replicate profileValue/profileSpeedAtLevel exactly (Number conversion, finite
+// normalization, and hypot order are unchanged).
+function resolveAglProfileColumns(decoded, wanted, profileLevels, profile) {
+  let memo = profile.columnGridMemo || null;
+  if (!memo || memo.decoded !== decoded) {
+    memo = { decoded, columns: new Map() };
+    profile.columnGridMemo = memo;
+  }
+  const resolveColumn = (variable, level) => {
+    const key = `${variable}:${String(level)}`;
+    let column = memo.columns.get(key);
+    if (!column) {
+      if (variable === "SPD") {
+        column = {
+          uGrid: resolveProfileGrid(decoded, "UGRD", level),
+          vGrid: resolveProfileGrid(decoded, "VGRD", level),
+        };
+      } else if (
+        variable === "UGRD" ||
+        variable === "VGRD" ||
+        variable === "TMP" ||
+        variable === "RH" ||
+        variable === "HGT"
+      ) {
+        column = { grid: resolveProfileGrid(decoded, variable, level) };
+      } else {
+        column = { grid: null };
+      }
+      memo.columns.set(key, column);
+    }
+    return column;
+  };
+  return {
+    surface: wanted.map((variable) => resolveColumn(variable, "surface")),
+    levels: profileLevels.map((level) => ({
+      height: resolveColumn("HGT", level),
+      values: wanted.map((variable) => resolveColumn(variable, level)),
+    })),
+  };
+}
+
+function aglProfileColumnValue(column, index) {
+  if (column.uGrid || column.vGrid) {
+    const u = gridValue(column.uGrid, index);
+    const v = gridValue(column.vGrid, index);
+    return Number.isFinite(u) && Number.isFinite(v) ? Math.hypot(u, v) : Number.NaN;
+  }
+  return gridValue(column.grid, index);
 }
 
 function appendAglProfileRow(profile, wanted, height, values) {
@@ -377,9 +534,11 @@ function latLonForGridIndex(index, bounds, width, height) {
   const west = Number(bounds?.west);
   const east = Number(bounds?.east);
   const lon =
-    Number.isFinite(west) && Number.isFinite(east) ? west + (x / Math.max(1, cols - 1)) * (east - west) : Number.NaN;
+    Number.isFinite(west) && Number.isFinite(east)
+      ? west + (cols > 1 ? x / (cols - 1) : 0.5) * (east - west)
+      : Number.NaN;
   return {
-    lat: bounds ? rowToLatMercator(y, rows, bounds) : Number.NaN,
+    lat: bounds ? rowToLatMercator(rows > 1 ? y : 0.5, rows > 1 ? rows : 2, bounds) : Number.NaN,
     lon,
   };
 }
@@ -447,9 +606,13 @@ module.exports = {
   COBB_C4,
   COBB_PROFILE_LEVELS,
   COBB_TTHRESH,
+  CONTIGUOUS_US_SNOW_DOMAIN_V1,
   KUCHERA_PROFILE_LEVELS,
   PLETCHER_RF_AGL_LEVELS,
+  PLETCHER_RF_DOMAIN_MASK_VERSION,
+  WESTERN_LINEAR_DOMAIN_MASK_VERSION,
   WESTERN_LINEAR_MIN_ELEVATION_M,
+  WESTERN_LINEAR_MIN_LAT,
   WESTERN_LINEAR_WEST_OF_LON,
   appendAglProfileRow,
   buildAglProfileColumns,
@@ -466,6 +629,8 @@ module.exports = {
   calculateWarmestProfileTempCFromSources,
   createAglProfileScratch,
   interpolateAglProfileColumn,
+  isContiguousUsSnowDomainPixel,
+  isPletcherRfEligiblePixel,
   isWesternLinearEligiblePixel,
   latLonForGridIndex,
   predictLinearSlr,

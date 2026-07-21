@@ -1,7 +1,11 @@
 import { useMemo } from "react";
 import { MODEL_CONFIG } from "../../config/constants";
 import { getCachedFramePrefetchState } from "../../core/frame-prefetch";
-import { resolveFrameLayerRef } from "../../core/layer-refs";
+import {
+  resolveFrameLayerRef,
+  resolveSelectedLayerAvailability,
+  type SynopticComponentSelection,
+} from "../../core/layer-refs";
 import { normalizeIsoHour } from "../../core/time";
 import type {
   FrameLayerRef,
@@ -26,6 +30,7 @@ interface UseFrameStatusArgs {
   prefetchCacheRevision: number;
   reflectivityGate: ReflectivityGateDbz;
   synopticDetailMode: SynopticDetailMode;
+  synopticSelection: SynopticComponentSelection;
 }
 
 export function useFrameStatus({
@@ -38,6 +43,7 @@ export function useFrameStatus({
   prefetchCacheRevision,
   reflectivityGate,
   synopticDetailMode,
+  synopticSelection,
 }: UseFrameStatusArgs) {
   const plannedHours = useMemo(
     () => buildPlannedHours(manifest, frameByHour, modelKey),
@@ -57,6 +63,7 @@ export function useFrameStatus({
       activeLayers,
       reflectivityGate,
       synopticDetailMode,
+      synopticSelection,
     );
   }, [
     activeLayers,
@@ -66,6 +73,7 @@ export function useFrameStatus({
     prefetchCacheRevision,
     reflectivityGate,
     synopticDetailMode,
+    synopticSelection,
   ]);
   const selectedBrowserFrameStatus = frame ? browserHourStatus[frame.hour] || selectedFrameStatus : selectedFrameStatus;
   const browserLoadedCount = useMemo(
@@ -151,20 +159,29 @@ function buildEffectiveHourStatus(
   return status;
 }
 
-function buildBrowserHourStatus(
+export function buildBrowserHourStatus(
   frameByHour: Map<number, FrameRecord>,
   manifest: ModelManifest | null,
   prefetchByHour: Record<number, PrefetchState>,
   activeLayers: Set<LayerKey>,
   reflectivityGate: ReflectivityGateDbz,
   synopticDetailMode: SynopticDetailMode,
+  synopticSelection: SynopticComponentSelection | null = null,
 ): Record<number, FrameHourStatus> {
   const out: Record<number, FrameHourStatus> = {};
   for (const [hour, frameEntry] of frameByHour.entries()) {
     const manifestStatus = normalizeFrameHourStatus(manifest?.hourStatus?.[String(hour)]);
+    if (manifestStatus === "error" || manifestStatus === "unavailable") {
+      out[hour] = manifestStatus;
+      continue;
+    }
+    if (hasOnlyExplicitlyUnavailableActiveLayers(frameEntry, activeLayers, synopticSelection)) {
+      out[hour] = "unavailable";
+      continue;
+    }
     const browserLoadable =
       manifestStatus === "loaded" ||
-      hasCompleteActiveLayerRefs(frameEntry, activeLayers, reflectivityGate, synopticDetailMode);
+      hasCompleteActiveLayerRefs(frameEntry, activeLayers, reflectivityGate, synopticDetailMode, synopticSelection);
     if (!browserLoadable) {
       out[hour] = manifestStatus;
       continue;
@@ -189,12 +206,16 @@ function hasCompleteActiveLayerRefs(
   activeLayers: Set<LayerKey>,
   reflectivityGate: ReflectivityGateDbz,
   synopticDetailMode: SynopticDetailMode,
+  synopticSelection: SynopticComponentSelection | null,
 ): boolean {
   if (activeLayers.size === 0) {
     return false;
   }
   let checked = 0;
   for (const layer of activeLayers) {
+    if (resolveSelectedLayerAvailability(frame, layer, synopticSelection) === "unavailable") {
+      continue;
+    }
     checked += 1;
     if (layer === "synoptic") {
       if (!hasCompleteSynopticRef(frame, synopticDetailMode)) {
@@ -211,6 +232,22 @@ function hasCompleteActiveLayerRefs(
   return checked > 0;
 }
 
+function hasOnlyExplicitlyUnavailableActiveLayers(
+  frame: FrameRecord,
+  activeLayers: Set<LayerKey>,
+  synopticSelection: SynopticComponentSelection | null,
+): boolean {
+  if (activeLayers.size === 0) {
+    return false;
+  }
+  for (const layer of activeLayers) {
+    if (resolveSelectedLayerAvailability(frame, layer, synopticSelection) !== "unavailable") {
+      return false;
+    }
+  }
+  return true;
+}
+
 function hasCompleteSynopticRef(frame: FrameRecord, synopticDetailMode: SynopticDetailMode): boolean {
   if (hasCompleteFrameLayerRef(frame.layers?.synoptic || null)) {
     return true;
@@ -221,15 +258,12 @@ function hasCompleteSynopticRef(frame: FrameRecord, synopticDetailMode: Synoptic
   if (preferredKey && Number.isFinite(preferredBytes) && preferredBytes > 0) {
     return true;
   }
-  const legacyKey = String(frame.synopticVectorKey || "").trim();
+  const legacyKey = !frame.synopticVectorKeys && mode === "simple" ? String(frame.synopticVectorKey || "").trim() : "";
   const legacyBytes = Number(frame.synopticVectorBytes?.simple);
   if (legacyKey && Number.isFinite(legacyBytes) && legacyBytes > 0) {
     return true;
   }
-  const alternateMode = mode === "simple" ? "detailed" : "simple";
-  const alternateKey = String(frame.synopticVectorKeys?.[alternateMode] || "").trim();
-  const alternateBytes = Number(frame.synopticVectorBytes?.[alternateMode]);
-  return Boolean(alternateKey && Number.isFinite(alternateBytes) && alternateBytes > 0);
+  return false;
 }
 
 function hasCompleteFrameLayerRef(ref: FrameLayerRef | null | undefined): boolean {

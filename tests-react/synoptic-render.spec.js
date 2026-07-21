@@ -1,4 +1,4 @@
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("./helpers/test");
 const { renderSynopticArtifacts } = require("../scripts/lib/synoptic-render");
 const { decodeVectorLinePoints } = require("../scripts/lib/vector-encoding");
 

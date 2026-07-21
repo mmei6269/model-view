@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { MODEL_KEYS } from "../config/constants";
 import {
   DEFAULT_PANEL_LAYERS,
+  MAX_PANELS,
+  buildDefaultPanelCollection,
   loadStoredPanelCollection,
   storePanelCollection,
   type StoredPanelCollection,
@@ -17,7 +19,9 @@ type PanelCollectionState = StoredPanelCollection;
 export function usePanelCollection() {
   // Panels and the id counter live in one state object so addPanel's updater
   // stays pure (no setState calls inside another updater). Hydrated from the
-  // persisted collection (model + layers only; runId is never restored).
+  // persisted collection (model + layers only). A share URL may explicitly
+  // restore runId through applyPanelPreset; ordinary local-session hydration
+  // still follows Latest.
   const [state, setState] = useState<PanelCollectionState>(loadStoredPanelCollection);
 
   useEffect(() => {
@@ -26,7 +30,7 @@ export function usePanelCollection() {
 
   const addPanel = useCallback((): void => {
     setState((prev) => {
-      if (prev.panels.length >= 2) {
+      if (prev.panels.length >= MAX_PANELS) {
         return prev;
       }
       const nextIndex = prev.counter + 1;
@@ -34,6 +38,23 @@ export function usePanelCollection() {
       return { counter: nextIndex, panels: [...prev.panels, buildPanel(nextIndex, modelKey)] };
     });
   }, []);
+
+  // Replace the whole roster (URL ?p1=…&p2=… restore). Panel ids restart at
+  // panel-1; callers apply this before any map registers, so no id collisions.
+  const applyPanelPreset = useCallback(
+    (preset: Array<{ modelKey: ModelKey; runId?: string | null; layers: LayerKey[] }>): void => {
+      setState(() => {
+        const panels: PanelState[] = preset.slice(0, MAX_PANELS).map((entry, index) => ({
+          id: `panel-${index + 1}`,
+          modelKey: entry.modelKey,
+          runId: entry.runId || null,
+          layers: entry.layers.length > 0 ? [...entry.layers] : [...DEFAULT_PANEL_LAYERS],
+        }));
+        return panels.length > 0 ? { counter: panels.length, panels } : buildDefaultPanelCollection();
+      });
+    },
+    [],
+  );
 
   const removePanel = useCallback((panelId: string): void => {
     setState((prev) => {
@@ -78,6 +99,7 @@ export function usePanelCollection() {
 
   return {
     addPanel,
+    applyPanelPreset,
     panels: state.panels,
     removePanel,
     togglePanelLayer,

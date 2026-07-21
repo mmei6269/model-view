@@ -42,7 +42,7 @@ function boundedRunCacheSet(cache, key, value) {
   }
 }
 
-async function readCachedFloatGrid(cachePath, expectedPayload, cellCount) {
+async function readCachedFloatGrid(cachePath, expectedPayload, cellCount, options = {}) {
   if (!cachePath) {
     return null;
   }
@@ -55,22 +55,36 @@ async function readCachedFloatGrid(cachePath, expectedPayload, cellCount) {
     if (body.length !== cellCount * 4) {
       return null;
     }
+    if (typeof options.onMetadata === "function") {
+      options.onMetadata(metadata);
+    }
     return float32ArrayViewFromBuffer(body, 0, body.byteLength);
   } catch {
     return null;
   }
 }
 
-async function writeCachedFloatGrid(cachePath, payload, values) {
+async function writeCachedFloatGrid(cachePath, payload, values, metadataExtra = {}) {
   if (!cachePath || !values) {
-    return;
+    return false;
   }
-  await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
   const tmp = `${cachePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-  await fs.promises.writeFile(tmp, Buffer.from(values.buffer, values.byteOffset, values.byteLength));
-  await fs.promises.writeFile(`${tmp}.json`, JSON.stringify(cacheMetadataWithPayload(payload)));
-  await fs.promises.rename(tmp, `${cachePath}.bin`);
-  await fs.promises.rename(`${tmp}.json`, `${cachePath}.json`);
+  // Cache persistence is best-effort: a failed write must degrade to a
+  // warn-and-recompute, never fail the frame that already holds the grid
+  // (mirrors writeDerivedGridCache / writeRegriddedBinCache).
+  try {
+    await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.promises.writeFile(tmp, Buffer.from(values.buffer, values.byteOffset, values.byteLength));
+    await fs.promises.writeFile(`${tmp}.json`, JSON.stringify(cacheMetadataWithPayload(payload, metadataExtra)));
+    await fs.promises.rename(tmp, `${cachePath}.bin`);
+    await fs.promises.rename(`${tmp}.json`, `${cachePath}.json`);
+    return true;
+  } catch (error) {
+    await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    await fs.promises.rm(`${tmp}.json`, { force: true }).catch(() => {});
+    console.warn(`[noaa-beta] float-grid cache write failed for ${cachePath}: ${String(error?.message || error)}`);
+    return false;
+  }
 }
 
 function cachePayloadJson(payload) {
@@ -91,9 +105,16 @@ function cacheMetadataWithPayload(payload, extra = {}) {
   return { payload, payloadHash: descriptor.payloadHash, ...extra };
 }
 
-function cacheMetadataPayloadMatches(metadata, expectedPayload) {
+function cacheMetadataPayloadMatches(metadata, expectedPayload, expectedPayloadHash = null) {
   if (!metadata || typeof metadata !== "object") {
     return false;
+  }
+  // Callers that already hold the payload's hash (regrid-bin/derived-grid
+  // cache contexts) skip re-serializing and re-hashing the expected payload
+  // on the fast path; the JSON comparison below stays the fallback for
+  // metadata written without a payloadHash.
+  if (expectedPayloadHash && metadata.payloadHash && metadata.payloadHash === expectedPayloadHash) {
+    return true;
   }
   const expected = cachePayloadDescriptor(expectedPayload);
   if (metadata.payloadHash && metadata.payloadHash === expected.payloadHash) {
@@ -109,13 +130,37 @@ function directCacheMetadataPayloadMatches(metadata, expectedPayload) {
   return cachePayloadJson(metadata) === cachePayloadJson(expectedPayload);
 }
 
-async function waitForCachedGrid({ cachePath, payload, lockPath, context, read, timeoutCounter }) {
+// Generic waitForCachedGrid probe for entries whose sidecar is written via
+// cacheMetadataWithPayload (writeCachedFloatGrid and the snowfall/profile
+// writers): reads only the small JSON sidecar and validates the payload hash,
+// so a waiting caller never re-reads the multi-MB grid body on a poll that
+// cannot succeed yet. The full read after a ready probe still validates
+// payload and body before use.
+async function probeCachedGridSidecar(cachePath, expectedPayload) {
+  if (!cachePath) {
+    return false;
+  }
+  try {
+    const metadata = JSON.parse(await fs.promises.readFile(`${cachePath}.json`, "utf8"));
+    return cacheMetadataPayloadMatches(metadata, expectedPayload);
+  } catch {
+    return false;
+  }
+}
+
+async function waitForCachedGrid({ cachePath, payload, lockPath, context, read, probe = null, timeoutCounter }) {
   const startedAt = performance.now();
   while (performance.now() - startedAt < GRID_CACHE_LOCK_TIMEOUT_MS) {
     await sleep(GRID_CACHE_LOCK_POLL_MS + Math.round(Math.random() * 40));
-    const cached = await read(cachePath, payload);
-    if (cached) {
-      return cached;
+    // The optional probe checks only the small JSON sidecar, so callers that
+    // pass one avoid re-reading the multi-MB grid body on every poll; the
+    // full read below still validates payload and body bytes before use.
+    const ready = typeof probe === "function" ? await probe(cachePath, payload) : true;
+    if (ready) {
+      const cached = await read(cachePath, payload);
+      if (cached) {
+        return cached;
+      }
     }
     const lockExists = await pathExists(lockPath);
     if (!lockExists) {
@@ -126,6 +171,49 @@ async function waitForCachedGrid({ cachePath, payload, lockPath, context, read, 
     incrementProfileCounter(context.profile, timeoutCounter);
   }
   return null;
+}
+
+// Multi-ref variant of waitForCachedGrid: N per-ref cache entries behind one
+// hour-level lock (precip accumulation windows, snow-liquid source windows).
+// Polls every ref's small JSON sidecar; the multi-MB grid bodies are read and
+// validated only once every ref reports ready. The wait fails open to a
+// final read when the lock disappears or the timeout elapses.
+async function waitForCachedRefGrids({ refs, lockPath, concurrency, probeRef, readRef, profile, timeoutCounter }) {
+  const readAll = () => readCachedRefGridsBySourceKey(refs, concurrency, readRef);
+  const startedAt = performance.now();
+  while (performance.now() - startedAt < GRID_CACHE_LOCK_TIMEOUT_MS) {
+    await sleep(GRID_CACHE_LOCK_POLL_MS + Math.round(Math.random() * 40));
+    if (await probeCachedRefGrids(refs, concurrency, probeRef)) {
+      const cached = await readAll();
+      if (cached.size === refs.length) {
+        return cached;
+      }
+    }
+    const lockExists = await pathExists(lockPath);
+    if (!lockExists) {
+      return readAll();
+    }
+  }
+  if (timeoutCounter) {
+    incrementProfileCounter(profile, timeoutCounter);
+  }
+  return readAll();
+}
+
+async function probeCachedRefGrids(refs, concurrency, probeRef) {
+  const probes = await mapWithConcurrency(refs, concurrency, (ref) => probeRef(ref));
+  return probes.every(Boolean);
+}
+
+async function readCachedRefGridsBySourceKey(refs, concurrency, readRef) {
+  const pairs = await mapWithConcurrency(refs, concurrency, async (ref) => [ref.sourceKey, await readRef(ref)]);
+  const out = new Map();
+  for (const [sourceKey, cached] of pairs) {
+    if (cached) {
+      out.set(sourceKey, cached);
+    }
+  }
+  return out;
 }
 
 async function tryAcquireGridCacheLock(lockPath, payload) {
@@ -191,11 +279,19 @@ async function mapWithConcurrency(items, concurrency, worker) {
   }
   const workerCount = clampInt(concurrency, 1, list.length, 1);
   let index = 0;
+  // Once one runner rejects, surviving runners stop pulling new items; their
+  // in-flight awaits still settle and Promise.all propagates the rejection.
+  let aborted = false;
   const runners = Array.from({ length: workerCount }, async () => {
-    while (index < list.length) {
+    while (!aborted && index < list.length) {
       const current = index;
       index += 1;
-      out[current] = await worker(list[current], current);
+      try {
+        out[current] = await worker(list[current], current);
+      } catch (error) {
+        aborted = true;
+        throw error;
+      }
     }
   });
   await Promise.all(runners);
@@ -230,7 +326,9 @@ module.exports = {
   padHour,
   padTwoDigitHour,
   pathExists,
+  probeCachedGridSidecar,
   readCachedFloatGrid,
+  readCachedRefGridsBySourceKey,
   recordProfileStage,
   releaseGridCacheLock,
   removeStaleGridCacheLock,
@@ -238,5 +336,6 @@ module.exports = {
   sanitizePathToken,
   tryAcquireGridCacheLock,
   waitForCachedGrid,
+  waitForCachedRefGrids,
   writeCachedFloatGrid,
 };

@@ -5,8 +5,20 @@
 const path = require("path");
 const { loadDotEnv, resolveCacheRootEnv } = require("./lib/env-config");
 const { createLocalArtifactServer } = require("./lib/local-artifact-server");
+const { parseReflectivityGates } = require("./build-noaa-beta-artifacts");
+const { DEFAULT_REFLECTIVITY_GATES } = require("./lib/modelview-runtime");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
+
+// One gate vocabulary for both sides: the builder's parseReflectivityGates
+// whitelists the supported {10, 15, 20} dBZ gates (falling back to the full
+// default set), so the server can never be configured to serve gates the
+// artifacts were not built with.
+function resolveReflectivityGates(args, env = process.env) {
+  return parseReflectivityGates(
+    args["reflectivity-gates"] || env.MODELVIEW_REFLECTIVITY_GATES || DEFAULT_REFLECTIVITY_GATES.join(","),
+  );
+}
 
 async function main() {
   loadDotEnv(path.join(ROOT_DIR, ".env"));
@@ -15,10 +27,7 @@ async function main() {
   const host = String(args.host || process.env.MODELVIEW_DATA_HOST || "127.0.0.1");
   const cacheRoot = args["cache-root"] || resolveCacheRootEnv() || undefined;
   const artifactPrefix = args["artifact-prefix"] || process.env.MODELVIEW_ARTIFACT_PREFIX || undefined;
-  const reflectivityGates = String(args["reflectivity-gates"] || process.env.MODELVIEW_REFLECTIVITY_GATES || "10,15,20")
-    .split(",")
-    .map((value) => Number(value.trim()))
-    .filter(Number.isFinite);
+  const reflectivityGates = resolveReflectivityGates(args);
 
   const { runtime, server, actions } = createLocalArtifactServer({
     cacheRoot,
@@ -72,7 +81,11 @@ function parseArgs(argv) {
   return args;
 }
 
-main().catch((error) => {
-  console.error(error && error.stack ? error.stack : error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error && error.stack ? error.stack : error);
+    process.exit(1);
+  });
+}
+
+module.exports = { resolveReflectivityGates };

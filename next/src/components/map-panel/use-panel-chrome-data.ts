@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { getLayerLegendConfig, getLayerStackOrder, getManifestParameterOptions } from "../../config/layers";
+import { getFrameAwareLayerLegendConfig, getLayerStackOrder, getManifestParameterOptions } from "../../config/layers";
+import { resolveFrameParameterAvailability, type SynopticComponentSelection } from "../../core/layer-refs";
 import { normalizeIsoHour } from "../../core/time";
 import type { FrameHourStatus, FrameRecord, LayerKey, ModelManifest } from "../../types";
 import type { PanelFrameOption } from "./PanelChrome";
@@ -19,7 +20,9 @@ interface UsePanelChromeDataArgs {
   hasRuns: boolean;
   manifestState: ManifestStateLike;
   plannedHours: number[];
+  selectedBrowserFrameStatus: FrameHourStatus;
   selectedLayers: Set<LayerKey>;
+  synopticSelection: SynopticComponentSelection;
 }
 
 export function usePanelChromeData({
@@ -31,7 +34,9 @@ export function usePanelChromeData({
   hasRuns,
   manifestState,
   plannedHours,
+  selectedBrowserFrameStatus,
   selectedLayers,
+  synopticSelection,
 }: UsePanelChromeDataArgs) {
   const renderableParamKeys = useMemo(
     () =>
@@ -43,9 +48,9 @@ export function usePanelChromeData({
   const legendItems = useMemo(
     () =>
       renderableParamKeys
-        .map((key) => getLayerLegendConfig(key, manifestState.manifest))
+        .map((key) => getFrameAwareLayerLegendConfig(key, manifestState.manifest, frame?.hour))
         .filter((item): item is NonNullable<typeof item> => Boolean(item)),
-    [manifestState.manifest, renderableParamKeys],
+    [frame?.hour, manifestState.manifest, renderableParamKeys],
   );
   const parameterOptions = useMemo(() => {
     const options = getManifestParameterOptions(manifestState.manifest);
@@ -59,6 +64,10 @@ export function usePanelChromeData({
     return options;
   }, [manifestState.manifest, selectedLayers]);
   const hasAnyLayer = activeLayers.size > 0;
+  const unavailableLayerLabels = useMemo(
+    () => getUnavailableActiveLayerLabels(activeLayers, frame, manifestState.manifest, synopticSelection),
+    [activeLayers, frame, manifestState.manifest, synopticSelection],
+  );
   // Empty-cache onboarding: the manifest loaded cleanly but holds zero frames
   // and the run list confirmed there are no runs at all — a fresh checkout, not
   // a transient failure (loading and error states are handled above/elsewhere).
@@ -74,7 +83,11 @@ export function usePanelChromeData({
           ? "No runs built yet — run npm run noaa:update"
           : !frame
             ? "Frame unavailable for selected valid time"
-            : null;
+            : selectedBrowserFrameStatus === "unavailable"
+              ? unavailableLayerLabels.length > 0
+                ? `Unavailable for this frame: ${unavailableLayerLabels.join(", ")}`
+                : "Selected layer unavailable for this frame"
+              : null;
   const frameOptions = useMemo<PanelFrameOption[]>(
     () =>
       plannedHours.map((hour) => {
@@ -102,8 +115,11 @@ export function usePanelChromeData({
     if (!frame) {
       return { label: "Frame Missing", kind: "error" as const };
     }
+    if (selectedBrowserFrameStatus === "unavailable") {
+      return { label: "Layer Unavailable", kind: "error" as const };
+    }
     return { label: "Ready", kind: "ready" as const };
-  }, [activeLayers.size, frame, manifestState.error, manifestState.loading]);
+  }, [activeLayers.size, frame, manifestState.error, manifestState.loading, selectedBrowserFrameStatus]);
 
   return {
     emptyMessage,
@@ -111,5 +127,47 @@ export function usePanelChromeData({
     legendItems,
     panelStatus,
     parameterOptions,
+    unavailableLayerLabels,
   };
+}
+
+export function getUnavailableActiveLayerLabels(
+  activeLayers: Set<LayerKey>,
+  frame: FrameRecord | null,
+  manifest: ModelManifest | null,
+  synopticSelection?: SynopticComponentSelection | null,
+): string[] {
+  if (!frame) {
+    return [];
+  }
+  const labels: string[] = [];
+  for (const layer of activeLayers) {
+    if (layer === "synoptic" && synopticSelection) {
+      const priorLabelCount = labels.length;
+      if (
+        (synopticSelection.showIsobars || synopticSelection.showCenters) &&
+        resolveFrameParameterAvailability(frame, "synopticIsobars") === "unavailable"
+      ) {
+        labels.push("Surface pressure isobars/centers");
+      }
+      if (
+        synopticSelection.showThickness &&
+        resolveFrameParameterAvailability(frame, "synopticThickness") === "unavailable"
+      ) {
+        labels.push("1000-500 mb thickness");
+      }
+      if (labels.length > priorLabelCount) {
+        continue;
+      }
+    }
+    if (resolveFrameParameterAvailability(frame, layer) !== "unavailable") {
+      continue;
+    }
+    labels.push(
+      layer === "synoptic"
+        ? "Synoptic analysis"
+        : getFrameAwareLayerLegendConfig(layer, manifest, frame.hour)?.label || layer,
+    );
+  }
+  return labels;
 }

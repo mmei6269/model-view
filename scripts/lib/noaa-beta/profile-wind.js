@@ -44,6 +44,7 @@ function sortEffectiveDiagnosticsRowsByHeight(scratch, count) {
     scratch.dewpoint[cursor + 1] = dewpoint;
   }
   updateScratchPressureBrackets(scratch, count);
+  updateScratchHeightBrackets(scratch, count);
 }
 
 function updateScratchPressureBrackets(scratch, count) {
@@ -68,6 +69,63 @@ function updateScratchPressureBrackets(scratch, count) {
   }
   scratch.pressureBracketsValid = valid;
   scratch.pressureBracketsRowCount = valid ? count : -1;
+}
+
+function updateScratchHeightBrackets(scratch, count) {
+  // The binary-search fast path in the height interpolators is valid only
+  // when every row is usable by the linear scans — finite height, wind, and
+  // positive pressure — and heights are strictly ascending. Strictly
+  // ascending heights make the === exact-match row and the last-below /
+  // first-above bracketing pair unique (first in array order), so binary
+  // search picks exactly the rows the linear scans pick. Unlike the pressure
+  // exact match (|pressure - target| < 1e-6, hence the 2e-6 gap guard), the
+  // height exact match is strict ===, so any positive adjacent gap suffices
+  // and duplicates/descending pairs are the only orderings to reject.
+  // This function runs as the final step of every scratch fill (both fill
+  // paths end in sortEffectiveDiagnosticsRowsByHeight), so the flag can never
+  // be stale for a freshly filled scratch.
+  const heights = scratch.heights;
+  const us = scratch.u;
+  const vs = scratch.v;
+  const pressures = scratch.pressure;
+  let valid = count > 0;
+  let previous = Number.NEGATIVE_INFINITY;
+  for (let row = 0; row < count; row += 1) {
+    const height = heights[row];
+    if (
+      !Number.isFinite(height) ||
+      !(height > previous) ||
+      !Number.isFinite(us[row]) ||
+      !Number.isFinite(vs[row]) ||
+      !Number.isFinite(pressures[row]) ||
+      pressures[row] <= 0
+    ) {
+      valid = false;
+      break;
+    }
+    previous = height;
+  }
+  scratch.heightBracketsValid = valid;
+  scratch.heightBracketsRowCount = valid ? count : -1;
+}
+
+function findHeightBracketUpperRow(heights, rowCount, targetHeight) {
+  // Returns the smallest row index whose height is >= targetHeight in a
+  // strictly ascending height array, or rowCount when every row is below
+  // the target.
+  let lo = 0;
+  let hi = rowCount - 1;
+  let result = rowCount;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (heights[mid] >= targetHeight) {
+      result = mid;
+      hi = mid - 1;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return result;
 }
 
 function findPressureBracketUpperRow(pressures, rowCount, targetPressure) {
@@ -96,6 +154,25 @@ function interpolateProfileWindRows(scratch, rowCount, targetHeight) {
   const heights = scratch.heights;
   const us = scratch.u;
   const vs = scratch.v;
+  if (scratch.heightBracketsValid === true && scratch.heightBracketsRowCount === rowCount) {
+    // Strictly ascending heights with every row finite: the === exact-match
+    // row and the last-below/first-above bracketing pair are unique, so
+    // binary search reproduces the linear scan below exactly.
+    const upperRow = findHeightBracketUpperRow(heights, rowCount, targetHeight);
+    if (upperRow < rowCount && heights[upperRow] === targetHeight) {
+      return { u: us[upperRow], v: vs[upperRow] };
+    }
+    if (upperRow <= 0 || upperRow >= rowCount) {
+      return null;
+    }
+    const lowerRow = upperRow - 1;
+    const lowerHeight = heights[lowerRow];
+    const fraction = (targetHeight - lowerHeight) / Math.max(1e-9, heights[upperRow] - lowerHeight);
+    return {
+      u: us[lowerRow] + (us[upperRow] - us[lowerRow]) * clamp01(fraction),
+      v: vs[lowerRow] + (vs[upperRow] - vs[lowerRow]) * clamp01(fraction),
+    };
+  }
   let lowerRow = -1;
   for (let row = 0; row < rowCount; row += 1) {
     const height = heights[row];
@@ -164,6 +241,15 @@ function calculateHeightMeanWindInLayerFromRows(scratch, rowCount, bottomAglM, t
     if (!Number.isFinite(height) || height <= bottomAglM || height >= topAglM) {
       continue;
     }
+    // Skip windless rows like every sibling accumulator does
+    // (interpolateProfileWindRows, calculateMeanWindByPressureFromRows):
+    // point-sounding scratch rows can carry NaN winds when a level's
+    // UGRD/VGRD record is absent, and one such row must not NaN-poison the
+    // whole layer mean. Gridded scratch fill rejects non-finite winds
+    // upstream, so this is point-path-only by construction.
+    if (!Number.isFinite(scratch.u[row]) || !Number.isFinite(scratch.v[row])) {
+      continue;
+    }
     addSegment(height, { u: scratch.u[row], v: scratch.v[row] });
   }
   const topWind = interpolateProfileWindRows(scratch, rowCount, topAglM);
@@ -171,7 +257,9 @@ function calculateHeightMeanWindInLayerFromRows(scratch, rowCount, bottomAglM, t
     return null;
   }
   addSegment(topAglM, topWind);
-  return totalDepth > 0 ? { u: sumU / totalDepth, v: sumV / totalDepth } : null;
+  return totalDepth > 0 && Number.isFinite(sumU) && Number.isFinite(sumV)
+    ? { u: sumU / totalDepth, v: sumV / totalDepth }
+    : null;
 }
 
 function calculatePressureCoordinateMeanWindInHeightLayerFromRows(
@@ -335,6 +423,25 @@ function interpolateProfilePressureRows(scratch, rowCount, targetHeight) {
   }
   const heights = scratch.heights;
   const pressures = scratch.pressure;
+  if (scratch.heightBracketsValid === true && scratch.heightBracketsRowCount === rowCount) {
+    // Strictly ascending heights with every row finite and positive-pressured:
+    // the === exact-match row and the last-below/first-above bracketing pair
+    // are unique, so binary search reproduces the linear scan below exactly.
+    const upperRow = findHeightBracketUpperRow(heights, rowCount, targetHeight);
+    if (upperRow < rowCount && heights[upperRow] === targetHeight) {
+      return pressures[upperRow];
+    }
+    if (upperRow <= 0 || upperRow >= rowCount) {
+      return Number.NaN;
+    }
+    const lowerRow = upperRow - 1;
+    const lowerHeight = heights[lowerRow];
+    const lowerPressure = pressures[lowerRow];
+    const fraction = (targetHeight - lowerHeight) / Math.max(1e-9, heights[upperRow] - lowerHeight);
+    return Math.exp(
+      Math.log(lowerPressure) + (Math.log(pressures[upperRow]) - Math.log(lowerPressure)) * clamp01(fraction),
+    );
+  }
   let lowerRow = -1;
   for (let row = 0; row < rowCount; row += 1) {
     const height = heights[row];
@@ -587,6 +694,11 @@ function calculateStormRelativeHelicityFromRows(scratch, rowCount, bottomAglM, t
     }
     const nextU = us[row];
     const nextV = vs[row];
+    // Same windless-row skip as the layer-mean accumulator above: a NaN wind
+    // row (point-sounding path only) must not NaN-poison the integral.
+    if (!Number.isFinite(nextU) || !Number.isFinite(nextV)) {
+      continue;
+    }
     helicity += (nextU - stormU) * (previousV - stormV) - (previousU - stormU) * (nextV - stormV);
     previousU = nextU;
     previousV = nextV;
@@ -609,6 +721,7 @@ module.exports = {
   calculatePointSoundingMeanWindInLayerFromRows,
   calculatePressureCoordinateMeanWindInHeightLayerFromRows,
   calculateStormRelativeHelicityFromRows,
+  findHeightBracketUpperRow,
   findPressureBracketUpperRow,
   interpolateProfilePressureRows,
   interpolateProfileThermoAtPressureRows,
@@ -617,5 +730,6 @@ module.exports = {
   isFiniteWindVector,
   logPressureInterpolationFraction,
   sortEffectiveDiagnosticsRowsByHeight,
+  updateScratchHeightBrackets,
   updateScratchPressureBrackets,
 };

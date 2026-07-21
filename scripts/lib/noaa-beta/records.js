@@ -1,17 +1,17 @@
 "use strict";
 
 const NOAA_RECORD_INDEX_SYMBOL = Symbol("noaaRecordIndex");
+const WARNED_AMBIGUOUS_SELECTORS = new Set();
 
 function findRecord(records, selector) {
   if (!Array.isArray(records) || !selector) {
     return null;
   }
   const index = getNoaaRecordIndex(records);
-  if (selector.level && !selector.levelPattern) {
-    const exact = index.byParamLevel.get(noaaRecordSelectorKey(selector.param, selector.level));
-    return exact?.[0] || null;
-  }
-  const source = index.byParam.get(String(selector.param || "")) || [];
+  const source =
+    selector.level && !selector.levelPattern
+      ? index.byParamLevel.get(noaaRecordSelectorKey(selector.param, selector.level)) || []
+      : index.byParam.get(String(selector.param || "")) || [];
   const candidates = source.filter((record) => {
     if (record.param !== selector.param) {
       return false;
@@ -22,16 +22,73 @@ function findRecord(records, selector) {
     if (selector.levelPattern && !selector.levelPattern.test(record.level)) {
       return false;
     }
-    return true;
+    if (selector.forecastPattern && !selector.forecastPattern.test(`${record.forecast || ""} ${record.extra || ""}`)) {
+      return false;
+    }
+    return recordMatchesStatistic(record, selector.statistic);
   });
   if (selector.param === "CAPE" && !selector.level && !selector.levelPattern) {
-    return (
+    const selected =
       candidates.find((record) => /180-0 mb above ground|surface|255-0 mb above ground/i.test(record.level)) ||
       candidates[0] ||
-      null
-    );
+      null;
+    warnOnAmbiguousRecordSelection(selector, candidates, selected);
+    return selected;
   }
-  return candidates[0] || null;
+  const selected = candidates[0] || null;
+  warnOnAmbiguousRecordSelection(selector, candidates, selected);
+  return selected;
+}
+
+function recordMatchesStatistic(record, statistic) {
+  const requested = String(statistic || "any")
+    .trim()
+    .toLowerCase();
+  if (!requested || requested === "any") {
+    return true;
+  }
+  const text = `${record?.forecast || ""} ${record?.extra || ""} ${record?.line || ""}`;
+  const hasAccumulation = Boolean(parseAccumulationWindow(record));
+  const hasAverage = Boolean(parseAverageWindow(record));
+  const hasMaximum = /(?:\d+\s*-\s*\d+|\d+)\s*hour\s+(?:max|maximum)|\bmax(?:imum)?\b/i.test(text);
+  const hasMinimum = /(?:\d+\s*-\s*\d+|\d+)\s*hour\s+(?:min|minimum)|\bmin(?:imum)?\b/i.test(text);
+  if (requested === "accumulation" || requested === "acc") {
+    return hasAccumulation;
+  }
+  if (requested === "average" || requested === "ave") {
+    return hasAverage;
+  }
+  if (requested === "maximum" || requested === "max") {
+    return hasMaximum;
+  }
+  if (requested === "minimum" || requested === "min") {
+    return hasMinimum;
+  }
+  if (requested === "instant" || requested === "instantaneous") {
+    return !hasAccumulation && !hasAverage && !hasMaximum && !hasMinimum;
+  }
+  return true;
+}
+
+function warnOnAmbiguousRecordSelection(selector, candidates, selected) {
+  if (!selected || candidates.length <= 1 || selector?.allowAmbiguous === true) {
+    return;
+  }
+  const key = JSON.stringify({
+    param: selector?.param || "",
+    level: selector?.level || "",
+    levelPattern: String(selector?.levelPattern || ""),
+    statistic: selector?.statistic || "any",
+  });
+  if (WARNED_AMBIGUOUS_SELECTORS.has(key)) {
+    return;
+  }
+  WARNED_AMBIGUOUS_SELECTORS.add(key);
+  console.warn(
+    `[noaa-beta] ambiguous GRIB selector ${selector?.param || "?"}:${selector?.level || selector?.levelPattern || "*"}:${
+      selector?.statistic || "any"
+    } matched ${candidates.length} records; using ${selected.record || "first"}. Add a statistic/window predicate.`,
+  );
 }
 
 function noaaRecordSelectorKey(param, level) {
@@ -193,6 +250,7 @@ module.exports = {
   parseAccumulationHours,
   parseAccumulationWindow,
   parseAverageWindow,
+  recordMatchesStatistic,
   recordsMatch,
   uniqueRecords,
 };

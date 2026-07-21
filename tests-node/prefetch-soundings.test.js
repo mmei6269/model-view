@@ -8,30 +8,90 @@ const path = require("path");
 const test = require("node:test");
 
 const { LocalArtifactRuntime } = require("../scripts/lib/local-artifact-runtime");
-const { AsyncSemaphore } = require("../scripts/lib/local-artifact-concurrency");
 const { planPrefetchTasks, warmFrameSounding } = require("../scripts/lib/noaa-build/prefetch-soundings");
+const { clearNoaaIndexCachesForTest } = require("../scripts/lib/noaa-beta/grib-source");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
-const FIXTURE_CACHE_ROOT = path.join(REPO_ROOT, "output/noaa-beta-cache");
-const FIXTURE_MANIFEST = path.join(FIXTURE_CACHE_ROOT, "artifacts/manifests/nam3km/20260702-1200Z--conus.json");
-const WGRIB2_PATH = path.join(REPO_ROOT, "output/noaa-beta-tools/bin/wgrib2");
+const FIXTURE_RUN = "20260702-1200Z";
 
-function makeRuntime() {
-  return new LocalArtifactRuntime({
-    cacheRoot: FIXTURE_CACHE_ROOT,
+async function makeRuntime(t) {
+  const cacheRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "prefetch-soundings-"));
+  t.after(() => fs.promises.rm(cacheRoot, { recursive: true, force: true }));
+  const runtime = new LocalArtifactRuntime({
+    cacheRoot,
     artifactPrefix: "tiles",
     sourceName: "noaa-beta",
   });
+  await runtime.init();
+  return runtime;
+}
+
+async function writeManifest(runtime, runId, frames, hourStatus) {
+  const manifest = {
+    schemaVersion: 1,
+    model: "nam3km",
+    run: runId,
+    view: "conus",
+    generatedAt: "2026-07-02T12:00:00.000Z",
+    parameters: {},
+    frames,
+    hourStatus,
+  };
+  const manifestPath = runtime.getManifestStoragePath("nam3km", runId, "conus");
+  await fs.promises.mkdir(path.dirname(manifestPath), { recursive: true });
+  await fs.promises.writeFile(manifestPath, JSON.stringify(manifest));
+  return manifest;
+}
+
+async function writeLatestPointer(runtime, runId) {
+  const pointer = {
+    model: "nam3km",
+    run: runId,
+    view: "conus",
+    generatedAt: "2026-07-02T12:00:00.000Z",
+    manifestKey: `manifests/nam3km/${runId}--conus.json`,
+    frameCount: 1,
+  };
+  const pointerPath = runtime.getLatestPointerStoragePath("nam3km", "conus");
+  await fs.promises.mkdir(path.dirname(pointerPath), { recursive: true });
+  await fs.promises.writeFile(pointerPath, JSON.stringify(pointer));
+}
+
+async function writeWgrib2Stub(t) {
+  const stubDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "prefetch-wgrib2-"));
+  t.after(() => fs.promises.rm(stubDir, { recursive: true, force: true }));
+  const stubPath = path.join(stubDir, "wgrib2-test-stub");
+  await fs.promises.writeFile(
+    stubPath,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("-grid")) {
+  process.stdout.write("lat-lon grid winds(N/S)\\n");
+} else if (args.includes("-lon")) {
+  process.stdout.write("1:0:d=2026070212:HGT:surface:anl:lon=-96 lat=37 val=100\\n");
+} else {
+  process.stderr.write(\`unexpected wgrib2 arguments: \${args.join(" ")}\\n\`);
+  process.exitCode = 2;
+}
+`,
+  );
+  await fs.promises.chmod(stubPath, 0o755);
+  return stubPath;
 }
 
 test("planPrefetchTasks enumerates every warmable hour (all but data-gated) with in-bounds centers", async (t) => {
-  if (!fs.existsSync(FIXTURE_MANIFEST)) {
-    t.skip("nam3km selected-grib-v2 fixture manifest not present");
-    return;
-  }
-  const runtime = makeRuntime();
-  await runtime.init();
-  const manifest = JSON.parse(fs.readFileSync(FIXTURE_MANIFEST, "utf8"));
+  const runtime = await makeRuntime(t);
+  const manifest = await writeManifest(
+    runtime,
+    FIXTURE_RUN,
+    [
+      { hour: 0, bounds: { north: 50, south: 20, west: -125, east: -65 } },
+      { hour: 1, bounds: { north: 49, south: 21, west: -124, east: -66 } },
+      { hour: 2, bounds: { north: 48, south: 22, west: -123, east: -67 } },
+      { hour: 3, bounds: { north: 47, south: 23, west: -122, east: -68 } },
+    ],
+    { 0: "loaded", 1: "pending", 2: "error", 3: "unavailable" },
+  );
   // Raw-GRIB warming works for any manifest frame, rendered or not — only
   // data-gated (unavailable) hours are unwarmable. Gating on "loaded" made
   // the prefetch silently skip frames mid-re-render.
@@ -46,7 +106,7 @@ test("planPrefetchTasks enumerates every warmable hour (all but data-gated) with
     view: "conus",
     runsMode: "all",
   });
-  const nam3kmTasks = tasks.filter((task) => task.modelKey === "nam3km" && task.runId === "20260702-1200Z");
+  const nam3kmTasks = tasks.filter((task) => task.modelKey === "nam3km" && task.runId === FIXTURE_RUN);
   assert.deepEqual(
     nam3kmTasks.map((task) => task.hour).sort((a, b) => a - b),
     warmableHours,
@@ -62,12 +122,12 @@ test("planPrefetchTasks enumerates every warmable hour (all but data-gated) with
 });
 
 test("planPrefetchTasks --runs=latest uses readLatestPointerFromDisk", async (t) => {
-  if (!fs.existsSync(FIXTURE_MANIFEST)) {
-    t.skip("nam3km selected-grib-v2 fixture manifest not present");
-    return;
-  }
-  const runtime = makeRuntime();
-  await runtime.init();
+  const runtime = await makeRuntime(t);
+  const olderRun = "20260702-0600Z";
+  const frame = { hour: 0, bounds: { north: 50, south: 20, west: -125, east: -65 } };
+  await writeManifest(runtime, olderRun, [frame], { 0: "loaded" });
+  await writeManifest(runtime, FIXTURE_RUN, [frame], { 0: "loaded" });
+  await writeLatestPointer(runtime, olderRun);
   const latest = await runtime.readLatestPointerFromDisk("nam3km", "conus");
   const tasks = await planPrefetchTasks({
     runtime,
@@ -82,60 +142,76 @@ test("planPrefetchTasks --runs=latest uses readLatestPointerFromDisk", async (t)
 });
 
 test("warmFrameSounding on an already-cached frame issues ZERO network calls", async (t) => {
-  if (!fs.existsSync(FIXTURE_MANIFEST)) {
-    t.skip("nam3km selected-grib-v2 fixture manifest not present");
-    return;
-  }
-  if (!fs.existsSync(WGRIB2_PATH)) {
-    t.skip("wgrib2 binary not present; warmFrameSounding requires it to extract the point");
-    return;
-  }
-  const runtime = makeRuntime();
-  await runtime.init();
-  const [task] = await planPrefetchTasks({
-    runtime,
-    models: ["nam3km"],
-    view: "conus",
-    runsMode: "latest",
-  });
-  assert.ok(task, "at least one loaded nam3km frame to warm");
-
-  // First warm populates the raw caches (idx, content-length, selected-grib).
-  // Requires the on-disk selected-grib-v2/idx fixtures for this frame — network-free
-  // only if those are present; otherwise this call would fetch, so guard on it.
-  const rawCacheDir = path.join(FIXTURE_CACHE_ROOT, "raw-noaa");
-  const first = await warmFrameSounding(task, {
-    rawCacheDir,
-    wgrib2Path: WGRIB2_PATH,
-    rangeFetchLimiter: new AsyncSemaphore(1),
-  });
-  if (first.status === "failed") {
-    t.skip(`frame not fully cached in fixture (${first.error}); cannot assert idempotent no-network path`);
-    return;
-  }
-
-  // Second warm must be network-free: any global.fetch or limiter use throws.
+  const cacheRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "prefetch-raw-cache-"));
+  t.after(() => fs.promises.rm(cacheRoot, { recursive: true, force: true }));
+  const rawCacheDir = path.join(cacheRoot, "raw-noaa");
+  const wgrib2Path = await writeWgrib2Stub(t);
+  const task = { modelKey: "nam3km", runId: FIXTURE_RUN, hour: 0, lat: 37, lon: -96 };
+  const idxText = "1:0:d=2026070212:HGT:surface:anl:\n";
+  const gribBytes = Buffer.from("GRIB");
   const originalFetch = global.fetch;
-  let fetchCalls = 0;
-  global.fetch = async (...fetchArgs) => {
-    fetchCalls += 1;
-    throw new Error(`unexpected network fetch during cached warm: ${fetchArgs[0]}`);
-  };
-  const throwingLimiter = {
-    run() {
-      throw new Error("unexpected range fetch during cached warm");
-    },
-  };
   try {
+    let firstFetchCalls = 0;
+    let firstLimiterCalls = 0;
+    global.fetch = async (url, options = {}) => {
+      firstFetchCalls += 1;
+      if (String(url).endsWith(".idx")) {
+        return { ok: true, status: 200, text: async () => idxText };
+      }
+      if (options.method === "HEAD") {
+        return {
+          ok: true,
+          status: 200,
+          headers: {
+            get: (name) => (String(name).toLowerCase() === "content-length" ? String(gribBytes.length) : null),
+          },
+        };
+      }
+      assert.equal(options.headers?.Range, "bytes=0-3", "the selected record is fetched by byte range");
+      return {
+        status: 206,
+        headers: { get: (name) => (String(name).toLowerCase() === "content-range" ? "bytes 0-3/4" : null) },
+        arrayBuffer: async () =>
+          gribBytes.buffer.slice(gribBytes.byteOffset, gribBytes.byteOffset + gribBytes.byteLength),
+      };
+    };
+    const first = await warmFrameSounding(task, {
+      rawCacheDir,
+      wgrib2Path,
+      rangeFetchLimiter: {
+        async run(operation) {
+          firstLimiterCalls += 1;
+          return operation();
+        },
+      },
+    });
+    assert.equal(first.status, "warmed", first.error);
+    assert.equal(first.bytes, gribBytes.length);
+    assert.equal(firstFetchCalls, 3, "idx, content-length, and one selected byte range were fetched");
+    assert.equal(firstLimiterCalls, 1, "the AsyncSemaphore-style limiter wraps the range fetch");
+
+    // Exercise the on-disk idx/content-length caches rather than relying on their
+    // process-local promise memoization for the second warm.
+    clearNoaaIndexCachesForTest();
+    let fetchCalls = 0;
+    global.fetch = async (...fetchArgs) => {
+      fetchCalls += 1;
+      throw new Error(`unexpected network fetch during cached warm: ${fetchArgs[0]}`);
+    };
     const second = await warmFrameSounding(task, {
       rawCacheDir,
-      wgrib2Path: WGRIB2_PATH,
-      rangeFetchLimiter: throwingLimiter,
+      wgrib2Path,
+      rangeFetchLimiter: {
+        run() {
+          throw new Error("unexpected range fetch during cached warm");
+        },
+      },
     });
     assert.equal(second.status, "alreadyCached", "cached frame reports alreadyCached");
     assert.equal(fetchCalls, 0, "no network fetch on a cached frame");
   } finally {
     global.fetch = originalFetch;
+    clearNoaaIndexCachesForTest();
   }
 });
 
@@ -194,4 +270,21 @@ test("parseRunsMode preserves run-id case (lowercased ids fail point-sounding ru
   assert.deepEqual(parseRunsMode("20260703-2100Z"), { runsMode: "list", runIds: ["20260703-2100Z"] });
   assert.deepEqual(parseRunsMode("LATEST"), { runsMode: "latest", runIds: null });
   assert.deepEqual(parseRunsMode("20260703-2100Z,20260703-1800Z").runIds, ["20260703-2100Z", "20260703-1800Z"]);
+});
+
+test("parseHoursArg throws on invalid tokens instead of warming every loaded hour", () => {
+  const { parseHoursArg } = require("../scripts/prefetch-point-soundings");
+  // null (= warm all hours) stays the meaning of an omitted flag only.
+  assert.equal(parseHoursArg(undefined), null);
+  assert.equal(parseHoursArg(null), null);
+  assert.equal(parseHoursArg(""), null);
+  assert.deepEqual(parseHoursArg("6,0,3"), [6, 0, 3]);
+  // Empty tokens (trailing/doubled commas) are ignored, not turned into F000.
+  assert.deepEqual(parseHoursArg("3,,6,"), [3, 6]);
+  // A provided-but-invalid flag must not collapse into the all-hours plan.
+  assert.throws(() => parseHoursArg("abc"), /Invalid forecast hour 'abc' in --hours/);
+  assert.throws(() => parseHoursArg("3,-1"), /Invalid forecast hour '-1' in --hours/);
+  assert.throws(() => parseHoursArg("1.5"), /Invalid forecast hour '1\.5' in --hours/);
+  assert.throws(() => parseHoursArg(",,"), /--hours was provided but names no forecast hours/);
+  assert.throws(() => parseHoursArg(true), /--hours requires a value/);
 });

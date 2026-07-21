@@ -2,14 +2,35 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { RenderJobEntry } from "../components/RenderMenu";
 import { MODEL_CONFIG } from "../config/constants";
 import { effectiveRunForModel, type RenderSelection } from "../config/render";
-import { JobStatusError, fetchJobStatus, postPrefetchSoundingsAction, postRenderAction } from "../core/actions-client";
+import {
+  JobStatusError,
+  fetchJobStatus,
+  postCancelJob,
+  postPrefetchSoundingsAction,
+  postRenderAction,
+} from "../core/actions-client";
 import { fetchModelManifestWithOptions, fetchModelRunsWithOptions } from "../core/artifact-client";
+import { pushToast } from "../core/toasts";
 import type { ModelKey, ViewKey } from "../types";
 
 const JOB_POLL_MS = 2_000;
 
 function modelLabels(models: ModelKey[]): string {
   return models.map((model) => MODEL_CONFIG[model]?.label || model).join(" + ");
+}
+
+// Terminal-outcome notification. Errors are sticky (toast store default) so a
+// failure that lands while the Render popover is closed cannot slip by.
+function toastJobOutcome(tracked: TrackedJob, status: { status: string; error?: string | null }): void {
+  const what = tracked.kind === "prefetch" ? "Sounding prefetch" : "Render";
+  const which = tracked.label || modelLabels(tracked.models);
+  if (status.status === "done") {
+    pushToast({ tone: "success", title: `${what} complete`, detail: which });
+  } else if (status.status === "canceled") {
+    pushToast({ tone: "info", title: `${what} canceled`, detail: which });
+  } else if (status.status === "failed") {
+    pushToast({ tone: "error", title: `${what} failed`, detail: status.error || which });
+  }
 }
 
 type JobKind = "render" | "prefetch";
@@ -29,6 +50,8 @@ interface RenderActions {
   jobs: RenderJobEntry[];
   submitRender: () => void;
   prefetchSoundings: () => void;
+  cancelJob: (jobId: string) => void;
+  dismissJob: (jobId: string) => void;
   canSubmit: boolean;
 }
 
@@ -78,8 +101,9 @@ export function useRenderActions(selection: RenderSelection): RenderActions {
                 entry.jobId === tracked.jobId ? { ...entry, ...status, label: entry.label } : entry,
               ),
             );
-            if (status.status === "done" || status.status === "failed") {
+            if (status.status === "done" || status.status === "failed" || status.status === "canceled") {
               tracked.terminal = true;
+              toastJobOutcome(tracked, status);
               // Render jobs write artifacts; force fresh runs + manifests so the
               // panels pick them up immediately. Prefetch jobs warm the sounding
               // byte-range cache only (served live), so no manifest refresh.
@@ -98,13 +122,15 @@ export function useRenderActions(selection: RenderSelection): RenderActions {
             // true forever and the panel's buttons never re-enable.
             if (error instanceof JobStatusError && error.status === 404 && !cancelled) {
               tracked.terminal = true;
+              const vanished = "Job no longer exists on the server (was it restarted?).";
+              toastJobOutcome(tracked, { status: "failed", error: vanished });
               setJobs((prev) =>
                 prev.map((entry) =>
                   entry.jobId === tracked.jobId
                     ? {
                         ...entry,
                         status: "failed",
-                        error: "Job no longer exists on the server (was it restarted?).",
+                        error: vanished,
                       }
                     : entry,
                 ),
@@ -172,11 +198,17 @@ export function useRenderActions(selection: RenderSelection): RenderActions {
       } catch (error) {
         trackedRef.current = [];
         setBusy(false);
+        const message = String(error instanceof Error ? error.message : error);
+        pushToast({
+          tone: "error",
+          title: kind === "prefetch" ? "Sounding prefetch failed to start" : "Render failed to start",
+          detail: message,
+        });
         setJobs([
           {
             ...pendingEntry("failed", ""),
             status: "failed",
-            error: String(error instanceof Error ? error.message : error),
+            error: message,
           },
         ]);
       }
@@ -239,5 +271,27 @@ export function useRenderActions(selection: RenderSelection): RenderActions {
     });
   }, [busy, startJobs]);
 
-  return { jobs, submitRender, prefetchSoundings, canSubmit: !busy };
+  // Fire-and-forget: the 2 s poller observes the resulting queued->canceled /
+  // running->canceled transition and settles the row + busy state.
+  const cancelJob = useCallback((jobId: string) => {
+    void postCancelJob(jobId).catch((error) => {
+      pushToast({
+        tone: "error",
+        title: "Cancel failed",
+        detail: String(error instanceof Error ? error.message : error),
+      });
+    });
+  }, []);
+
+  // Only terminal rows are dismissible; an active row must stay visible so its
+  // outcome (and the busy latch) cannot be silently orphaned.
+  const dismissJob = useCallback((jobId: string) => {
+    const tracked = trackedRef.current.find((job) => job.jobId === jobId);
+    if (tracked && !tracked.terminal) {
+      return;
+    }
+    setJobs((prev) => prev.filter((entry) => entry.jobId !== jobId));
+  }, []);
+
+  return { jobs, submitRender, prefetchSoundings, cancelJob, dismissJob, canSubmit: !busy };
 }

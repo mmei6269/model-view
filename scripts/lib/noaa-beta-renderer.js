@@ -15,19 +15,28 @@ const {
   renderHeightContourArtifacts,
   renderSynopticArtifacts,
 } = require("./synoptic-render");
-const { HOVER_GRID_SCHEMA_VERSION, SYNOPTIC_STYLE_VERSION, VIEW_CONFIG } = require("./modelview-runtime");
 const {
+  DETAILED_SYNOPTIC_STYLE,
+  DETAILED_SYNOPTIC_STYLE_VERSION,
+  HOVER_GRID_SCHEMA_VERSION,
+  SYNOPTIC_STYLE_VERSION,
+  VIEW_CONFIG,
+} = require("./modelview-runtime");
+const {
+  CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY,
+  EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY,
   NOAA_NAM_PARAMETER_CATALOG,
   SCALES: NOAA_RENDER_SCALES,
   getNoaaNamParameterMetadata,
   getNoaaNamParameterOrder,
+  normalizeSciencePrototypeIds,
+  resolveNoaaNamParameterCatalog,
 } = require("./noaa-nam-parameter-catalog");
 const {
   calculatePointDcapeJkg,
   buildNoaaPointSounding,
   buildPointSoundingAnalysisRows,
   buildPointSoundingIndices,
-  buildPointSoundingParcelDiagnostics,
   calculateLiftedIndexForPointSoundingSource,
   calculatePointScp,
 } = require("./noaa-beta/point-sounding");
@@ -60,6 +69,7 @@ const {
   shouldIncludeGrid,
   smoothSnowfallPresentationGrid,
   snowfallDerivedGridKey,
+  snowfallEntryHasAvailableData,
   sumSnowfallGrids,
   transformGridAffine,
   warmFreezingRainAccumulationRunPlanner,
@@ -69,6 +79,7 @@ const {
   buildKucheraProfileSources,
   buildPletcherRfFeatures,
   buildWesternLinearFeatures,
+  calculateCobbLayerSlr,
   calculateCobbSlr,
   calculateCobbSlrFromSources,
   calculateKucheraRatio,
@@ -77,6 +88,15 @@ const {
   predictLinearSlr,
   predictRandomForest,
 } = require("./noaa-beta/slr-methods");
+const {
+  buildSelectedParameterAvailability,
+  hasColocatedFiniteGridData,
+  hasFiniteGridData,
+  hasGrid,
+  renderedLayerHasValidData,
+  setParameterAvailability,
+} = require("./noaa-beta/parameter-availability");
+const { SOURCE_PROVENANCE_SCHEMA_VERSION, buildFrameSourceProvenance } = require("./noaa-beta/source-provenance");
 const {
   buildPrecipAccumulationGrids,
   buildRunMaxAccumulationGrids,
@@ -114,11 +134,15 @@ const {
   clearNoaaIndexCachesForTest,
   decodeSelectedRecordsToGrids,
   ensureWgrib2Available,
+  getFrameSourceProvenanceSources,
+  getFrameTemporalProvenanceDerivations,
   getSelectedRecordPlan,
   materializeSelectedGrib,
   parseNoaaIdx,
   parseWgribSimpleInventory,
   readOrFetchNoaaContentLengthCached,
+  readOrFetchNoaaIdxRecordsCached,
+  resolveMainDecodeRegridPayloadHash,
   readOrFetchNoaaIdxTextCached,
   repairNoaaIdxFinalRecordRanges,
   selectedGribRecordsHash,
@@ -129,6 +153,10 @@ const {
   attachRunLocalDecodeSession,
   buildNoaaIndexCacheContext,
 } = require("./noaa-beta/grib-source");
+const {
+  resolveForecastHourCompletionIdentity,
+  resolveForecastHourRosterIdentity,
+} = require("./noaa-beta/forecast-hour-roster");
 const {
   NOAA_BETA_MODEL_CONFIG,
   NOAA_BETA_MODEL_KEYS,
@@ -150,31 +178,45 @@ const {
   buildReflectivityPrecipTypeLookups,
   createContinuousColorLookup,
   encodeLayerOrEmpty,
+  encodeLayerOrEmptyDeferred,
   encodeRawPng,
   findReflectivityPrecipTypeColorOffset,
   findStepColorOffset,
   getCatalogRenderOptions,
   interpolateStops,
+  maskPressureLevelGridBelowTerrain,
+  releaseFrameLocalRasterCaches,
   renderCatalogParameterLayer,
   renderPrecipRateTypeGrid,
   renderReflectivityPrecipTypeGrid,
   renderReflectivityVariants,
   renderScalarGrid,
+  resolveCatalogPressureLevelMb,
   resolveCatalogSourceGrid,
   COLOR_MAPS,
 } = require("./noaa-beta/raster");
 const { parseAccumulationHours, parseAccumulationWindow } = require("./noaa-beta/records");
 const {
   calculateReducedProfileDcapeFromSources,
+  DERIVED_PROFILE_METHODOLOGY_VERSION,
   EFFECTIVE_PARCEL_SOURCE_STEP_HPA,
-  buildParcelBuoyancySamples,
+  PROFILE_DERIVED_AVAILABILITY_KEYS,
   buildProfileDerivedGrids,
   buildSurfaceThermoDerivedGrids,
   calculateEffectiveLayerBunkersMotionFromRows,
+  calculateEffectiveLayerScpValue,
   calculateParcelCapeCinForSource,
   calculatePressureStepParcelCapeCinForSource,
   isEffectiveLayerCellActive,
 } = require("./noaa-beta/severe");
+const {
+  buildDerivedGridCacheContext,
+  readDerivedGridCache,
+  scheduleDerivedGridCacheWrite,
+} = require("./noaa-beta/derived-grid-cache");
+const { activeParcelKernelId } = require("./noaa-beta/parcel-kernel");
+const { buildProfileDerivedGridsParallel } = require("./noaa-beta/derived-parallel");
+const { createCompressor, getSharedCompressPool, resolveCompressThreads } = require("./noaa-beta/compress-pool");
 const { profileDecodeKey, standardProfileDecodeKey } = require("./noaa-beta/profile-access");
 const {
   logPressureInterpolationFraction,
@@ -183,13 +225,12 @@ const {
   interpolateProfilePressureRows,
   interpolateProfileWindAtPressureRows,
   interpolateProfileThermoAtPressureRows,
-  calculateMeanWindByPressureFromRows,
   calculateBunkersMotionFromRows,
 } = require("./noaa-beta/profile-wind");
 const { remapSouthNorthLinearLatGridToMercatorRows, buildGridDistributionStats } = require("./noaa-beta/grid-ops");
 const { createTransparentPng } = require("./noaa-beta/png-encode");
 const { RD_OVER_CP, boltonThetaE, wetBulbTemperatureC, wetBulbTemperatureCAtPressure } = require("./noaa-beta/thermo");
-const { MPS_TO_KT, MPS_TO_MPH, MM_TO_IN, clamp } = require("./noaa-beta/util");
+const { MPS_TO_KT, MPS_TO_MPH, MM_TO_IN, clamp, incrementProfileCounter } = require("./noaa-beta/util");
 
 const EARTH_OMEGA_RAD_S = 7.2921e-5;
 const EARTH_RADIUS_M = 6371000;
@@ -198,50 +239,7 @@ const LEGACY_REFLECTIVITY_LAYER_KEY = "reflectivity";
 const REFLECTIVITY_PRECIP_TYPE_LAYER_KEY = "reflectivity1kmPrecipType";
 const SYNOPTIC_DETAILED_MAX_COLS = 360;
 const SYNOPTIC_DETAILED_MAX_ROWS = 224;
-
-async function renderNoaaNamAwphysFrame({
-  modelKey = "nam",
-  latestMetadata,
-  framePlan,
-  viewKey = "conus",
-  renderWidth,
-  renderHeight,
-  reflectivityGates = [10, 15, 20],
-  noaaBaseUrl = NOAA_NAM_BASE_URL,
-  wgrib2Path = DEFAULT_WGRIB2_PATH,
-  rawCacheDir = null,
-  tempRoot = os.tmpdir(),
-  pngCompressionLevel = 1,
-  pngFilterType = 0,
-  rangeFetchConcurrency = 8,
-  rangeFetchLimiter = null,
-  decodeConcurrency = 1,
-  hoverGridFormat = latestMetadata?.hoverGridFormat || "binary",
-  renderMode,
-  renderSelection = null,
-}) {
-  return renderNoaaGribFrame({
-    modelKey,
-    latestMetadata,
-    framePlan,
-    viewKey,
-    renderWidth,
-    renderHeight,
-    reflectivityGates,
-    noaaBaseUrl,
-    wgrib2Path,
-    rawCacheDir,
-    tempRoot,
-    pngCompressionLevel,
-    pngFilterType,
-    rangeFetchConcurrency,
-    rangeFetchLimiter,
-    decodeConcurrency,
-    hoverGridFormat,
-    renderMode,
-    renderSelection,
-  });
-}
+const REALIZED_PRECIP_ACCUMULATION_KEYS = Symbol("realizedPrecipAccumulationKeys");
 
 function catalogCategorySet(catalog) {
   const set = new Set();
@@ -270,6 +268,8 @@ async function renderNoaaGribFrame({
   rangeFetchConcurrency = 8,
   rangeFetchLimiter = null,
   decodeConcurrency = 1,
+  derivedCellConcurrency = 1,
+  compressThreads = 1,
   hoverGridFormat = latestMetadata?.hoverGridFormat || "binary",
   renderMode = "all",
   renderSelection = null,
@@ -283,6 +283,12 @@ async function renderNoaaGribFrame({
   const date = String(noaa.date || "").trim();
   const cycle = String(noaa.cycle || "").padStart(2, "0");
   const resolvedBaseUrl = noaaBaseUrl || noaa.baseUrl || modelConfig.baseUrl;
+  const forecastHourRosterIdentity = resolveForecastHourRosterIdentity(latestMetadata, {
+    modelKey: resolvedModelKey,
+  });
+  const forecastHourCompletionIdentity = resolveForecastHourCompletionIdentity(latestMetadata, {
+    modelKey: resolvedModelKey,
+  });
   const hour = Number(framePlan?.hour);
   if (!/^\d{8}$/.test(date) || !/^\d{2}$/.test(cycle) || !Number.isFinite(hour)) {
     throw new Error(`NOAA ${modelConfig.label} beta render is missing date, cycle, or forecast hour metadata.`);
@@ -307,6 +313,8 @@ async function renderNoaaGribFrame({
     baseUrl: resolvedBaseUrl,
     date,
     cycle,
+    forecastHourRosterIdentity,
+    forecastHourCompletionIdentity,
   });
   const indexCacheContext = buildNoaaIndexCacheContext({
     modelKey: resolvedModelKey,
@@ -314,13 +322,16 @@ async function renderNoaaGribFrame({
     cycle,
     rawCacheDir,
   });
-  const selectedCatalog = filterCatalogForRenderMode(NOAA_NAM_PARAMETER_CATALOG, renderMode, renderSelection);
+  const selectedCatalog = filterCatalogForRenderMode(
+    resolveNoaaNamParameterCatalog(renderSelection),
+    renderMode,
+    renderSelection,
+  );
   const selectedCategories = catalogCategorySet(selectedCatalog);
   let stageStartedAt = performance.now();
-  const indexText = await readOrFetchNoaaIdxTextCached(`${gribUrl}.idx`, indexCacheContext, hour, renderProfile);
+  const records = await readOrFetchNoaaIdxRecordsCached(`${gribUrl}.idx`, indexCacheContext, hour, renderProfile);
   recordProfileStage(renderProfile, "indexMs", stageStartedAt);
   stageStartedAt = performance.now();
-  const records = parseNoaaIdx(indexText, null);
   const selection = selectNoaaNamParameterRecords(records, {
     catalog: selectedCatalog,
     modelKey: resolvedModelKey,
@@ -342,6 +353,8 @@ async function renderNoaaGribFrame({
       renderMode === "snow-prefix" ||
       renderMode === "runmax-prefix";
     let decoded = {};
+    let mainGribPath = null;
+    let mainRegridBinPayloadHashes = null;
     if (!precomputeOnlyRender) {
       stageStartedAt = performance.now();
       await ensureSelectedRecordByteRangesForHour({
@@ -378,7 +391,9 @@ async function renderNoaaGribFrame({
         decodeSession,
       });
       recordProfileStage(renderProfile, "materializeMs", stageStartedAt);
-      stageStartedAt = performance.now();
+      // Collect the regrid-bin payload hashes of exactly the frame's main
+      // decode; they pin the decoded grids for the derived-grid cache key.
+      decodeSession.collectRegridBinPayloadHashes = [];
       decoded = await decodeSelectedRecordsToGrids({
         gribPath,
         selectedPlan,
@@ -393,35 +408,57 @@ async function renderNoaaGribFrame({
         profile: renderProfile,
         decodeSession,
       });
-    }
-    stageStartedAt = performance.now();
-    if (!precomputeOnlyRender) {
-      Object.assign(
-        decoded,
-        await buildPrecipAccumulationGrids({
-          modelKey: resolvedModelKey,
-          modelConfig,
-          baseUrl: noaaBaseUrl || noaa.baseUrl || modelConfig.baseUrl,
-          date,
-          cycle,
-          targetHour: hour,
-          currentRecords: records,
-          latestMetadata,
-          rawCacheDir,
-          tempDir,
+      mainGribPath = gribPath;
+      mainRegridBinPayloadHashes = decodeSession.collectRegridBinPayloadHashes;
+      decodeSession.collectRegridBinPayloadHashes = null;
+      if (mainRegridBinPayloadHashes.length === 0 && decodeSession.lastRecordCacheAllBulkDecoded === true) {
+        // The decode was served entirely from bulk-seeded run-local registry
+        // entries; rebuild the regrid-bin payload hash the bulk path would
+        // have recorded so the derived-grid cache still engages on warm
+        // in-process paths.
+        const reconstructed = await resolveMainDecodeRegridPayloadHash({
+          gribPath,
           wgrib2Path,
           bounds: view.bounds,
           width,
           height,
-          rangeFetchConcurrency,
-          rangeFetchLimiter,
-          decodeConcurrency,
-          decoded,
-          selection,
-          profile: renderProfile,
           decodeSession,
-        }),
-      );
+        });
+        if (reconstructed) {
+          mainRegridBinPayloadHashes = [reconstructed];
+        }
+      }
+    }
+    // The "decodeMs" stage recorded from this reset spans the grid-construction
+    // phase that follows the main decode (precip accumulation, winter, and
+    // derived grids); the main GRIB decode itself is profiled only by its
+    // sub-stages (wgribRegridMs, wgribExportMs, binaryReadMs, gridMapMs).
+    stageStartedAt = performance.now();
+    if (!precomputeOnlyRender) {
+      const precipAccumulationGrids = await buildPrecipAccumulationGrids({
+        modelKey: resolvedModelKey,
+        modelConfig,
+        baseUrl: noaaBaseUrl || noaa.baseUrl || modelConfig.baseUrl,
+        date,
+        cycle,
+        targetHour: hour,
+        currentRecords: records,
+        latestMetadata,
+        rawCacheDir,
+        tempDir,
+        wgrib2Path,
+        bounds: view.bounds,
+        width,
+        height,
+        rangeFetchConcurrency,
+        rangeFetchLimiter,
+        decodeConcurrency,
+        decoded,
+        selection,
+        profile: renderProfile,
+        decodeSession,
+      });
+      applyRealizedPrecipAccumulationGrids(decoded, precipAccumulationGrids);
       Object.assign(
         decoded,
         await buildRunMaxAccumulationGrids({
@@ -614,6 +651,53 @@ async function renderNoaaGribFrame({
       );
     }
     if (!precomputeOnlyRender) {
+      // Derived-grid disk cache: the profile-derived severe products are a
+      // pure function of the main decode (pinned by its regrid-bin payload
+      // hashes), the methodology/catalog versions, and the requested
+      // product set. A hit restores the exact Float32 bytes the compute
+      // path would produce; anything else recomputes and persists.
+      const availableForDerived = new Set(selection?.availableParameters || []);
+      const derivedProducts = PROFILE_DERIVED_AVAILABILITY_KEYS.filter((key) => availableForDerived.has(key));
+      const derivedCacheContext =
+        mainGribPath &&
+        Array.isArray(mainRegridBinPayloadHashes) &&
+        mainRegridBinPayloadHashes.length > 0 &&
+        mainRegridBinPayloadHashes.every(Boolean)
+          ? buildDerivedGridCacheContext({
+              gribPath: mainGribPath,
+              regridBinPayloadHashes: mainRegridBinPayloadHashes,
+              methodologyVersion: `${DERIVED_PROFILE_METHODOLOGY_VERSION}+parcel-${activeParcelKernelId()}`,
+              catalogVersion: CATALOG_VERSION,
+              products: derivedProducts,
+              cellCount: width * height,
+            })
+          : null;
+      let precomputedProfileDerived = null;
+      if (derivedCacheContext) {
+        precomputedProfileDerived = await readDerivedGridCache(derivedCacheContext);
+        incrementProfileCounter(
+          renderProfile,
+          precomputedProfileDerived ? "derivedGridCacheHits" : "derivedGridCacheMisses",
+        );
+      }
+      let parallelProfileDerived = null;
+      if (!precomputedProfileDerived && derivedCellConcurrency > 1 && derivedProducts.length > 0) {
+        const derivedStartedAt = performance.now();
+        parallelProfileDerived = await computeParallelProfileDerived({
+          decoded,
+          availableParameters: selection?.availableParameters || [],
+          cellCount: width * height,
+          concurrency: derivedCellConcurrency,
+        });
+        if (parallelProfileDerived) {
+          precomputedProfileDerived = parallelProfileDerived.outputs;
+          renderProfile.effectiveDiagnosticsCandidateCount = parallelProfileDerived.candidateCount;
+          renderProfile.derivedParallelChunks = parallelProfileDerived.chunkCount;
+          renderProfile.derivedParallelWorkers = parallelProfileDerived.workerCount;
+          recordProfileStage(renderProfile, "derivedGridParallelMs", derivedStartedAt);
+        }
+      }
+      const profileDerivedCapture = derivedCacheContext && !precomputedProfileDerived ? {} : null;
       Object.assign(
         decoded,
         buildDerivedParameterGrids({
@@ -624,12 +708,35 @@ async function renderNoaaGribFrame({
           width,
           height,
           profile: renderProfile,
+          precomputedProfileDerived,
+          profileDerivedCapture,
         }),
       );
+      const derivedGridsToPersist =
+        profileDerivedCapture?.grids ||
+        (parallelProfileDerived && derivedCacheContext ? parallelProfileDerived.outputs : null);
+      if (derivedGridsToPersist && Object.keys(derivedGridsToPersist).length > 0 && derivedCacheContext) {
+        // tmp+rename makes the write safe to overlap with the rest of the
+        // frame, and it only feeds future builds, so it stays off the frame
+        // hot path. Frame workers drain all scheduled writes before reporting
+        // completion, so pool shutdown cannot strand a temporary file.
+        void scheduleDerivedGridCacheWrite(derivedCacheContext, derivedGridsToPersist);
+      }
     }
     recordProfileStage(renderProfile, "decodeMs", stageStartedAt);
 
     stageStartedAt = performance.now();
+    // Compression pool: PNG deflate + hover gzip run on helper threads and
+    // overlap the raster/quantize work; a dead/absent pool degrades per call
+    // to the identical inline codec. Snow/prefix parts keep inline encodes
+    // (few small layers; not worth the round trip). Layer encodes submit the
+    // shared png-encode scanline scratch (released right after the synchronous
+    // submit clone) via layerEncodeContext; hover keeps the plain compressor.
+    const compressCounters = { jobs: 0, fallbacks: 0 };
+    const compressEnabled = resolveCompressThreads(compressThreads) > 0;
+    const compressPool = compressEnabled ? getSharedCompressPool(compressThreads) : null;
+    const compress = compressEnabled ? createCompressor(compressPool, compressCounters) : null;
+    const layerEncodeContext = compressEnabled ? { pool: compressPool, counters: compressCounters } : null;
     const renderedArtifacts =
       renderMode === "snow-delta" || renderMode === "snow-prefix" || renderMode === "runmax-prefix"
         ? buildSnowDeltaRenderedArtifacts({ framePlan })
@@ -660,10 +767,41 @@ async function renderNoaaGribFrame({
               pngFilterType,
               hoverGridFormat,
               profile: renderProfile,
+              sciencePrototypes: normalizeSciencePrototypeIds(renderSelection),
+              compress,
+              layerEncodeContext,
             });
+    if (renderedArtifacts.pendingEncodes) {
+      // Only the codec time the pool could not hide behind the render work
+      // above; the scanline/pack passes already ran on this thread.
+      const compressWaitStartedAt = performance.now();
+      await Promise.all(renderedArtifacts.pendingEncodes);
+      recordProfileStage(renderProfile, "compressWaitMs", compressWaitStartedAt);
+    }
+    delete renderedArtifacts.pendingEncodes;
+    if (compress) {
+      renderProfile.compressPoolJobs = compressCounters.jobs;
+      renderProfile.compressPoolFallbacks = compressCounters.fallbacks;
+    }
     recordProfileStage(renderProfile, "artifactsMs", stageStartedAt);
-    recordProfileStage(renderProfile, "totalMs", totalStartedAt);
+    const sourceProvenance = buildFrameSourceProvenance({
+      gribUrl,
+      idxUrl: `${gribUrl}.idx`,
+      selection,
+      bounds: view.bounds,
+      width,
+      height,
+      renderMode,
+      toolRef: latestMetadata?.sourceProvenanceCatalog?.tools?.[0]?.id || null,
+      sourceInputs: getFrameSourceProvenanceSources(decodeSession),
+      temporalDerivations: getFrameTemporalProvenanceDerivations(decodeSession),
+      parameterAvailability: renderedArtifacts.parameterAvailability,
+    });
+    renderedArtifacts.sourceProvenance = sourceProvenance;
     renderedArtifacts.renderProfile = finalizeNoaaRenderProfile(renderProfile);
+    // Recorded on the finalized profile so the provenance/finalize tail above
+    // lands inside totalMs instead of in no stage at all.
+    recordProfileStage(renderedArtifacts.renderProfile, "totalMs", totalStartedAt);
     return renderedArtifacts;
   } finally {
     await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
@@ -683,6 +821,9 @@ function buildRenderedArtifacts({
   pngFilterType,
   hoverGridFormat = "binary",
   profile = null,
+  sciencePrototypes = [],
+  compress = null,
+  layerEncodeContext = null,
 }) {
   let stageStartedAt = performance.now();
   const temperatureF = transformGridAffine(decoded.temperature2m, 9 / 5, -459.67);
@@ -694,78 +835,124 @@ function buildRenderedArtifacts({
       entry,
       decoded,
       cache: windSpeedGridCache,
+      width,
+      height,
     });
   const getHeightDamGrid = (entry) =>
     resolveCachedHeightDamGrid({
       entry,
       decoded,
       cache: heightDamGridCache,
+      width,
+      height,
     });
-  const precipAccumulationIn = buildPrecipAccumulationInGrids(decoded);
-  const precipIn = precipAccumulationIn.precip || transformGridAffine(decoded.precip, MM_TO_IN, 0, 0);
+  const precipAccumulationFiniteCounts = new Map();
+  const precipAccumulationIn = buildPrecipAccumulationInGrids(decoded, precipAccumulationFiniteCounts);
+  const precipIn = precipAccumulationIn.precip || null;
   const snowfallIn = buildSnowfallInGrids({ decoded, selection, bounds, modelKey, width, height });
   const reflectivityCompositeDbz = decoded.reflectivityComposite || decoded.reflectivity || null;
   const reflectivity1kmDbz = decoded.reflectivity1km || null;
-  const pressureHpa = transformGridAffine(decoded.pressureMsl, 0.01);
+  const pressureHpaStats = { finiteCount: 0 };
+  const pressureHpa = transformGridAffine(decoded.pressureMsl, 0.01, 0, null, pressureHpaStats);
   const height500 = decoded.height500 || null;
   const height1000 = decoded.height1000 || null;
-  const thicknessDam = buildThicknessGrid(height500, height1000);
+  const thicknessStats = { finiteCount: 0 };
+  const thicknessDam = buildThicknessGrid(height500, height1000, thicknessStats);
   const emptyPng = createTransparentPng(width, height, pngCompressionLevel, pngFilterType);
   const layers = {};
+  const parameterAvailability = buildSelectedParameterAvailability(selection);
+  for (const entry of selection?.catalog || []) {
+    if (entry?.kind === "precipAccumulation") {
+      // The hasFiniteGridData inclusion scan is folded into
+      // buildPrecipAccumulationInGrids: its transformGridAffine tallied
+      // Number.isFinite on the stored f32 value of every cell — the removed
+      // scan's exact predicate — and nothing between the build above and
+      // this loop writes into those grids (only fresh arrays are allocated
+      // in between). hasGrid keeps the O(1) length gate the scan did first.
+      const values = precipAccumulationIn[entry.key];
+      setParameterAvailability(
+        parameterAvailability,
+        entry.key,
+        hasGrid(values, width, height) && (precipAccumulationFiniteCounts.get(entry.key) || 0) > 0,
+      );
+    }
+  }
   const hoverValueCounts = new Map();
+  // PNG deflate and hover gzip are deterministic pure functions of
+  // (bytes, level); the compression pool runs them on helper threads so they
+  // overlap the remaining raster/quantize work instead of serializing after
+  // it. `compress` serves the hover artifact (null = inline sync codecs, the
+  // exact pre-pool behavior); layer PNGs go through `layerEncodeContext`
+  // ({pool, counters} or null), which builds each layer's scanlines in the
+  // shared png-encode scratch slot and releases it right after the pool's
+  // synchronous submit clone. Deferred descriptors resolve when the caller
+  // awaits the returned pendingEncodes, before anything reads them.
+  const pendingEncodes = [];
+  const deferLayerEncode = (layer) => {
+    const { descriptor, pending } = encodeLayerOrEmptyDeferred(
+      layer,
+      emptyPng,
+      width,
+      height,
+      pngCompressionLevel,
+      pngFilterType,
+      layerEncodeContext,
+    );
+    if (pending) {
+      pendingEncodes.push(pending);
+    }
+    return descriptor;
+  };
   const encodeTrackedLayer = (key, layer) => {
     recordHoverValueCount(hoverValueCounts, key, layer);
-    return encodeLayerOrEmpty(layer, emptyPng, width, height, pngCompressionLevel, pngFilterType);
+    return deferLayerEncode(layer);
   };
   const contourVectors = {};
   const availableParameters = new Set(selection?.availableParameters || []);
-  const isEntryAvailable = (entry) => availableParameters.size === 0 || availableParameters.has(entry.key);
+  const hasExplicitAvailableParameters = Array.isArray(selection?.availableParameters);
+  const isEntryAvailable = (entry) => !hasExplicitAvailableParameters || availableParameters.has(entry.key);
   recordProfileStage(profile, "artifactPrepMs", stageStartedAt);
 
   stageStartedAt = performance.now();
-  layers.temperature = encodeTrackedLayer(
-    "temperature",
-    renderScalarGrid({
-      values: temperatureF,
-      width,
-      height,
-      ...CORE_LAYER_RENDER_OPTIONS.temperature,
-    }),
-  );
+  const temperatureLayer = renderScalarGrid({
+    values: temperatureF,
+    width,
+    height,
+    ...CORE_LAYER_RENDER_OPTIONS.temperature,
+  });
+  setParameterAvailability(parameterAvailability, "temperature", renderedLayerHasValidData(temperatureLayer));
+  layers.temperature = encodeTrackedLayer("temperature", temperatureLayer);
 
-  layers.wind = encodeTrackedLayer(
-    "wind",
-    renderScalarGrid({
-      values: windMph,
-      width,
-      height,
-      ...CORE_LAYER_RENDER_OPTIONS.wind,
-    }),
-  );
+  const windLayer = renderScalarGrid({
+    values: windMph,
+    width,
+    height,
+    ...CORE_LAYER_RENDER_OPTIONS.wind,
+  });
+  setParameterAvailability(parameterAvailability, "wind", renderedLayerHasValidData(windLayer));
+  layers.wind = encodeTrackedLayer("wind", windLayer);
 
-  layers.precip = encodeTrackedLayer(
-    "precip",
-    renderScalarGrid({
-      values: precipIn,
-      width,
-      height,
-      ...CORE_LAYER_RENDER_OPTIONS.precip,
-    }),
-  );
+  const precipLayer = renderScalarGrid({
+    values: precipIn,
+    width,
+    height,
+    ...CORE_LAYER_RENDER_OPTIONS.precip,
+  });
+  setParameterAvailability(parameterAvailability, "precip", renderedLayerHasValidData(precipLayer));
+  layers.precip = encodeTrackedLayer("precip", precipLayer);
 
   for (const [layerKey, values] of Object.entries(precipAccumulationIn)) {
     if (layerKey === "precip") {
       continue;
     }
-    layers[layerKey] = encodeTrackedLayer(
-      layerKey,
-      renderScalarGrid({
-        values,
-        width,
-        height,
-        ...CORE_LAYER_RENDER_OPTIONS.precip,
-      }),
-    );
+    const layer = renderScalarGrid({
+      values,
+      width,
+      height,
+      ...CORE_LAYER_RENDER_OPTIONS.precip,
+    });
+    setParameterAvailability(parameterAvailability, layerKey, renderedLayerHasValidData(layer));
+    layers[layerKey] = encodeTrackedLayer(layerKey, layer);
   }
 
   const reflectivityVariantsByLayer = {};
@@ -777,10 +964,19 @@ function buildRenderedArtifacts({
     emptyPng,
     pngCompressionLevel,
     pngFilterType,
+    encodeLayer: deferLayerEncode,
   });
   reflectivityVariantsByLayer.reflectivityComposite = reflectivityVariants;
   layers.reflectivityComposite = pickDefaultReflectivityArtifact(reflectivityVariants) || encodeRawPng(emptyPng);
   layers.reflectivity = layers.reflectivityComposite;
+  // One inclusion scan serves both keys: hasFiniteGridData is a pure read of
+  // the grid, the reflectivity renders above only read values, and the sole
+  // statement between the two uses is setParameterAvailability (which writes
+  // solely to parameterAvailability), so a second scan would recompute the
+  // identical result.
+  const reflectivityCompositeAvailable = hasFiniteGridData(reflectivityCompositeDbz, width, height);
+  setParameterAvailability(parameterAvailability, "reflectivityComposite", reflectivityCompositeAvailable);
+  setParameterAvailability(parameterAvailability, "reflectivity", reflectivityCompositeAvailable);
 
   if (reflectivity1kmDbz) {
     const reflectivity1kmVariants = renderReflectivityVariants({
@@ -791,12 +987,30 @@ function buildRenderedArtifacts({
       emptyPng,
       pngCompressionLevel,
       pngFilterType,
+      encodeLayer: deferLayerEncode,
     });
     reflectivityVariantsByLayer.reflectivity1km = reflectivity1kmVariants;
     layers.reflectivity1km = pickDefaultReflectivityArtifact(reflectivity1kmVariants) || encodeRawPng(emptyPng);
   }
+  setParameterAvailability(
+    parameterAvailability,
+    "reflectivity1km",
+    hasFiniteGridData(reflectivity1kmDbz, width, height),
+  );
   if (selection.availableParameters?.includes(REFLECTIVITY_PRECIP_TYPE_LAYER_KEY)) {
-    layers[REFLECTIVITY_PRECIP_TYPE_LAYER_KEY] = encodeLayerOrEmpty(
+    const precipTypeAvailable = hasColocatedFiniteGridData(
+      [
+        reflectivity1kmDbz,
+        decoded.precipTypeRain,
+        decoded.precipTypeSnow,
+        decoded.precipTypeFreezingRain,
+        decoded.precipTypeIcePellets,
+      ],
+      width,
+      height,
+    );
+    setParameterAvailability(parameterAvailability, REFLECTIVITY_PRECIP_TYPE_LAYER_KEY, precipTypeAvailable);
+    layers[REFLECTIVITY_PRECIP_TYPE_LAYER_KEY] = deferLayerEncode(
       renderReflectivityPrecipTypeGrid({
         reflectivityDbz: reflectivity1kmDbz,
         rain: decoded.precipTypeRain,
@@ -806,11 +1020,6 @@ function buildRenderedArtifacts({
         width,
         height,
       }),
-      emptyPng,
-      width,
-      height,
-      pngCompressionLevel,
-      pngFilterType,
     );
   }
   recordProfileStage(profile, "corePngMs", stageStartedAt);
@@ -827,6 +1036,18 @@ function buildRenderedArtifacts({
       continue;
     }
     if (entry.kind === "precipRateType") {
+      const precipRateTypeAvailable = hasColocatedFiniteGridData(
+        [
+          decoded?.[entry.rateKey],
+          decoded?.[entry.precipTypeKeys?.rain],
+          decoded?.[entry.precipTypeKeys?.snow],
+          decoded?.[entry.precipTypeKeys?.freezingRain],
+          decoded?.[entry.precipTypeKeys?.sleet],
+        ],
+        width,
+        height,
+      );
+      setParameterAvailability(parameterAvailability, entry.key, precipRateTypeAvailable);
       const layer = renderPrecipRateTypeGrid({
         precipRate: decoded?.[entry.rateKey],
         rain: decoded?.[entry.precipTypeKeys?.rain],
@@ -837,12 +1058,17 @@ function buildRenderedArtifacts({
         height,
       });
       if (layer) {
-        layers[entry.key] = encodeLayerOrEmpty(layer, emptyPng, width, height, pngCompressionLevel, pngFilterType);
+        layers[entry.key] = deferLayerEncode(layer);
       }
       continue;
     }
     if (entry.kind === "snowfallDerived" || entry.kind === "snowfallDirect") {
-      const values = snowfallIn[entry.key];
+      const values = smoothSnowfallPresentationGrid(snowfallIn[entry.key], { modelKey, width, height });
+      setParameterAvailability(
+        parameterAvailability,
+        entry.key,
+        snowfallEntryHasAvailableData({ entry, decoded, values, width, height }),
+      );
       if (values) {
         layers[entry.key] = encodeTrackedLayer(
           entry.key,
@@ -857,7 +1083,20 @@ function buildRenderedArtifacts({
       continue;
     }
     if (entry.kind === "heightContour") {
-      const values = getHeightDamGrid(entry);
+      const heightDam = getHeightDamGrid(entry);
+      const values = heightDam?.values || null;
+      // The hasFiniteGridData inclusion scan is folded into
+      // resolveCachedHeightDamGrid: its transformGridAffine tallied
+      // Number.isFinite on the stored f32 value of every cell of this very
+      // grid — the removed scan's exact predicate — and the grid is only
+      // read (never written) between build and here, including on cache hits
+      // (renderHeightContourLayer below wraps or resamples into fresh
+      // arrays). hasGrid keeps the O(1) length gate the scan did first.
+      setParameterAvailability(
+        parameterAvailability,
+        entry.key,
+        hasGrid(values, width, height) && (heightDam?.finiteCount || 0) > 0,
+      );
       const contourLayer = renderHeightContourLayer({
         entry,
         values,
@@ -868,28 +1107,31 @@ function buildRenderedArtifacts({
       });
       if (contourLayer) {
         contourVectors[entry.key] = contourLayer.vector;
-        layers[entry.key] = encodeLayerOrEmpty(
-          contourLayer,
-          emptyPng,
-          width,
-          height,
-          pngCompressionLevel,
-          pngFilterType,
-        );
+        layers[entry.key] = deferLayerEncode(contourLayer);
       }
       continue;
     }
     const layer = renderCatalogParameterLayer({
       entry,
       decoded,
-      selection,
+      modelKey,
       width,
       height,
       getWindSpeedGrid,
     });
     if (!layer) {
+      if (entry.key === "cloudCeiling" && hasConclusiveNoCloudCeilingEvidence(decoded.cloudCover, width, height)) {
+        setParameterAvailability(parameterAvailability, entry.key, true);
+      } else {
+        setParameterAvailability(parameterAvailability, entry.key, false);
+      }
       continue;
     }
+    const layerAvailable =
+      entry.key === "cloudCeiling"
+        ? renderedLayerHasValidData(layer) || hasConclusiveNoCloudCeilingEvidence(decoded.cloudCover, width, height)
+        : renderedLayerHasValidData(layer);
+    setParameterAvailability(parameterAvailability, entry.key, layerAvailable);
     layers[entry.key] = encodeTrackedLayer(entry.key, layer);
   }
   recordProfileStage(profile, "catalogPngMs", stageStartedAt);
@@ -897,8 +1139,14 @@ function buildRenderedArtifacts({
   stageStartedAt = performance.now();
   const detailedPressurePayload = buildSynopticDetailGridPayload(pressureHpa, width, height);
   const detailedThicknessPayload = buildSynopticDetailGridPayload(thicknessDam, width, height);
+  // The simple pass owns the one canonical H/L analysis, now run on its own
+  // bounded ~50 km grid and refined against display-resolution MSLP. The
+  // detailed pass renders contours only; its center roster is synchronized
+  // below so the density toggle cannot change the meteorological analysis.
+  const displayPressurePayload = gridPayload(pressureHpa, width, height);
+  const centerValidationMode = sciencePrototypes.includes("rowAwareCenterValidation") ? "row-aware-diagnostic" : "off";
   const synopticSimple = renderSynopticArtifacts({
-    pressureGrid: gridPayload(pressureHpa, width, height),
+    pressureGrid: displayPressurePayload,
     thicknessGrid: gridPayload(thicknessDam, width, height),
     targetBounds: bounds,
     width,
@@ -906,39 +1154,59 @@ function buildRenderedArtifacts({
     modelKey,
     detailMode: "simple",
     style: SYNOPTIC_STYLE,
+    centerValidationMode,
   });
-  let synopticDetailed = renderSynopticArtifacts({
+  // The simple raster doubles as the fallback gate: when it paints nothing,
+  // the detailed artifacts supply the PNG layer instead. Render the detailed
+  // pass exactly once — vectors only when the simple image survives, vectors
+  // plus raster when the fallback needs them — so the empty-simple case no
+  // longer repeats the whole detailed contour pipeline. The gate predicate is
+  // unchanged (visibleCount > 0 on the same simple render), and drawImage
+  // gates raster painting only, so the detailed vector payload is identical
+  // either way.
+  const simpleHasSynopticImage = synopticSimple.visibleCount > 0;
+  const synopticDetailed = renderSynopticArtifacts({
     pressureGrid: detailedPressurePayload,
     thicknessGrid: detailedThicknessPayload,
+    refinementPressureGrid: displayPressurePayload,
     targetBounds: bounds,
     width,
     height,
     modelKey,
     detailMode: "detailed",
-    style: SYNOPTIC_STYLE,
-    drawImage: false,
+    style: DETAILED_SYNOPTIC_STYLE,
+    drawImage: !simpleHasSynopticImage,
+    detectCenters: false,
+    centerValidationMode,
   });
-  let synopticImage = synopticSimple.visibleCount > 0 ? synopticSimple : null;
-  if (!synopticImage) {
-    synopticDetailed = renderSynopticArtifacts({
-      pressureGrid: detailedPressurePayload,
-      thicknessGrid: detailedThicknessPayload,
-      targetBounds: bounds,
-      width,
-      height,
-      modelKey,
-      detailMode: "detailed",
-      style: SYNOPTIC_STYLE,
-    });
-    synopticImage = synopticDetailed;
-  }
-  layers.synoptic = encodeLayerOrEmpty(synopticImage, emptyPng, width, height, pngCompressionLevel, pngFilterType);
+  const synopticImage = simpleHasSynopticImage ? synopticSimple : synopticDetailed;
+  // Detail mode changes contour density only. Use the bounded physical-scale
+  // analysis as the single H/L roster for both vector payloads and the frame
+  // manifest so toggling detail cannot make pressure centers pop or change.
+  const canonicalSynopticCenters = synchronizeSynopticArtifactCenters(synopticSimple.centers, [
+    synopticSimple,
+    synopticDetailed,
+  ]);
+  // The hasFiniteGridData inclusion scans are folded into the builders: both
+  // tallied Number.isFinite on the stored f32 value of every cell — the
+  // removed scans' exact predicate — and every consumer between the builds
+  // and this point only reads the grids (the synoptic payloads wrap them or
+  // resample into fresh arrays; the synoptic renders never write into their
+  // inputs), so the tallies still describe the grids at this point. hasGrid
+  // keeps the O(1) length gate the scans did first.
+  const synopticIsobarsAvailable = hasGrid(pressureHpa, width, height) && pressureHpaStats.finiteCount > 0;
+  const synopticThicknessAvailable = hasGrid(thicknessDam, width, height) && thicknessStats.finiteCount > 0;
+  setParameterAvailability(parameterAvailability, "synopticIsobars", synopticIsobarsAvailable);
+  setParameterAvailability(parameterAvailability, "synopticThickness", synopticThicknessAvailable);
+  setParameterAvailability(parameterAvailability, "synoptic", synopticIsobarsAvailable || synopticThicknessAvailable);
+  layers.synoptic = deferLayerEncode(synopticImage);
   recordProfileStage(profile, "synopticMs", stageStartedAt);
 
   stageStartedAt = performance.now();
   const hoverVariables = buildHoverGridVariables({
     decoded,
     selection,
+    modelKey,
     temperatureF,
     windMph,
     precipIn,
@@ -957,16 +1225,26 @@ function buildRenderedArtifacts({
     height,
     variables: hoverVariables,
     format: hoverGridFormat,
+    compress,
   });
+  if (hoverGrid?.pending) {
+    pendingEncodes.push(hoverGrid.pending);
+  }
+  if (profile && hoverGrid?.diagnostics) {
+    profile.hoverQuantization = hoverGrid.diagnostics;
+  }
   recordProfileStage(profile, "hoverGridMs", stageStartedAt);
+  // The hover pass is the last consumer of the shared masked-grid copies.
+  releaseFrameLocalRasterCaches(decoded);
 
   return {
+    pendingEncodes: pendingEncodes.length > 0 ? pendingEncodes : null,
     hour: Number(framePlan.hour),
     validHourKey: String(framePlan.validTime),
-    synopticCenters: synopticImage.centers || { highs: [], lows: [] },
+    synopticCenters: canonicalSynopticCenters,
     synopticVectors: {
       simple: synopticSimple.vector || createEmptySynopticVectorPayload(),
-      detailed: synopticDetailed.vector || createEmptySynopticVectorPayload(),
+      detailed: synopticDetailed.vector || createEmptySynopticVectorPayload(DETAILED_SYNOPTIC_STYLE_VERSION),
     },
     pressureUploadMeta: {
       source: pressureHpa ? "om-grid" : "none",
@@ -981,13 +1259,14 @@ function buildRenderedArtifacts({
     reflectivityVariants,
     reflectivityVariantsByLayer,
     contourVectors,
+    parameterAvailability,
     layers,
   };
 }
 
 /*
- * The code below is shared by snowfall today and by future profile-derived
- * diagnostics such as DCAPE, effective shear, and terrain-aware lapse rates.
+ * The code below is shared by snowfall and by the profile-derived
+ * diagnostics: DCAPE, effective shear, and terrain-aware lapse rates.
  */
 
 function buildIntervalSnowfallGrid({
@@ -1104,19 +1383,60 @@ function buildWindSpeedGrid(uValues, vValues, multiplier = MPS_TO_KT) {
   return out;
 }
 
-function buildPrecipAccumulationInGrids(decoded) {
+function buildPrecipAccumulationInGrids(decoded, finiteCounts = null) {
   const out = {};
+  const realizedKeys = decoded?.[REALIZED_PRECIP_ACCUMULATION_KEYS];
   for (const entry of getPrecipAccumulationEntries()) {
+    if (realizedKeys instanceof Set && !realizedKeys.has(entry.key)) {
+      continue;
+    }
     const values = decoded?.[entry.key];
     if (!values) {
       continue;
     }
-    out[entry.key] = transformGridAffine(values, MM_TO_IN, 0, 0);
+    const stats = finiteCounts ? { finiteCount: 0 } : null;
+    out[entry.key] = transformGridAffine(values, MM_TO_IN, 0, 0, stats);
+    if (stats) {
+      finiteCounts.set(entry.key, stats.finiteCount);
+    }
   }
   return out;
 }
 
-function buildDerivedParameterGrids({ decoded, selection, bounds, width, height, profile = null }) {
+function applyRealizedPrecipAccumulationGrids(decoded, grids) {
+  if (!decoded || typeof decoded !== "object") {
+    return decoded;
+  }
+  const realized = grids && typeof grids === "object" ? grids : {};
+  decoded[REALIZED_PRECIP_ACCUMULATION_KEYS] = new Set(Object.keys(realized));
+  Object.assign(decoded, realized);
+  return decoded;
+}
+
+function hasConclusiveNoCloudCeilingEvidence(cloudCover, width, height) {
+  const expected = Math.max(0, Math.round(Number(width) * Number(height)));
+  if (!cloudCover || expected <= 0 || Number(cloudCover.length) !== expected) {
+    return false;
+  }
+  for (let index = 0; index < expected; index += 1) {
+    const value = Number(cloudCover[index]);
+    if (!Number.isFinite(value) || value >= 50) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildDerivedParameterGrids({
+  decoded,
+  selection,
+  bounds,
+  width,
+  height,
+  profile = null,
+  precomputedProfileDerived = null,
+  profileDerivedCapture = null,
+}) {
   const startedAt = performance.now();
   const out = {};
   const cellCount = Math.round(Number(width) * Number(height));
@@ -1143,26 +1463,80 @@ function buildDerivedParameterGrids({ decoded, selection, bounds, width, height,
     addGrid(key, builder(), options);
   };
 
+  // Per-frame geometry tables (backlog #17): the two relative-vorticity
+  // builders share one Coriolis table and the two frontogenesis builders
+  // share one finite-difference spacing table; previously each product
+  // rebuilt an identical table. bounds/width/height are fixed for the frame
+  // and the builders are pure functions of them, so a shared table holds the
+  // same doubles each builder would have computed for itself. Tables are
+  // built lazily on first use so unselected products still cost nothing, and
+  // the row-count expressions below replicate the consumers' own formulas
+  // exactly (buildRelativeVorticityGrid clamps with Math.max(1, ...),
+  // buildFrontogenesisGrid does not) so the hoisted inputs are identical.
+  let frameCoriolisByRow = null;
+  const sharedCoriolisByRow = () => {
+    if (!frameCoriolisByRow) {
+      frameCoriolisByRow = buildCoriolisByRow(bounds, Math.max(1, Math.round(Number(height) || 1)));
+    }
+    return frameCoriolisByRow;
+  };
+  let frameSpacingRows;
+  const sharedSpacingRows = () => {
+    if (frameSpacingRows === undefined) {
+      frameSpacingRows = buildFiniteDifferenceSpacingRows(
+        bounds,
+        Math.round(Number(width)),
+        Math.round(Number(height)),
+      );
+    }
+    return frameSpacingRows;
+  };
+
   addComputedGrid("relativeVorticity700", () =>
-    buildRelativeVorticityGrid(decoded.absoluteVorticity700, bounds, width, height),
+    buildRelativeVorticityGrid(
+      maskPressureLevelGridBelowTerrain(decoded.absoluteVorticity700, decoded, 700, width, height),
+      bounds,
+      width,
+      height,
+      sharedCoriolisByRow(),
+    ),
   );
   addComputedGrid("relativeVorticity500", () =>
-    buildRelativeVorticityGrid(decoded.absoluteVorticity500, bounds, width, height),
+    buildRelativeVorticityGrid(
+      maskPressureLevelGridBelowTerrain(decoded.absoluteVorticity500, decoded, 500, width, height),
+      bounds,
+      width,
+      height,
+      sharedCoriolisByRow(),
+    ),
   );
   addComputedGrid("lapseRate700to500", () =>
-    buildLayerLapseRateGrid(decoded.temp700, decoded.temp500, decoded.height700, decoded.height500),
+    buildLayerLapseRateGrid(
+      decoded.temp700,
+      decoded.temp500,
+      decoded.height700,
+      decoded.height500,
+      decoded.profileSurfaceHeight,
+    ),
   );
 
   const surfaceThermo = buildSurfaceThermoDerivedGrids(decoded, available, cellCount);
   addGrid("surfaceBasedLclHeight", surfaceThermo.surfaceBasedLclHeight, { visibleThreshold: 0 });
   addGrid("surfaceThetaE", surfaceThermo.surfaceThetaE);
 
-  const profileDerived = buildProfileDerivedGrids(decoded, available, cellCount, profile);
+  const profileDerived = precomputedProfileDerived || buildProfileDerivedGrids(decoded, available, cellCount, profile);
+  if (profileDerivedCapture && !precomputedProfileDerived) {
+    profileDerivedCapture.grids = profileDerived;
+  }
   addGrid("lapseRate0to3km", profileDerived.lapseRate0to3km);
   addGrid("bulkShear0to6km", profileDerived.bulkShear0to6km, { visibleThreshold: 9.99 });
   addGrid("effectiveBulkShear", profileDerived.effectiveBulkShear, { visibleThreshold: 9.99 });
-  addComputedGrid("frontogenesis850", () => buildFrontogenesisGrid(decoded, 850, bounds, width, height));
-  addComputedGrid("frontogenesis700", () => buildFrontogenesisGrid(decoded, 700, bounds, width, height));
+  addComputedGrid("frontogenesis850", () =>
+    buildFrontogenesisGrid(decoded, 850, bounds, width, height, sharedSpacingRows()),
+  );
+  addComputedGrid("frontogenesis700", () =>
+    buildFrontogenesisGrid(decoded, 700, bounds, width, height, sharedSpacingRows()),
+  );
 
   const freezingRainLiquid =
     decoded?.[FREEZING_RAIN_LIQUID_TOTAL_KEY]?.length === cellCount
@@ -1212,43 +1586,49 @@ function buildDerivedParameterGrids({ decoded, selection, bounds, width, height,
   );
   addComputedGrid(
     "effectiveLayerSupercellCompositeParameter",
-    () =>
-      profileDerived.effectiveLayerSupercellCompositeParameter ||
-      buildEffectiveLayerScpGrid(decoded, profileDerived.effectiveLayerDiagnostics, cellCount),
+    () => profileDerived.effectiveLayerSupercellCompositeParameter,
     {
       visibleThreshold: 0.099,
     },
   );
   addComputedGrid(
     "effectiveLayerSignificantTornadoParameter",
-    () =>
-      profileDerived.effectiveLayerSignificantTornadoParameter ||
-      buildEffectiveLayerStpGrid(decoded, profileDerived.effectiveLayerDiagnostics, cellCount),
+    () => profileDerived.effectiveLayerSignificantTornadoParameter,
     {
       visibleThreshold: 0.099,
     },
   );
+  addGrid(EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY, profileDerived[EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY], {
+    visibleThreshold: 0.099,
+  });
   const dcape = profileDerived.dcape;
   addGrid("dcape", dcape, { visibleThreshold: 99.9 });
+  const dcape21LevelCam = profileDerived[CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY];
+  addGrid(CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY, dcape21LevelCam, { visibleThreshold: 99.9 });
   if (profile && dcape) {
     profile.dcapeStats = buildGridDistributionStats(dcape, { clampMax: 2500 });
+  }
+  if (profile && dcape21LevelCam) {
+    profile.dcape21LevelCamPrototypeStats = buildGridDistributionStats(dcape21LevelCam, { clampMax: 2500 });
   }
 
   recordProfileStage(profile, "derivedGridMs", startedAt);
   return out;
 }
 
-function buildRelativeVorticityGrid(absoluteVorticity, bounds, width, height) {
+function buildRelativeVorticityGrid(absoluteVorticity, bounds, width, height, coriolisByRow = null) {
   if (!absoluteVorticity) {
     return null;
   }
   const cols = Math.max(1, Math.round(Number(width) || 1));
   const rows = Math.max(1, Math.round(Number(height) || 1));
   const cellCount = cols * rows;
-  const coriolisByRow = buildCoriolisByRow(bounds, rows);
+  // Reuse the caller's per-frame table when hoisted (same inputs to a pure
+  // builder, so the same doubles); compute our own otherwise.
+  const coriolisTable = coriolisByRow || buildCoriolisByRow(bounds, rows);
   const out = new Float32Array(cellCount).fill(Number.NaN);
   for (let y = 0; y < rows; y += 1) {
-    const coriolis = coriolisByRow[y];
+    const coriolis = coriolisTable[y];
     if (!Number.isFinite(coriolis)) {
       continue;
     }
@@ -1276,7 +1656,7 @@ function buildCoriolisByRow(bounds, rows) {
   return out;
 }
 
-function buildLayerLapseRateGrid(lowerTempK, upperTempK, lowerHeightM, upperHeightM) {
+function buildLayerLapseRateGrid(lowerTempK, upperTempK, lowerHeightM, upperHeightM, surfaceHeightM = null) {
   if (!lowerTempK || !upperTempK || !lowerHeightM || !upperHeightM) {
     return null;
   }
@@ -1287,8 +1667,15 @@ function buildLayerLapseRateGrid(lowerTempK, upperTempK, lowerHeightM, upperHeig
     const upperT = Number(upperTempK[index]);
     const lowerZ = Number(lowerHeightM[index]);
     const upperZ = Number(upperHeightM[index]);
+    const terrainZ = Number(surfaceHeightM?.[index]);
     const depthKm = (upperZ - lowerZ) / 1000;
-    if (!Number.isFinite(lowerT) || !Number.isFinite(upperT) || !Number.isFinite(depthKm) || depthKm <= 0.05) {
+    if (
+      !Number.isFinite(lowerT) ||
+      !Number.isFinite(upperT) ||
+      !Number.isFinite(depthKm) ||
+      depthKm <= 0.05 ||
+      (Number.isFinite(terrainZ) && (lowerZ <= terrainZ || upperZ <= terrainZ))
+    ) {
       continue;
     }
     out[index] = (lowerT - upperT) / depthKm;
@@ -1296,10 +1683,10 @@ function buildLayerLapseRateGrid(lowerTempK, upperTempK, lowerHeightM, upperHeig
   return out;
 }
 
-function buildFrontogenesisGrid(decoded, level, bounds, width, height) {
-  const temp = decoded?.[`temp${level}`];
-  const u = decoded?.[`wind${level}U`];
-  const v = decoded?.[`wind${level}V`];
+function buildFrontogenesisGrid(decoded, level, bounds, width, height, spacingRows = null) {
+  const temp = maskPressureLevelGridBelowTerrain(decoded?.[`temp${level}`], decoded, level, width, height);
+  const u = maskPressureLevelGridBelowTerrain(decoded?.[`wind${level}U`], decoded, level, width, height);
+  const v = maskPressureLevelGridBelowTerrain(decoded?.[`wind${level}V`], decoded, level, width, height);
   if (!temp || !u || !v || width < 3 || height < 3) {
     return null;
   }
@@ -1316,18 +1703,23 @@ function buildFrontogenesisGrid(decoded, level, bounds, width, height) {
   }
 
   const out = new Float32Array(cellCount).fill(Number.NaN);
-  const spacingRows = buildFiniteDifferenceSpacingRows(bounds, cols, rows);
-  if (!spacingRows) {
+  // Reuse the caller's per-frame spacing table when hoisted (same inputs to
+  // a pure builder, so the same doubles); compute our own otherwise.
+  const spacing = spacingRows || buildFiniteDifferenceSpacingRows(bounds, cols, rows);
+  if (!spacing) {
     return out;
   }
   for (let y = 1; y < rows - 1; y += 1) {
-    const dx2 = spacingRows.dx2[y];
-    const dy2 = spacingRows.dy2[y];
+    const dx2 = spacing.dx2[y];
+    const dy2 = spacing.dy2[y];
     if (!Number.isFinite(dx2) || !Number.isFinite(dy2)) {
       continue;
     }
     for (let x = 1; x < cols - 1; x += 1) {
       const index = y * cols + x;
+      if (!Number.isFinite(theta[index]) || !Number.isFinite(u[index]) || !Number.isFinite(v[index])) {
+        continue;
+      }
       const dThetaDx = centralDiffX(theta, x, y, cols, dx2);
       const dThetaDy = centralDiffY(theta, x, y, cols, dy2);
       const dUdx = centralDiffX(u, x, y, cols, dx2);
@@ -1364,14 +1756,28 @@ function buildFiniteDifferenceSpacingRows(bounds, cols, rows) {
     return null;
   }
   const lonStepRad = Math.abs(((east - west) * Math.PI) / 180 / Math.max(1, cols - 1));
+  // Row latitudes are needed at y-1, y, and y+1 of every interior row, so a
+  // direct implementation calls the Mercator row projection three times per
+  // row with overlapping arguments. Tabulate it once instead: rowToLatMercator
+  // is pure in (row, rows, bounds), so latByRow[i] is exactly the double the
+  // corresponding call would have returned, and every consumer below reads
+  // the same values as before. Every entry is written by this loop (the
+  // projection itself yields NaN for degenerate inputs), so the table needs
+  // no NaN prefill.
+  const latByRow = new Float64Array(Math.max(0, rows));
+  for (let y = 0; y < rows; y += 1) {
+    latByRow[y] = rowToLatMercator(y, rows, bounds);
+  }
   const dx2 = new Float64Array(Math.max(0, rows));
   const dy2 = new Float64Array(Math.max(0, rows));
+  // Rows 0 and rows-1 (and any row with a non-finite latitude) are never
+  // assigned below, so the NaN prefill is load-bearing here.
   dx2.fill(Number.NaN);
   dy2.fill(Number.NaN);
   for (let y = 1; y < rows - 1; y += 1) {
-    const centerLat = rowToLatMercator(y, rows, bounds);
-    const northLat = rowToLatMercator(y - 1, rows, bounds);
-    const southLat = rowToLatMercator(y + 1, rows, bounds);
+    const centerLat = latByRow[y];
+    const northLat = latByRow[y - 1];
+    const southLat = latByRow[y + 1];
     if (!Number.isFinite(centerLat) || !Number.isFinite(northLat) || !Number.isFinite(southLat)) {
       continue;
     }
@@ -1404,7 +1810,9 @@ function buildRunMaxCurrentGrid(values, multiplier, cellCount) {
   if (!values) {
     return null;
   }
-  const out = new Float32Array(cellCount).fill(Number.NaN);
+  // Every cell is assigned in the loop below (non-finite inputs get an
+  // explicit NaN), so the NaN prefill was redundant.
+  const out = new Float32Array(cellCount);
   for (let index = 0; index < cellCount; index += 1) {
     const value = Number(values[index]);
     out[index] = Number.isFinite(value) ? Math.max(0, value * multiplier) : Number.NaN;
@@ -1455,11 +1863,15 @@ function buildStpGrid(decoded, lclM, bulkShear0to6km, cellCount) {
   return out;
 }
 
-function buildEffectiveLayerScpGrid(decoded, effectiveDiagnostics, cellCount) {
-  const mucape = decoded?.mucape || effectiveDiagnostics?.muCapeJkg;
+function buildEffectiveLayerScpGrid(_decoded, effectiveDiagnostics, cellCount) {
+  // Use the internally parcel-scanned MU CAPE/CIN pair. A separately decoded
+  // model MUCAPE field does not guarantee that its most-unstable parcel is the
+  // parcel whose CIN was retained by this diagnostic scan.
+  const mucape = effectiveDiagnostics?.muCapeJkg;
+  const mucin = effectiveDiagnostics?.muCinJkg;
   const esrh = effectiveDiagnostics?.esrh;
   const ebwdKt = effectiveDiagnostics?.ebwdKt;
-  if (!mucape || !esrh || !ebwdKt) {
+  if (!mucape || !mucin || !esrh || !ebwdKt) {
     return null;
   }
   const out = new Float32Array(cellCount).fill(Number.NaN);
@@ -1468,7 +1880,9 @@ function buildEffectiveLayerScpGrid(decoded, effectiveDiagnostics, cellCount) {
     const srhTerm = Math.max(0, Number(esrh[index])) / 50;
     const ebwdMs = Math.max(0, Number(ebwdKt[index])) / MPS_TO_KT;
     const shearTerm = ebwdMs < 10 ? 0 : clamp(ebwdMs / 20, 0, 1);
-    const scp = capeTerm * srhTerm * shearTerm;
+    const cin = Number(mucin[index]);
+    const cinTerm = cin > -40 ? 1 : clamp(-40 / cin, 0, 1);
+    const scp = capeTerm * srhTerm * shearTerm * cinTerm;
     if (Number.isFinite(scp)) {
       out[index] = Math.max(0, scp);
     }
@@ -1643,22 +2057,31 @@ function addWesternLinearSnowfallToAccumulator({ out, decoded, snowLiquidIn, act
   return true;
 }
 
-function buildThicknessGrid(height500, height1000) {
+function buildThicknessGrid(height500, height1000, stats = null) {
   if (!height500 || !height1000 || height500.length !== height1000.length) {
     return null;
   }
   // Every cell is assigned in the loop below, so the NaN prefill was
   // redundant.
   const out = new Float32Array(height500.length);
+  let finiteCount = 0;
   for (let index = 0; index < out.length; index += 1) {
     const z500 = Number(height500[index]);
     const z1000 = Number(height1000[index]);
     out[index] = z500 === z500 && z1000 === z1000 ? (z500 - z1000) / 10 : Number.NaN;
+    // Read back from the stored f32 cell so the tally matches an independent
+    // Number.isFinite scan of the returned grid on every input.
+    if (stats && Number.isFinite(out[index])) {
+      finiteCount += 1;
+    }
+  }
+  if (stats) {
+    stats.finiteCount = finiteCount;
   }
   return out;
 }
 
-function resolveCachedWindSpeedGrid({ entry, decoded, cache }) {
+function resolveCachedWindSpeedGrid({ entry, decoded, cache, width, height }) {
   const key = entry?.key;
   if (!key) {
     return null;
@@ -1666,16 +2089,17 @@ function resolveCachedWindSpeedGrid({ entry, decoded, cache }) {
   if (cache?.has(key)) {
     return cache.get(key);
   }
-  const values = buildWindSpeedGrid(
+  const speed = buildWindSpeedGrid(
     decoded?.[entry.uKey],
     decoded?.[entry.vKey],
     entry.transform === "windMph" ? MPS_TO_MPH : MPS_TO_KT,
   );
+  const values = maskPressureLevelGridBelowTerrain(speed, decoded, resolveCatalogPressureLevelMb(entry), width, height);
   cache?.set(key, values);
   return values;
 }
 
-function resolveCachedHeightDamGrid({ entry, decoded, cache }) {
+function resolveCachedHeightDamGrid({ entry, decoded, cache, width, height }) {
   const key = entry?.key;
   if (!key) {
     return null;
@@ -1684,24 +2108,35 @@ function resolveCachedHeightDamGrid({ entry, decoded, cache }) {
     return cache.get(key);
   }
   const source = decoded?.[entry.inputKey];
-  const values = source ? transformGridAffine(source, 0.1) : null;
-  cache?.set(key, values);
-  return values;
+  const masked = maskPressureLevelGridBelowTerrain(source, decoded, entry.contourLevelMb, width, height);
+  // The transform already visits every cell, and its output is exactly the
+  // array returned and cached here, so its finite tally (taken on the stored
+  // f32 values) is the count a hasFiniteGridData scan of the returned grid
+  // would make; the caller can therefore skip that rescan.
+  const stats = { finiteCount: 0 };
+  const values = masked ? transformGridAffine(masked, 0.1, 0, null, stats) : null;
+  const resolved = { values, finiteCount: stats.finiteCount };
+  cache?.set(key, resolved);
+  return resolved;
 }
 
 function renderHeightContourLayer({ entry, values, bounds, modelKey, width, height }) {
   if (!entry || !values) {
     return null;
   }
+  // Height contours render from the same <=360x224 detailed-cap grid as
+  // MSLP-detailed (audit 2026-07-09, §6b): the 25x15-ish simple resample
+  // flattened real troughs. drawImage stays on — the caller encodes the PNG
+  // raster via encodeLayerOrEmpty alongside the vector.
   const rendered = renderHeightContourArtifacts({
-    heightGrid: gridPayload(values, width, height),
+    heightGrid: buildSynopticDetailGridPayload(values, width, height),
     targetBounds: bounds,
     width,
     height,
     modelKey,
     levelMb: entry.contourLevelMb,
     intervalDam: entry.contourIntervalDam,
-    detailMode: "simple",
+    detailMode: "detailed",
     style: SYNOPTIC_STYLE,
   });
   return rendered?.vector ? rendered : null;
@@ -1770,22 +2205,123 @@ function sampleGridBilinear(values, cols, x0, x1, y0, y1, tx, ty) {
   return top + (bottom - top) * ty;
 }
 
-function createEmptySynopticVectorPayload() {
+// Defensive fallback (renderSynopticArtifacts always returns a vector); the
+// stamp still tracks the mode so a fallback payload reads truthfully.
+function createEmptySynopticVectorPayload(styleVersion = SYNOPTIC_STYLE_VERSION) {
   return {
-    styleVersion: SYNOPTIC_STYLE_VERSION,
+    styleVersion,
     isobars: { lines: [], labels: [] },
     thickness: { lines: [], labels: [] },
     centers: { highs: [], lows: [] },
   };
 }
 
-function getNoaaGribRendererSignature() {
+function synchronizeSynopticArtifactCenters(canonicalCenters, artifacts) {
+  const centers = {
+    highs: Array.isArray(canonicalCenters?.highs) ? canonicalCenters.highs : [],
+    lows: Array.isArray(canonicalCenters?.lows) ? canonicalCenters.lows : [],
+  };
+  for (const artifact of artifacts || []) {
+    if (!artifact || typeof artifact !== "object") {
+      continue;
+    }
+    artifact.centers = centers;
+    if (artifact.vector && typeof artifact.vector === "object") {
+      artifact.vector.centers = centers;
+    }
+  }
+  return centers;
+}
+
+// Frame completion must track the resolved gate roster: the gates select
+// which dbz<gate> variant artifacts a frame writes, so rebuilding with
+// different gates must not reuse completion markers from a previous roster.
+// Ordering is normalized so equivalent spellings hash identically.
+function normalizeSignatureReflectivityGates(reflectivityGates) {
+  if (!Array.isArray(reflectivityGates) || reflectivityGates.length === 0) {
+    return null;
+  }
+  const gates = Array.from(
+    new Set(reflectivityGates.map((value) => Math.round(Number(value))).filter(Number.isFinite)),
+  ).sort((left, right) => left - right);
+  return gates.length > 0 ? gates : null;
+}
+
+// raster.js resolves paint behavior from these exact SCALES fields through
+// CATALOG_RENDER_OPTIONS (alpha, lookup routing and size, min/max, visible
+// bounds) and from entry transforms, but the legend-focused payload entries
+// below omit them — changing any of them moves paint bytes without moving
+// the signature. Digesting the fields from the same registries the paint
+// path reads keeps the two from drifting.
+function buildCatalogScaleSignaturePayload() {
+  const scaleKeys = Array.from(new Set(NOAA_NAM_PARAMETER_CATALOG.map((entry) => entry?.scale).filter(Boolean))).sort();
+  const scales = {};
+  for (const key of scaleKeys) {
+    const scale = NOAA_RENDER_SCALES[key] || {};
+    scales[key] = {
+      min: scale.min ?? null,
+      max: scale.max ?? null,
+      alpha: scale.alpha ?? null,
+      minVisible: scale.minVisible ?? null,
+      maxVisible: scale.maxVisible ?? null,
+      visibleRange: scale.visibleRange ?? null,
+      lookup: scale.lookup ?? null,
+      lookupSize: scale.lookupSize ?? null,
+      log: scale.log ?? null,
+      valueStops: scale.valueStops ?? null,
+    };
+  }
+  const entryTransforms = {};
+  for (const entry of NOAA_NAM_PARAMETER_CATALOG) {
+    if (entry?.transform && entry.transform !== "identity") {
+      entryTransforms[entry.key] = String(entry.transform);
+    }
+  }
+  return { scales, entryTransforms };
+}
+
+function getNoaaGribRendererSignature(
+  renderSelection = null,
+  { forecastHourRosterIdentity = null, wgrib2ToolRef = null, reflectivityGates = null } = {},
+) {
+  const sciencePrototypes = normalizeSciencePrototypeIds(renderSelection);
+  const gates = normalizeSignatureReflectivityGates(reflectivityGates);
   const payload = {
-    renderer: "noaa-grib2-beta-v40-true-1h-precip",
+    // MUST move whenever renderer OUTPUT changes — local-artifact-runtime
+    // treats a matching signature as frame-complete, so a stale version keeps
+    // stale artifacts on rebuild. v41: map-QA synoptic round (2 hPa detailed
+    // isobars, km-based center detection with locality/merit/edge fixes,
+    // detailed-grid height contours, simple-mode smoothing skip, model-capped
+    // refinement precision). v42 added explicit per-frame availability and
+    // realized-window precipitation semantics. v43 adds a bounded forensic
+    // source-provenance sidecar to render profiles and completion markers.
+    // v44 moves the canonical H/L analysis off the coarse simple-contour grid
+    // onto the bounded ~50 km physical-scale center grid.
+    // v45 records exact selected-source/temporal lineage and references one
+    // run-level versioned/SHA-256 wgrib2 identity (provenance schema v2).
+    // v46 binds completion to a stable sampling-tier identity for canonical
+    // prefixes, so appending future published hours does not rebuild common
+    // frames. Regular custom cadences get their own stable identity; irregular
+    // selections bind their exact roster instead. v47 additionally binds
+    // frame completion to the exact SHA-256 wgrib2 tool reference so an
+    // executable change cannot reuse markers whose toolRef belongs to an old
+    // run-level provenance catalog. v48 binds completion to the resolved
+    // reflectivity-gate roster and to the byte-affecting catalog scale fields
+    // (alpha, min/max, visible bounds, lookup routing and size, entry
+    // transforms), so a gates or scale-tuning change cannot reuse stale
+    // artifacts. v49 invalidates learned-snowfall output after making the
+    // accumulated trace-liquid visibility bound conservative at f32 edges.
+    renderer: "noaa-grib2-beta-v49-trace-liquid-bound",
+    ...(sciencePrototypes.length > 0 ? { sciencePrototypes } : {}),
+    ...(forecastHourRosterIdentity ? { forecastHourRosterIdentity: String(forecastHourRosterIdentity) } : {}),
+    ...(wgrib2ToolRef ? { wgrib2ToolRef: String(wgrib2ToolRef) } : {}),
+    ...(gates ? { reflectivityGates: gates } : {}),
+    parameterAvailabilitySchema: "explicit-available-unavailable-v1",
+    sourceProvenanceSchemaVersion: SOURCE_PROVENANCE_SCHEMA_VERSION,
     hoverGridFormat: "binary-full-resolution",
     hoverGridVariables: {
       mode: "catalog-parameter-keys",
-      parameterOrder: getNoaaNamParameterOrder(),
+      parameterOrder: getNoaaNamParameterOrder(renderSelection),
       support: ["pressureHpa"],
       quantization: "unit-v1",
     },
@@ -1842,8 +2378,9 @@ function getNoaaGribRendererSignature() {
         framIceIn: NOAA_RENDER_SCALES.framIceIn?.legendStops,
       },
     },
-    parameters: getNoaaNamParameterMetadata(),
-    parameterOrder: getNoaaNamParameterOrder(),
+    catalogScales: buildCatalogScaleSignaturePayload(),
+    parameters: getNoaaNamParameterMetadata(renderSelection),
+    parameterOrder: getNoaaNamParameterOrder(renderSelection),
     snowArtifacts: NOAA_NAM_PARAMETER_CATALOG.filter((entry) => entry.artifactRequired).map((entry) => ({
       key: entry.key,
       artifact: snowArtifactCacheIdentity(entry.artifactRequired),
@@ -1852,11 +2389,23 @@ function getNoaaGribRendererSignature() {
   return crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16);
 }
 
-function getNoaaNamRendererSignature() {
-  return getNoaaGribRendererSignature();
-}
-
 const SYNOPTIC_STYLE = loadSynopticStyle();
+// DETAILED_SYNOPTIC_STYLE (2 hPa minor / +mslp2 marker) is defined in
+// modelview-runtime — the single source shared with the manifest stamp.
+
+// Failure containment for the intra-frame parallel derived path. Correctness
+// invariant: parallelism is an optimization over the byte-identical serial
+// compute, so ANY parallel-path failure (sub-worker spawn pressure, crash
+// mid-job, merge mismatch) must degrade to serial by returning null — never
+// fail a frame that serial compute would render.
+async function computeParallelProfileDerived({ decoded, availableParameters, cellCount, concurrency }) {
+  try {
+    return await buildProfileDerivedGridsParallel({ decoded, availableParameters, cellCount, concurrency });
+  } catch (error) {
+    console.warn(`[noaa-beta] derived parallel path failed; using serial: ${String(error?.message || error)}`);
+    return null;
+  }
+}
 
 module.exports = {
   CURRENT_UI_SELECTORS,
@@ -1875,8 +2424,8 @@ module.exports = {
   getNoaaGribRendererSignature,
   getNoaaNamParameterMetadata,
   getNoaaNamParameterOrder,
-  getNoaaNamRendererSignature,
   _testBuildNoaaRegridArgs: buildNoaaRegridArgs,
+  _testComputeParallelProfileDerived: computeParallelProfileDerived,
   _testBuildNoaaIndexCacheContext: buildNoaaIndexCacheContext,
   _testClearNoaaIndexCaches: clearNoaaIndexCachesForTest,
   _testReadOrFetchNoaaContentLengthCached: readOrFetchNoaaContentLengthCached,
@@ -1892,7 +2441,11 @@ module.exports = {
   _testMarchingSquares: marchingSquares,
   _testMarchingSquaresMany: marchingSquaresMany,
   _testRenderHeightContourArtifacts: renderHeightContourArtifacts,
+  _testRenderHeightContourLayer: renderHeightContourLayer,
+  _testDetailedSynopticStyle: DETAILED_SYNOPTIC_STYLE,
+  _testSynchronizeSynopticArtifactCenters: synchronizeSynopticArtifactCenters,
   _testCalculateCobbSlr: calculateCobbSlr,
+  _testCalculateCobbLayerSlr: calculateCobbLayerSlr,
   _testCalculateKucheraRatio: calculateKucheraRatio,
   _testCalculateWarmestProfileTempC: calculateWarmestProfileTempC,
   _testLoadSnowRfModel: loadSnowRfModel,
@@ -1939,6 +2492,8 @@ module.exports = {
   _testBuildFrontogenesisGrid: buildFrontogenesisGrid,
   _testBuildFrontogenesisPresentationGrid: buildFrontogenesisPresentationGrid,
   _testBuildFiniteDifferenceSpacingRows: buildFiniteDifferenceSpacingRows,
+  _testBuildCoriolisByRow: buildCoriolisByRow,
+  _testBuildRunMaxCurrentGrid: buildRunMaxCurrentGrid,
   _testBuildScpGrid: buildScpGrid,
   _testBuildStpGrid: buildStpGrid,
   _testBuildEffectiveLayerScpGrid: buildEffectiveLayerScpGrid,
@@ -1946,8 +2501,8 @@ module.exports = {
   _testEffectiveParcelSourceStepHpa: EFFECTIVE_PARCEL_SOURCE_STEP_HPA,
   _testBuildPointSoundingIndices: buildPointSoundingIndices,
   _testBuildPointSoundingAnalysisRows: buildPointSoundingAnalysisRows,
-  _testBuildPointSoundingParcelDiagnostics: buildPointSoundingParcelDiagnostics,
   _testCalculateEffectiveLayerBunkersMotionFromRows: calculateEffectiveLayerBunkersMotionFromRows,
+  _testCalculateEffectiveLayerScpValue: calculateEffectiveLayerScpValue,
   _testCalculateBunkersMotionFromRows: calculateBunkersMotionFromRows,
   _testCalculateLiftedIndexForPointSoundingSource: calculateLiftedIndexForPointSoundingSource,
   _testWetBulbTemperatureC: wetBulbTemperatureC,
@@ -1957,16 +2512,21 @@ module.exports = {
   _testCalculatePointScp: calculatePointScp,
   _testCalculateParcelCapeCinForSource: calculateParcelCapeCinForSource,
   _testCalculatePressureStepParcelCapeCinForSource: calculatePressureStepParcelCapeCinForSource,
-  _testBuildParcelBuoyancySamples: buildParcelBuoyancySamples,
   _testLogPressureInterpolationFraction: logPressureInterpolationFraction,
   _testInterpolateProfileWindRows: interpolateProfileWindRows,
   _testInterpolateProfilePressureRows: interpolateProfilePressureRows,
   _testInterpolateProfileWindAtPressureRows: interpolateProfileWindAtPressureRows,
   _testInterpolateProfileThermoAtPressureRows: interpolateProfileThermoAtPressureRows,
   _testUpdateScratchPressureBrackets: updateScratchPressureBrackets,
-  _testCalculateMeanWindByPressureFromRows: calculateMeanWindByPressureFromRows,
   _testBuildGridDistributionStats: buildGridDistributionStats,
+  _testBuildRenderedArtifacts: buildRenderedArtifacts,
+  _testBuildPrecipAccumulationInGrids: buildPrecipAccumulationInGrids,
+  _testBuildThicknessGrid: buildThicknessGrid,
+  _testResolveCachedHeightDamGrid: resolveCachedHeightDamGrid,
+  _testApplyRealizedPrecipAccumulationGrids: applyRealizedPrecipAccumulationGrids,
+  _testHasConclusiveNoCloudCeilingEvidence: hasConclusiveNoCloudCeilingEvidence,
   _testResolveCatalogSourceGrid: resolveCatalogSourceGrid,
+  _testMaskPressureLevelGridBelowTerrain: maskPressureLevelGridBelowTerrain,
   _testFindReflectivityPrecipTypeColorOffset: findReflectivityPrecipTypeColorOffset,
   _testFindStepColorOffset: findStepColorOffset,
   _testRenderScalarGrid: renderScalarGrid,
@@ -1977,7 +2537,6 @@ module.exports = {
   buildNoaaPointSounding,
   parseNoaaIdx,
   renderNoaaGribFrame,
-  renderNoaaNamAwphysFrame,
   selectNoaaNamParameterRecords,
   selectNamAwphysRecords,
 };

@@ -64,6 +64,9 @@ const NOAA_BETA_MODEL_CONFIG = Object.freeze({
     productKey: "wrfprs",
     cycleHours: Array.from({ length: 24 }, (_, hour) => hour),
     forecastHourCadence: Object.freeze([Object.freeze({ maxHour: 48, stepHours: 1 })]),
+    standardMaxHour: 18,
+    extendedMaxHour: 48,
+    extendedCycleHours: Object.freeze([0, 6, 12, 18]),
     buildUrl: ({ baseUrl, date, cycle, hour }) => {
       const normalizedBase = normalizeBaseUrl(baseUrl || NOAA_HRRR_BASE_URL);
       return `${normalizedBase}/hrrr.${date}/conus/hrrr.t${cycle}z.wrfprsf${padTwoDigitHour(hour)}.grib2`;
@@ -115,6 +118,36 @@ function getNoaaGribModelConfig(modelKey = "nam") {
   return NOAA_BETA_MODEL_CONFIG[normalized];
 }
 
+function getNoaaMaxForecastHourForCycle(modelKey = "nam", cycle = null) {
+  const config = getNoaaGribModelConfig(modelKey);
+  if (config.key === "hrrr") {
+    // An unknown cycle must never masquerade as a specific one (Number(null)
+    // is 0 = the 00Z extended cycle; Number("latest") is NaN = an off-cycle).
+    // Assume the full cadence so hours are never silently dropped; run
+    // resolution and availability probing cap to what actually exists.
+    const cycleHour = normalizeNoaaCycleHour(cycle);
+    if (cycleHour === null) {
+      return config.extendedMaxHour;
+    }
+    return config.extendedCycleHours.includes(cycleHour) ? config.extendedMaxHour : config.standardMaxHour;
+  }
+  const cadence = Array.isArray(config.forecastHourCadence) ? config.forecastHourCadence : [];
+  return cadence.reduce((maximum, tier) => Math.max(maximum, Number(tier?.maxHour) || 0), 0);
+}
+
+function normalizeNoaaCycleHour(cycle) {
+  if (cycle === null || cycle === undefined || String(cycle).trim() === "") {
+    return null;
+  }
+  const hour = Number(cycle);
+  return Number.isFinite(hour) ? hour : null;
+}
+
+function filterNoaaForecastHoursForCycle(modelKey, cycle, hours) {
+  const maximum = getNoaaMaxForecastHourForCycle(modelKey, cycle);
+  return (Array.isArray(hours) ? hours : []).filter((hour) => Number.isFinite(Number(hour)) && Number(hour) <= maximum);
+}
+
 function normalizeNoaaModelKey(modelKey = "nam") {
   const key = String(modelKey || "nam")
     .trim()
@@ -139,8 +172,11 @@ module.exports = {
   buildNoaaGribUrl,
   buildNoaaNamAwphysUrl,
   formatNoaaRunId,
+  filterNoaaForecastHoursForCycle,
   getNoaaGribModelConfig,
+  getNoaaMaxForecastHourForCycle,
   normalizeBaseUrl,
+  normalizeNoaaCycleHour,
   normalizeNoaaModelKey,
   referenceTimeIsoFromNoaaRun,
   validTimeIsoFromNoaaRun,

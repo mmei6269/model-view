@@ -45,12 +45,29 @@ function parseHoursArg(raw) {
   if (raw === undefined || raw === null || raw === "") {
     return null;
   }
-  const hours = String(raw)
+  if (raw === true) {
+    throw new Error("--hours requires a value (e.g. --hours=0,3,6).");
+  }
+  // null means "warm every loaded hour", which is also the legitimate meaning
+  // of an omitted --hours flag. A provided-but-unparsable flag must not
+  // collapse into that mode: a typo'd --hours=abc would silently remove the
+  // hour filter and range-fetch every frame in the run. Empty tokens
+  // (trailing/doubled commas) are ignored; invalid tokens fail loudly.
+  const tokens = String(raw)
     .split(",")
-    .map((token) => Number(token.trim()))
-    .filter((hour) => Number.isFinite(hour) && hour >= 0)
-    .map((hour) => Math.round(hour));
-  return hours.length > 0 ? Array.from(new Set(hours)) : null;
+    .map((token) => token.trim())
+    .filter((token) => token !== "");
+  const hours = tokens.map((token) => {
+    const value = Number(token);
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error(`Invalid forecast hour '${token}' in --hours; expected non-negative integers (e.g. 0,3,6).`);
+    }
+    return value;
+  });
+  if (hours.length === 0) {
+    throw new Error("--hours was provided but names no forecast hours; omit the flag to prefetch all loaded hours.");
+  }
+  return Array.from(new Set(hours));
 }
 
 async function main() {
