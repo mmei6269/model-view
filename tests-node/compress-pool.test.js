@@ -1,7 +1,7 @@
 "use strict";
 
 // The compression pool must be invisible in the bytes: pooled PNG IDAT
-// deflate and hover gzip run the exact codec entry points the render thread
+// deflate and hover gzip/Brotli run the exact codec entry points the render thread
 // would run inline, and every failure mode (spawn failure, worker death
 // mid-job) falls back to the identical inline call. Engagement is observable
 // through the jobs/fallbacks counters that feed the render profile.
@@ -41,8 +41,14 @@ test("pooled outputs are byte-identical to the inline codecs (engagement via job
       assert.deepEqual(pooledIdat, deflatePngIdatSync(input, 1), `png-idat mismatch at ${size} bytes`);
       const pooledGzip = await compress("gzip", input, 1);
       assert.deepEqual(pooledGzip, zlib.gzipSync(input, { level: 1 }), `gzip mismatch at ${size} bytes`);
+      const pooledBrotli = await compress("brotli", input, 0);
+      assert.deepEqual(
+        pooledBrotli,
+        zlib.brotliCompressSync(input, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 0 } }),
+        `brotli mismatch at ${size} bytes`,
+      );
     }
-    assert.equal(counters.jobs, 8, "every job must run on the pool (engagement)");
+    assert.equal(counters.jobs, 12, "every job must run on the pool (engagement)");
     assert.equal(counters.fallbacks, 0);
   } finally {
     pool.markDead(new Error("test done"));
@@ -88,6 +94,10 @@ test("compressSync mirrors the codec entry points", () => {
   const input = patternBuffer(1024);
   assert.deepEqual(compressSync("png-idat", input, 1), deflatePngIdatSync(input, 1));
   assert.deepEqual(compressSync("gzip", input, 1), zlib.gzipSync(input, { level: 1 }));
+  assert.deepEqual(
+    compressSync("brotli", input, 0),
+    zlib.brotliCompressSync(input, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 0 } }),
+  );
 });
 
 test("resolveCompressMaxPending defaults to 2x threads and clamps", () => {

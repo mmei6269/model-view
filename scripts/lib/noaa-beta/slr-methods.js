@@ -4,7 +4,8 @@ const { rowToLatMercator } = require("../mercator");
 
 const { SNOW_PROFILE_LEVELS } = require("../noaa-nam-parameter-catalog");
 const { gridValue, profileSpeedAtLevel, profileValue, resolveProfileGrid } = require("./profile-access");
-const { PLETCHER_RF_FEATURE_KEYS, WESTERN_LINEAR_FEATURE_KEYS } = require("./selection");
+const { WESTERN_LINEAR_FEATURE_KEYS } = require("./selection");
+const { PLETCHER_RF_FEATURE_KEYS, predictRandomForest, predictRfTree } = require("./snow-rf-compiler");
 const { isPointInLower48Mainland, lower48LongitudeIntervalsAtLatitude } = require("./lower48-domain-mask");
 
 const KUCHERA_PROFILE_LEVELS = Object.freeze(SNOW_PROFILE_LEVELS.filter((level) => level >= 500));
@@ -543,22 +544,6 @@ function latLonForGridIndex(index, bounds, width, height) {
   };
 }
 
-function predictRandomForest(model, features) {
-  if (!model?.trees?.length || !Array.isArray(features)) {
-    return Number.NaN;
-  }
-  let total = 0;
-  let count = 0;
-  for (const tree of model.trees) {
-    const value = predictRfTree(tree, features);
-    if (Number.isFinite(value)) {
-      total += value;
-      count += 1;
-    }
-  }
-  return count > 0 ? total / count : Number.NaN;
-}
-
 function predictLinearSlr(model, features) {
   if (!model?.coefficients?.length || !Array.isArray(features)) {
     return Number.NaN;
@@ -576,27 +561,6 @@ function predictLinearSlr(model, features) {
     value += coefficient * feature;
   }
   return value;
-}
-
-function predictRfTree(tree, features) {
-  let node = 0;
-  for (let depth = 0; depth < 4096; depth += 1) {
-    const left = tree.childrenLeft[node];
-    const right = tree.childrenRight[node];
-    if (left < 0 || right < 0) {
-      return tree.value[node];
-    }
-    const featureIndex = tree.feature[node];
-    const featureValue = features[featureIndex];
-    if (!Number.isFinite(featureValue)) {
-      return Number.NaN;
-    }
-    node = featureValue <= tree.threshold[node] ? left : right;
-    if (!Number.isInteger(node) || node < 0 || node >= tree.value.length) {
-      return Number.NaN;
-    }
-  }
-  return Number.NaN;
 }
 
 module.exports = {

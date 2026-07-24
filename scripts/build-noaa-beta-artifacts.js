@@ -5,10 +5,27 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { FrameWorkerPool, runWithConcurrency } = require("./lib/local-artifact-concurrency");
+const { loadDotEnv, resolveCacheRootEnv } = require("./lib/env-config");
+
+const ROOT_DIR = path.resolve(__dirname, "..");
+
+// Compression and artifact-key defaults are resolved while renderer modules
+// load. Bootstrap the CLI environment before importing them so the parent and
+// subsequently spawned frame workers cannot disagree about codec or level.
+if (require.main === module) {
+  loadDotEnv(path.join(ROOT_DIR, ".env"));
+}
+
+const {
+  FRAME_WORKER_STARTUP_RECEIPT_TYPE,
+  FrameWorkerPool,
+  runWithConcurrency,
+} = require("./lib/local-artifact-concurrency");
 const { LocalArtifactRuntime } = require("./lib/local-artifact-runtime");
-const { NOAA_NAM_PARAMETER_CATALOG } = require("./lib/noaa-nam-parameter-catalog");
 const { NOAA_BETA_SOURCE_NAME, ensureWgrib2Available, getNoaaNamParameterOrder } = require("./lib/noaa-beta-renderer");
+const { buildCatalogColorLookupBenchmarkReceipt } = require("./lib/noaa-beta/catalog-color-lookup-asset");
+const { SNOW_RF_STARTUP_RECEIPT_TYPE, initializeSnowRfBenchmarkRole } = require("./lib/noaa-beta/snow-rf-role-receipt");
+const { STATIC_CONTINUOUS_COLOR_LOOKUP_STATE } = require("./lib/noaa-beta/raster");
 const {
   DEFAULT_ARTIFACT_PREFIX,
   DEFAULT_REFLECTIVITY_GATES,
@@ -44,16 +61,20 @@ const {
   resolveNoaaParameterSetFromIdxTexts,
   selectNoaaParameterProbeHours,
 } = require("./lib/noaa-build/run-resolution");
-const { loadDotEnv, resolveCacheRootEnv } = require("./lib/env-config");
 const { parseRenderSelectionFromArgs } = require("./lib/noaa-build/render-selection-args");
 const { getWgrib2ProvenanceIdentity } = require("./lib/noaa-beta/grib-source");
 const { filterNoaaForecastHoursForCycle } = require("./lib/noaa-beta/model-config");
 const { buildRunSourceProvenanceCatalog } = require("./lib/noaa-beta/source-provenance");
 
-const ROOT_DIR = path.resolve(__dirname, "..");
 const DEFAULT_CACHE_ROOT = path.join(ROOT_DIR, "output/noaa-beta-cache");
 const DEFAULT_LOCAL_WGRIB2_PATH = path.join(ROOT_DIR, "output/noaa-beta-tools/bin/wgrib2");
 const DEFAULT_NOAA_WORKER_PATH = path.join(ROOT_DIR, "scripts/noaa-beta-frame-worker.js");
+const BENCHMARK_RECEIPT_ENV = "MODELVIEW_NOAA_BENCHMARK_RECEIPTS";
+const BENCHMARK_RECEIPT_FD = 3;
+const BENCHMARK_RECEIPT_MAGIC = Buffer.from("MVBR");
+// Snow-RF receipts carry 500 region commitments (~90 KB canonical JSON);
+// keep this in step with the harness's per-receipt parse cap.
+const MAX_BENCHMARK_RECEIPT_BYTES = 256 * 1024;
 const FRAME_PROGRESS_STARTS = new Map();
 
 function formatCycleHorizonCapMessage(modelKey, run, cycleAwareHours) {
@@ -98,7 +119,6 @@ function applyCycleHorizonFilter({ modelKey, run, hours, explicitHours, log = co
 }
 
 async function main() {
-  loadDotEnv(path.join(ROOT_DIR, ".env"));
   const args = parseArgs(process.argv.slice(2));
   const models = resolveModels(args.models || args.model || process.env.MODELVIEW_NOAA_BETA_MODELS || "nam");
   const viewKey = String(args.view || DEFAULT_VIEW_KEY).trim() || DEFAULT_VIEW_KEY;
@@ -159,20 +179,24 @@ async function main() {
     args["derived-cell-concurrency"] !== undefined
       ? args["derived-cell-concurrency"]
       : process.env.MODELVIEW_NOAA_DERIVED_CELL_CONCURRENCY;
-  // Compression helper threads per render worker (PNG deflate + hover gzip
-  // move off the render thread; bytes identical, inline fallback on any pool
-  // failure). 0 disables the pool and compresses inline exactly as before.
-  const compressThreads = clampInt(
-    numberFlag(args["compress-threads"], process.env.MODELVIEW_NOAA_COMPRESS_THREADS, 1),
-    0,
-    4,
-    1,
-  );
+  // Compression helper threads are resolved after the final frame rosters so
+  // auto can spend genuinely idle cores without multiplying helpers across a
+  // saturated outer pool. Explicit 0-4 values retain the old force-override
+  // contract.
+  const compressThreadsInput =
+    args["compress-threads"] !== undefined ? args["compress-threads"] : process.env.MODELVIEW_NOAA_COMPRESS_THREADS;
+  const compressThreadsExplicit = hasExplicitOptionValue(compressThreadsInput);
   const explicitFrameThrottle =
     isExplicitNumberFlag(args["worker-count"]) ||
     isExplicitNumberFlag(args["total-frame-concurrency"]) ||
     isExplicitNumberFlag(process.env.MODELVIEW_NOAA_WORKER_COUNT) ||
     isExplicitNumberFlag(process.env.MODELVIEW_NOAA_TOTAL_FRAME_CONCURRENCY);
+  const explicitCompressionFrameThrottle =
+    explicitFrameThrottle ||
+    isExplicitNumberFlag(args["frame-concurrency"]) ||
+    isExplicitNumberFlag(args["global-frame-concurrency"]) ||
+    isExplicitNumberFlag(process.env.MODELVIEW_NOAA_FRAME_CONCURRENCY) ||
+    isExplicitNumberFlag(process.env.MODELVIEW_NOAA_GLOBAL_FRAME_CONCURRENCY);
   // Background main-GRIB prefetch keeps the network busy while workers
   // compute (cold builds otherwise alternate fetch waves with compute
   // waves). Cache-warming only — the worker fetch path is unchanged and
@@ -195,6 +219,25 @@ async function main() {
     args.profile || args["profile-frames"] || process.env.MODELVIEW_NOAA_PROFILE,
     false,
   );
+  const writeBenchmarkReceipt = createBenchmarkReceiptWriter();
+  if (writeBenchmarkReceipt) {
+    if (!profileFrames) {
+      throw new Error(`${BENCHMARK_RECEIPT_ENV}=1 requires frame profiling.`);
+    }
+    writeBenchmarkReceipt(
+      buildCatalogColorLookupBenchmarkReceipt(STATIC_CONTINUOUS_COLOR_LOOKUP_STATE, {
+        role: "builder-main",
+        spawnOrdinal: 0,
+      }),
+    );
+    writeBenchmarkReceipt(
+      initializeSnowRfBenchmarkRole({
+        role: "builder-main",
+        spawnOrdinal: 0,
+        threadId: 0,
+      }),
+    );
+  }
   const globalFrameQueue =
     models.length > 1 &&
     parseBooleanOption(args["global-frame-queue"] ?? process.env.MODELVIEW_NOAA_GLOBAL_FRAME_QUEUE, true);
@@ -357,10 +400,25 @@ async function main() {
     plannedFrameCount,
     explicitFrameThrottle,
   });
+  const compressThreads = resolveCompressThreadsForBuild({
+    input: compressThreadsInput,
+    inputExplicit: compressThreadsExplicit,
+    cpuCount: resources.cpuCount,
+    freeGb: resources.freeGb,
+    totalFrameConcurrency,
+    workerCount,
+    plannedFrameCount,
+    explicitFrameThrottle: explicitCompressionFrameThrottle,
+  });
   const rawCacheDir = path.join(cacheRoot, "raw-noaa");
   const noaaWorkerPool = new FrameWorkerPool({
     workerPath: String(args["worker-script"] || process.env.MODELVIEW_NOAA_WORKER_SCRIPT || DEFAULT_NOAA_WORKER_PATH),
     size: workerCount,
+    requireStartupReceipt: Boolean(writeBenchmarkReceipt),
+    requiredStartupReceiptTypes: writeBenchmarkReceipt
+      ? [FRAME_WORKER_STARTUP_RECEIPT_TYPE, SNOW_RF_STARTUP_RECEIPT_TYPE]
+      : undefined,
+    onStartupReceipt: writeBenchmarkReceipt,
   });
 
   const runtime = new LocalArtifactRuntime({
@@ -394,7 +452,7 @@ async function main() {
   await runtime.init();
   try {
     console.log(
-      `[noaa-beta] resources cpu=${resources.cpuCount} mem=${resources.memGb.toFixed(1)}GB free=${resources.freeGb.toFixed(1)}GB scheduler=${globalFrameQueue ? "global-frame-queue" : "per-model"} model-concurrency=${modelConcurrency} frame-concurrency=${frameConcurrency} global-frame-concurrency=${globalFrameConcurrency} global-persist-queue=${globalPersistQueue} global-persist-concurrency=${globalPersistConcurrency} global-persist-backlog=${globalPersistBacklog} snow-persist-concurrency=${snowPersistConcurrency} snow-persist-backlog=${snowPersistBacklog} artifact-write-concurrency=${artifactWriteConcurrency || "off"} worker-count=${workerCount} total-frame-concurrency=${totalFrameConcurrency} derived-cell-concurrency=${derivedCellConcurrency} decode-concurrency=${decodeConcurrency} total-decode-concurrency=${totalDecodeConcurrency} range-concurrency=${rangeFetchConcurrency} total-range-concurrency=${totalRangeFetchConcurrency} persist-manifest-each-frame=${persistManifestEachFrame} run-offset=${runOffset}`,
+      `[noaa-beta] resources cpu=${resources.cpuCount} mem=${resources.memGb.toFixed(1)}GB free=${resources.freeGb.toFixed(1)}GB scheduler=${globalFrameQueue ? "global-frame-queue" : "per-model"} model-concurrency=${modelConcurrency} frame-concurrency=${frameConcurrency} global-frame-concurrency=${globalFrameConcurrency} global-persist-queue=${globalPersistQueue} global-persist-concurrency=${globalPersistConcurrency} global-persist-backlog=${globalPersistBacklog} snow-persist-concurrency=${snowPersistConcurrency} snow-persist-backlog=${snowPersistBacklog} artifact-write-concurrency=${artifactWriteConcurrency || "off"} worker-count=${workerCount} total-frame-concurrency=${totalFrameConcurrency} derived-cell-concurrency=${derivedCellConcurrency} compress-threads=${compressThreads} decode-concurrency=${decodeConcurrency} total-decode-concurrency=${totalDecodeConcurrency} range-concurrency=${rangeFetchConcurrency} total-range-concurrency=${totalRangeFetchConcurrency} persist-manifest-each-frame=${persistManifestEachFrame} run-offset=${runOffset}`,
     );
     console.log(
       `[noaa-beta] building models=${models.join(",")} view=${viewKey} hours=${formatHoursByModel(hoursByModel, models)} cache=${cacheRoot}`,
@@ -478,6 +536,8 @@ async function main() {
           frameConcurrency,
           workerCount,
           totalFrameConcurrency,
+          derivedCellConcurrency,
+          compressThreads,
           globalFrameQueue,
           globalFrameConcurrency,
           globalPersistQueue,
@@ -575,6 +635,71 @@ function resolveInputPrefetchConcurrency(input) {
     `[noaa-beta] unrecognized --input-prefetch / MODELVIEW_NOAA_INPUT_PREFETCH value '${input}'; input prefetch disabled (use 0-16, "auto", or "off")`,
   );
   return 0;
+}
+
+// Brotli q0 changed the compression-pool crossover. One helper is now
+// neutral for a serial build and materially regressive under saturation;
+// two helpers remain a latency win only while at most about half the cores
+// are occupied by main frames. Resolve this once per build because each
+// frame-worker isolate retains its first compression pool for its lifetime.
+function resolveCompressThreadsForBuild({
+  input,
+  inputExplicit = false,
+  cpuCount,
+  freeGb,
+  totalFrameConcurrency,
+  workerCount,
+  plannedFrameCount,
+  explicitFrameThrottle = false,
+}) {
+  const mode = normalizeParallelismOption(input);
+  if (mode === "off" || mode === "0") {
+    return 0;
+  }
+  if (mode !== "auto" && mode !== "") {
+    const numeric = Number(mode);
+    if (Number.isFinite(numeric)) {
+      return clampInt(numeric, 0, 4, 0);
+    }
+    console.warn(
+      `[noaa-beta] unrecognized --compress-threads / MODELVIEW_NOAA_COMPRESS_THREADS value '${input}'; compression helpers stay off (use "auto", "off", or 0-4)`,
+    );
+    return 0;
+  }
+
+  // A blank template value is the default auto policy, matching the old
+  // blank-means-default numberFlag contract. Do not spend cores that an outer
+  // frame throttle explicitly withheld unless the user also explicitly asks
+  // for compression auto/helpers.
+  if (explicitFrameThrottle && !inputExplicit) {
+    return 0;
+  }
+  const cores = Math.max(1, Math.floor(Number(cpuCount) || 1));
+  const activeMainFrames = Math.max(
+    1,
+    Math.min(
+      Math.max(1, Math.floor(Number(plannedFrameCount) || 1)),
+      Math.max(1, Math.floor(Number(totalFrameConcurrency) || 1)),
+      Math.max(1, Math.floor(Number(workerCount) || 1)),
+    ),
+  );
+  // The measured 18-core boundary was 8 frames winning and 12 losing; keep
+  // the unmeasured 9-frame midpoint on the conservative inline side.
+  const helperFrameLimit = Math.max(1, Math.floor((cores - 1) / 2));
+  if (activeMainFrames > helperFrameLimit) {
+    return 0;
+  }
+
+  // Helper inputs/fallback sources raised RSS by roughly 1.5 GiB per active
+  // producer in the measured crossover matrix. Preserve an 8 GiB operating
+  // reserve; unknown memory telemetry does not disable an otherwise measured
+  // latency win.
+  const availableGb = Number(freeGb);
+  const requiredFreeGb = 8 + activeMainFrames * 1.5;
+  if (Number.isFinite(availableGb) && availableGb < requiredFreeGb) {
+    return 0;
+  }
+  return 2;
 }
 
 function resolveDerivedCellConcurrency({
@@ -849,9 +974,11 @@ function formatRenderProfile(profile) {
     "totalMs",
     "indexMs",
     "headMs",
+    "selectedGribPackProbeMs",
     "materializeMs",
     "rangeFetchMs",
     "selectedGribWriteMs",
+    "derivedCacheReadMs",
     "decodeMs",
     "precipAccumPlanMs",
     "precipAccumSourceMs",
@@ -868,12 +995,14 @@ function formatRenderProfile(profile) {
     "wgribRegridMs",
     "wgribExportMs",
     "gridMapMs",
+    "regridBinPersistMs",
     "artifactsMs",
     "artifactPrepMs",
     "corePngMs",
     "catalogPngMs",
     "synopticMs",
     "hoverGridMs",
+    "artifactBackpressureMs",
     "compressWaitMs",
     "persistMs",
   ];
@@ -896,8 +1025,37 @@ function formatRenderProfile(profile) {
     );
   }
   appendHitMissCounter(parts, "regridBin", profile.regridBinCacheHits, profile.regridBinCacheMisses);
+  appendPositiveCounter(parts, "fastPackProbes", profile.selectedGribFastPackProbes);
+  appendPositiveCounter(parts, "fastPackMetadataHits", profile.selectedGribFastPackMetadataHits);
+  appendPositiveCounter(parts, "hashBypasses", profile.selectedGribHashBypasses);
+  if (Number(profile.selectedGribHashBypassBytes) > 0) {
+    parts.push(`hashBypassBytes=${Number(profile.selectedGribHashBypassBytes)}`);
+  }
+  appendPositiveCounter(parts, "fastPackFallbacks", profile.selectedGribFastPackFallbacks);
+  appendPositiveCounter(parts, "verifyHashes", profile.selectedGribVerifyHashes);
+  if (Number(profile.selectedGribVerifyHashBytes) > 0) {
+    parts.push(`verifyHashBytes=${Number(profile.selectedGribVerifyHashBytes)}`);
+  }
   appendPositiveCounter(parts, "regridBinWriteFailures", profile.regridBinCacheWriteFailures);
+  appendPositiveCounter(parts, "regridBinCorruptions", profile.regridBinCacheCorruptions);
+  const regridPackEntriesRead = Number(profile.regridBinPackEntriesRead) || 0;
+  const regridPackEntriesSkipped = Number(profile.regridBinPackEntriesSkipped) || 0;
+  if (regridPackEntriesRead + regridPackEntriesSkipped > 0) {
+    parts.push(`regridFields=${regridPackEntriesRead}/${regridPackEntriesRead + regridPackEntriesSkipped}`);
+  }
+  const regridPackBytesRead = Number(profile.regridBinPackBytesRead) || 0;
+  const regridPackBytesSkipped = Number(profile.regridBinPackBytesSkipped) || 0;
+  if (regridPackBytesRead + regridPackBytesSkipped > 0) {
+    parts.push(`regridBytes=${regridPackBytesRead}/${regridPackBytesRead + regridPackBytesSkipped}`);
+  }
+  appendHitMissCounter(parts, "regridSparse", profile.regridBinSparseHits, profile.regridBinSparseDeclines);
   appendHitMissCounter(parts, "derivedGrids", profile.derivedGridCacheHits, profile.derivedGridCacheMisses);
+  appendHitMissCounter(
+    parts,
+    "supplementalCache",
+    profile.supplementalDerivedGridCacheHits,
+    profile.supplementalDerivedGridCacheMisses,
+  );
   if (Number(profile.derivedParallelChunks) > 0) {
     parts.push(`derivedParallel=${profile.derivedParallelChunks}chunks/${profile.derivedParallelWorkers}workers`);
   }
@@ -982,6 +1140,42 @@ function appendSnowfallProfileCounters(parts, profile) {
   appendHitMissCounter(parts, "profileCache", profile.profileGridCacheHits, profile.profileGridCacheMisses);
   appendPositiveCounter(parts, "compressJobs", profile.compressPoolJobs);
   appendPositiveCounter(parts, "compressFallbacks", profile.compressPoolFallbacks);
+  appendPositiveCounter(parts, "compressOwnedJobs", profile.compressOwnedInputJobs);
+  appendPositiveCounter(parts, "compressOwnedBytes", profile.compressOwnedInputBytes);
+  appendPositiveCounter(parts, "compressOwnedFallbacks", profile.compressOwnedInputFallbacks);
+  appendPositiveCounter(parts, "compressOwnedRebuilds", profile.compressOwnedInputRebuilds);
+  appendPositiveCounter(parts, "compressSharedJobs", profile.compressSharedInputJobs);
+  appendPositiveCounter(parts, "compressSharedBytes", profile.compressSharedInputBytes);
+  appendNonNegativeCounter(parts, "compressSharedInputViewBytes", profile.compressSharedInputViewBytes);
+  appendNonNegativeCounter(parts, "compressSharedInputBackingBytes", profile.compressSharedInputBackingBytes);
+  appendNonNegativeCounter(parts, "compressSharedInputMaxBytes", profile.compressSharedInputMaxBytes);
+  appendNonNegativeCounter(parts, "compressSharedInputUniqueOwners", profile.compressSharedInputUniqueOwners);
+  appendPositiveCounter(parts, "compressSharedFallbacks", profile.compressSharedInputFallbacks);
+  appendPositiveCounter(parts, "compressTransportRetainedBytes", profile.compressTransportRetainedLiveBytes);
+  appendPositiveCounter(parts, "compressTransportPeakBytes", profile.compressTransportPeakLiveBytes);
+  const hoverArena = profile.hoverArena;
+  if (hoverArena && typeof hoverArena === "object") {
+    appendNonNegativeCounter(parts, "hoverArenaVariables", hoverArena.variables);
+    appendNonNegativeCounter(parts, "hoverArenaCells", hoverArena.cells);
+    appendNonNegativeCounter(parts, "hoverArenaPlaneBytes", hoverArena.planeBytes);
+    appendNonNegativeCounter(parts, "hoverArenaHeaderReserveBytes", hoverArena.headerReserveBytes);
+    appendNonNegativeCounter(parts, "hoverArenaViewOffsetBytes", hoverArena.viewOffsetBytes);
+    appendNonNegativeCounter(parts, "hoverArenaViewBytes", hoverArena.viewBytes);
+    appendNonNegativeCounter(parts, "hoverArenaBackingBytes", hoverArena.backingBytes);
+    appendNonNegativeCounter(parts, "hoverArenaMaxBytes", hoverArena.maxBytes);
+    appendNonNegativeCounter(parts, "hoverArenaBackingSlackBytes", hoverArena.backingSlackBytes);
+    appendNonNegativeCounter(parts, "hoverArenaSpeculativeTailBytes", hoverArena.speculativeTailBytes);
+    appendNonNegativeCounter(parts, "hoverArenaUniqueOwners", hoverArena.uniqueOwners);
+    appendNonNegativeCounter(parts, "hoverArenaCopyBytes", hoverArena.copyBytes);
+  }
+  appendStringCounter(parts, "hoverArenaFallbackReason", profile.hoverArenaFallbackReason);
+  appendPositiveCounter(parts, "indexedJobs", profile.indexedPngJobs);
+  appendPositiveCounter(parts, "indexedRawBytes", profile.indexedPngRawBytes);
+  appendPositiveCounter(parts, "indexedRawSaved", profile.indexedPngRgbaRawBytesAvoided);
+  appendPositiveCounter(parts, "artifactCheckpoints", profile.artifactEncodeCheckpoints);
+  appendPositiveCounter(parts, "artifactPeakActive", profile.artifactEncodePeakActive);
+  appendPositiveCounter(parts, "artifactPeakQueued", profile.artifactEncodePeakQueued);
+  appendPositiveCounter(parts, "artifactSubmitted", profile.artifactEncodeSubmitted);
   appendPositiveCounter(parts, "frzrChunkGaps", profile.freezingRainLiquidChunkGaps);
   appendPositiveCounter(parts, "snowLiquidLockTimeouts", profile.snowLiquidGridLockTimeouts);
   appendPositiveCounter(parts, "snowCumLockTimeouts", profile.snowfallCumulativeLockTimeouts);
@@ -1001,6 +1195,23 @@ function appendPositiveCounter(parts, label, value) {
   const count = Number(value) || 0;
   if (count > 0) {
     parts.push(`${label}=${count}`);
+  }
+}
+
+function appendNonNegativeCounter(parts, label, value) {
+  if (value === null || value === undefined || value === "") {
+    return;
+  }
+  const count = Number(value);
+  if (Number.isFinite(count) && count >= 0) {
+    parts.push(`${label}=${count}`);
+  }
+}
+
+function appendStringCounter(parts, label, value) {
+  const text = String(value ?? "").trim();
+  if (text) {
+    parts.push(`${label}=${encodeURIComponent(text)}`);
   }
 }
 
@@ -1048,6 +1259,13 @@ function isExplicitNumberFlag(value) {
   return text !== "" && Number.isFinite(Number(text));
 }
 
+function hasExplicitOptionValue(value) {
+  if (value === undefined || value === null || typeof value === "boolean") {
+    return false;
+  }
+  return String(value).trim() !== "";
+}
+
 function parseReflectivityGates(raw) {
   const gates = String(raw || "")
     .split(",")
@@ -1072,6 +1290,34 @@ function resolveBuilderCacheRoot(cacheRootArg, env = process.env) {
 
 function defaultWgrib2Path() {
   return fs.existsSync(DEFAULT_LOCAL_WGRIB2_PATH) ? DEFAULT_LOCAL_WGRIB2_PATH : "wgrib2";
+}
+
+function createBenchmarkReceiptWriter(env = process.env, descriptor = BENCHMARK_RECEIPT_FD) {
+  if (env?.[BENCHMARK_RECEIPT_ENV] !== "1") {
+    return null;
+  }
+  return (receipt) => {
+    const body = Buffer.from(JSON.stringify(receipt));
+    if (body.byteLength === 0 || body.byteLength > MAX_BENCHMARK_RECEIPT_BYTES) {
+      throw new Error(`Benchmark receipt is outside the 1-${MAX_BENCHMARK_RECEIPT_BYTES} byte framing limit.`);
+    }
+    const frame = Buffer.allocUnsafe(BENCHMARK_RECEIPT_MAGIC.byteLength + 4 + body.byteLength);
+    BENCHMARK_RECEIPT_MAGIC.copy(frame, 0);
+    frame.writeUInt32BE(body.byteLength, BENCHMARK_RECEIPT_MAGIC.byteLength);
+    body.copy(frame, BENCHMARK_RECEIPT_MAGIC.byteLength + 4);
+    writeDescriptorFully(descriptor, frame);
+  };
+}
+
+function writeDescriptorFully(descriptor, buffer) {
+  let offset = 0;
+  while (offset < buffer.byteLength) {
+    const written = fs.writeSync(descriptor, buffer, offset, buffer.byteLength - offset);
+    if (!Number.isSafeInteger(written) || written <= 0) {
+      throw new Error("Benchmark receipt sideband accepted zero bytes.");
+    }
+    offset += written;
+  }
 }
 
 function parseOptionalNumber(value, fallback) {
@@ -1124,7 +1370,10 @@ module.exports = {
   _testModelHasExplicitHoursRequest: modelHasExplicitHoursRequest,
   _testResolveBuilderCacheRoot: resolveBuilderCacheRoot,
   _testResolveDerivedCellConcurrency: resolveDerivedCellConcurrency,
+  _testResolveCompressThreadsForBuild: resolveCompressThreadsForBuild,
   _testResolveInputPrefetchConcurrency: resolveInputPrefetchConcurrency,
+  _testFormatRenderProfile: formatRenderProfile,
+  _testCreateBenchmarkReceiptWriter: createBenchmarkReceiptWriter,
   _testNumberFlag: numberFlag,
   _testIsExplicitNumberFlag: isExplicitNumberFlag,
   parseArgs,

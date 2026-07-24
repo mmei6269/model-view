@@ -1,13 +1,23 @@
 "use strict";
 
-const zlib = require("zlib");
 const { PNG } = require("pngjs");
 const {
   DETAILED_SYNOPTIC_STYLE_VERSION,
+  HOVER_GRID_ENCODING,
   HOVER_GRID_SCHEMA_VERSION,
   SYNOPTIC_STYLE_VERSION,
 } = require("./modelview-runtime");
-const { encodeHoverGridBinaryPayload, inferHoverGridFormatFromKey } = require("./hover-grid-binary");
+const {
+  encodeHoverGridBinaryPayload,
+  inferHoverGridCompressionFromKey,
+  inferHoverGridFormatFromKey,
+} = require("./hover-grid-binary");
+const {
+  DEFAULT_HOVER_GRID_COMPRESSION,
+  compressHoverGridSync,
+  detectHoverGridContentEncoding,
+  resolveHoverGridCompressionConfig,
+} = require("./hover-grid-compression");
 const { normalizeFrameSourceProvenance } = require("./noaa-beta/source-provenance");
 
 const HOVER_GRID_MISSING_VALUE = -32768;
@@ -63,6 +73,20 @@ function mergeFrameRecord(existingFrame, templateFrame) {
   if (!existingFrame) {
     return templateFrame;
   }
+  const retainExistingHoverGrid = Object.hasOwn(existingFrame, "hoverGridBytes");
+  const hoverGridBytes = retainExistingHoverGrid
+    ? Number(existingFrame.hoverGridBytes) || 0
+    : Number(templateFrame.hoverGridBytes) || 0;
+  const hoverGridSchemaVersion = retainExistingHoverGrid
+    ? normalizeOptionalHoverGridSchemaVersion(
+        existingFrame.hoverGridSchemaVersion,
+        "existing frame hoverGridSchemaVersion",
+      )
+    : resolveProducedHoverGridSchemaVersion(
+        templateFrame.hoverGridSchemaVersion,
+        HOVER_GRID_SCHEMA_VERSION,
+        "template frame hoverGridSchemaVersion",
+      );
   return {
     ...templateFrame,
     synopticCenters: existingFrame.synopticCenters || templateFrame.synopticCenters,
@@ -76,8 +100,8 @@ function mergeFrameRecord(existingFrame, templateFrame) {
       existingFrame.parameterAvailability,
       templateFrame.parameterAvailability,
     ),
-    hoverGridBytes: Number(existingFrame.hoverGridBytes) || Number(templateFrame.hoverGridBytes) || 0,
-    hoverGridSchemaVersion: Number(existingFrame.hoverGridSchemaVersion) || templateFrame.hoverGridSchemaVersion,
+    hoverGridBytes,
+    hoverGridSchemaVersion,
     hoverGridSupplemental: mergeHoverGridSupplementalRefs(
       existingFrame.hoverGridSupplemental,
       templateFrame.hoverGridSupplemental,
@@ -257,13 +281,21 @@ function applyRenderedFrameToManifestFrame(frame, rendered) {
     frame.parameterAvailability = {};
   }
   if (rendered.hoverGrid) {
-    frame.hoverGridSchemaVersion = Number(rendered.hoverGridSchemaVersion) || HOVER_GRID_SCHEMA_VERSION;
+    frame.hoverGridSchemaVersion = resolveProducedHoverGridSchemaVersion(
+      rendered.hoverGridSchemaVersion,
+      HOVER_GRID_SCHEMA_VERSION,
+      "rendered frame hoverGridSchemaVersion",
+    );
     frame.hoverGridBytes = Number(rendered.hoverGrid?.bytes) || Number(rendered.hoverGrid?.body?.length) || 0;
   }
   if (rendered.hoverGridSupplemental && typeof rendered.hoverGridSupplemental === "object") {
     frame.hoverGridSupplemental = mergeHoverGridSupplementalRefs(
       rendered.hoverGridSupplemental,
       frame.hoverGridSupplemental,
+      {
+        existingSchemaFallback: HOVER_GRID_SCHEMA_VERSION,
+        templateSchemaFallback: null,
+      },
     );
   }
   if (rendered.synopticVectors || rendered.synopticVectorBytes) {
@@ -323,7 +355,12 @@ function normalizeRenderedFrameArtifacts(rendered, frame, reflectivityGates) {
   const width = Number(frame.cols);
   const height = Number(frame.rows);
   const transparentPng = createTransparentPng(width, height);
-  const emptyHoverGrid = buildEmptyHoverGridArtifact(width, height, inferHoverGridFormatFromKey(frame?.hoverGridKey));
+  const emptyHoverGrid = buildEmptyHoverGridArtifact(
+    width,
+    height,
+    inferHoverGridFormatFromKey(frame?.hoverGridKey),
+    inferHoverGridCompressionFromKey(frame?.hoverGridKey),
+  );
   const emptyVector = buildEmptySynopticVectorPayload();
   // Detailed slots fall back to a detailed-stamped empty payload so a frame
   // that produced no detailed vector still reads truthfully (+mslp2) to
@@ -393,7 +430,11 @@ function normalizeRenderedFrameArtifacts(rendered, frame, reflectivityGates) {
     sourceProvenance: normalizeFrameSourceProvenance(rendered?.sourceProvenance),
     parameterAvailability: normalizeParameterAvailability(rendered?.parameterAvailability),
     hoverGrid: normalizeHoverGridArtifact(rendered?.hoverGrid, emptyHoverGrid),
-    hoverGridSchemaVersion: Number(rendered?.hoverGridSchemaVersion) || HOVER_GRID_SCHEMA_VERSION,
+    hoverGridSchemaVersion: resolveProducedHoverGridSchemaVersion(
+      rendered?.hoverGridSchemaVersion,
+      HOVER_GRID_SCHEMA_VERSION,
+      "normalized frame hoverGridSchemaVersion",
+    ),
     renderProfile: rendered?.renderProfile || null,
     reflectivityVariants,
     reflectivityVariantsByLayer,
@@ -409,14 +450,22 @@ function mergeLayerRefGroups(existingGroups, templateGroups) {
   return out;
 }
 
-function mergeHoverGridSupplementalRefs(existingRefs, templateRefs) {
+function mergeHoverGridSupplementalRefs(
+  existingRefs,
+  templateRefs,
+  { existingSchemaFallback = null, templateSchemaFallback = HOVER_GRID_SCHEMA_VERSION } = {},
+) {
   const out = {};
   for (const [key, value] of Object.entries(templateRefs || {})) {
     if (value?.key) {
       out[key] = {
         key: value.key,
         bytes: Number(value.bytes) || 0,
-        schemaVersion: Number(value.schemaVersion) || HOVER_GRID_SCHEMA_VERSION,
+        schemaVersion: resolveMergedHoverGridSchemaVersion(
+          value.schemaVersion,
+          templateSchemaFallback,
+          `template supplemental '${key}' schemaVersion`,
+        ),
       };
     }
   }
@@ -425,11 +474,39 @@ function mergeHoverGridSupplementalRefs(existingRefs, templateRefs) {
       out[key] = {
         key: value.key,
         bytes: Number(value.bytes) || 0,
-        schemaVersion: Number(value.schemaVersion) || HOVER_GRID_SCHEMA_VERSION,
+        schemaVersion: resolveMergedHoverGridSchemaVersion(
+          value.schemaVersion,
+          existingSchemaFallback,
+          `existing supplemental '${key}' schemaVersion`,
+        ),
       };
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function resolveMergedHoverGridSchemaVersion(value, fallback, label) {
+  return fallback === null
+    ? normalizeOptionalHoverGridSchemaVersion(value, label)
+    : resolveProducedHoverGridSchemaVersion(value, fallback, label);
+}
+
+function normalizeOptionalHoverGridSchemaVersion(value, label) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 4) {
+    throw new Error(`${label} must be an integer hover schema identity from 0 through 4`);
+  }
+  return value;
+}
+
+function resolveProducedHoverGridSchemaVersion(value, fallback, label) {
+  return (
+    normalizeOptionalHoverGridSchemaVersion(value, label) ??
+    normalizeOptionalHoverGridSchemaVersion(fallback, `${label} fallback`) ??
+    HOVER_GRID_SCHEMA_VERSION
+  );
 }
 
 function collectExpectedReflectivityLayerKeys(frame) {
@@ -546,8 +623,12 @@ function normalizeHoverGridArtifact(artifact, fallbackArtifact) {
       body,
       bytes: Number(artifact.bytes) || body.length,
       contentType: artifact.contentType || "application/json",
-      contentEncoding: artifact.contentEncoding || "gzip",
-      schemaVersion: Number(artifact.schemaVersion) || HOVER_GRID_SCHEMA_VERSION,
+      contentEncoding: artifact.contentEncoding || detectHoverGridContentEncoding(body),
+      schemaVersion: resolveProducedHoverGridSchemaVersion(
+        artifact.schemaVersion,
+        HOVER_GRID_SCHEMA_VERSION,
+        "hover artifact schemaVersion",
+      ),
     };
   }
   return fallbackArtifact;
@@ -580,8 +661,11 @@ function createTransparentPng(width, height) {
   return body;
 }
 
-function buildEmptyHoverGridArtifact(width, height, format = "json") {
-  const cacheKey = `${Number(width)}x${Number(height)}:${format}`;
+function buildEmptyHoverGridArtifact(width, height, format = "json", compression = DEFAULT_HOVER_GRID_COMPRESSION) {
+  const compressionConfig = compression
+    ? resolveHoverGridCompressionConfig(compression)
+    : DEFAULT_HOVER_GRID_COMPRESSION;
+  const cacheKey = `${Number(width)}x${Number(height)}:${format}:${compressionConfig.backend}:${compressionConfig.level}:${HOVER_GRID_ENCODING.identity}`;
   const cached = EMPTY_HOVER_GRID_CACHE.get(cacheKey);
   if (cached) {
     return { ...cached };
@@ -606,15 +690,17 @@ function buildEmptyHoverGridArtifact(width, height, format = "json") {
   if (format === "binary") {
     const body = encodeHoverGridBinaryPayload({
       schemaVersion: HOVER_GRID_SCHEMA_VERSION,
+      encoding: HOVER_GRID_ENCODING,
       rows: Number(height),
       cols: Number(width),
       variables,
+      compression: compressionConfig,
     });
     const artifact = {
       body,
       bytes: body.length,
       contentType: "application/octet-stream",
-      contentEncoding: "gzip",
+      contentEncoding: compressionConfig.contentEncoding,
       schemaVersion: HOVER_GRID_SCHEMA_VERSION,
     };
     EMPTY_HOVER_GRID_CACHE.set(cacheKey, artifact);
@@ -632,12 +718,12 @@ function buildEmptyHoverGridArtifact(width, height, format = "json") {
       pressureHpa: hoverGridVariableToJson(variable),
     },
   };
-  const body = zlib.gzipSync(Buffer.from(JSON.stringify(payload)));
+  const body = compressHoverGridSync(Buffer.from(JSON.stringify(payload)), compressionConfig);
   const artifact = {
     body,
     bytes: body.length,
     contentType: "application/json",
-    contentEncoding: "gzip",
+    contentEncoding: compressionConfig.contentEncoding,
     schemaVersion: HOVER_GRID_SCHEMA_VERSION,
   };
   EMPTY_HOVER_GRID_CACHE.set(cacheKey, artifact);

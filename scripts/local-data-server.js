@@ -4,11 +4,18 @@
 
 const path = require("path");
 const { loadDotEnv, resolveCacheRootEnv } = require("./lib/env-config");
+
+const ROOT_DIR = path.resolve(__dirname, "..");
+
+// The server derives content encoding from renderer artifact keys, whose
+// defaults are fixed during module initialization.
+if (require.main === module) {
+  loadDotEnv(path.join(ROOT_DIR, ".env"));
+}
+
 const { createLocalArtifactServer } = require("./lib/local-artifact-server");
 const { parseReflectivityGates } = require("./build-noaa-beta-artifacts");
 const { DEFAULT_REFLECTIVITY_GATES } = require("./lib/modelview-runtime");
-
-const ROOT_DIR = path.resolve(__dirname, "..");
 
 // One gate vocabulary for both sides: the builder's parseReflectivityGates
 // whitelists the supported {10, 15, 20} dBZ gates (falling back to the full
@@ -21,7 +28,6 @@ function resolveReflectivityGates(args, env = process.env) {
 }
 
 async function main() {
-  loadDotEnv(path.join(ROOT_DIR, ".env"));
   const args = parseArgs(process.argv.slice(2));
   const port = Number.isFinite(Number(args.port)) ? Number(args.port) : Number(process.env.MODELVIEW_DATA_PORT || 5174);
   const host = String(args.host || process.env.MODELVIEW_DATA_HOST || "127.0.0.1");

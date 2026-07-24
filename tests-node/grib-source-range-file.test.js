@@ -113,7 +113,10 @@ test("readCachedSelectedGribPath revalidates a same-size replacement", async (t)
     JSON.stringify(testSelectedMetadata(descriptor, original)),
   );
 
-  assert.equal(await readCachedSelectedGribPath(descriptor.cachePath, descriptor), descriptor.cachePath);
+  const verifyProfile = {};
+  assert.equal(await readCachedSelectedGribPath(descriptor.cachePath, descriptor, verifyProfile), descriptor.cachePath);
+  assert.equal(verifyProfile.selectedGribVerifyHashes, 1);
+  assert.equal(verifyProfile.selectedGribVerifyHashBytes, original.length);
 
   const metadataReplacementPath = `${descriptor.cachePath}.ready.json.replacement`;
   await fs.promises.writeFile(

@@ -9,6 +9,31 @@ const { clampInt } = require("./local-artifact-options");
 // keys the worker still holds; a desynced set would strip payloads whose
 // metadata the worker already evicted.
 const WORKER_METADATA_LRU_MAX_ENTRIES = 8;
+const FRAME_WORKER_STARTUP_RECEIPT_TYPE = "noaa-color-lookup-state";
+const DEFAULT_STARTUP_RECEIPT_TIMEOUT_MS = 10_000;
+const JOB_RESPONSE_FIELDS = ["id", "ok", "frameArtifacts", "error"];
+
+function normalizeRequiredStartupReceiptTypes(requireStartupReceipt, requiredStartupReceiptTypes) {
+  // An explicit list is authoritative. Omitting it preserves the original
+  // boolean contract, which requires the single color-lookup receipt.
+  if (requiredStartupReceiptTypes === undefined) {
+    return requireStartupReceipt ? [FRAME_WORKER_STARTUP_RECEIPT_TYPE] : [];
+  }
+  if (!Array.isArray(requiredStartupReceiptTypes)) {
+    throw new TypeError("requiredStartupReceiptTypes must be an array of unique, non-empty strings");
+  }
+  const seen = new Set();
+  for (const receiptType of requiredStartupReceiptTypes) {
+    if (typeof receiptType !== "string" || receiptType.length === 0 || receiptType.trim() !== receiptType) {
+      throw new TypeError("requiredStartupReceiptTypes must contain only non-empty, unpadded strings");
+    }
+    if (seen.has(receiptType)) {
+      throw new Error(`requiredStartupReceiptTypes contains duplicate type "${receiptType}"`);
+    }
+    seen.add(receiptType);
+  }
+  return [...seen];
+}
 
 async function runWithConcurrency(items, concurrency, worker) {
   if (!Array.isArray(items) || items.length === 0) {
@@ -63,15 +88,30 @@ class AsyncSemaphore {
 }
 
 class FrameWorkerPool {
-  constructor({ workerPath, size, maxRespawns }) {
+  constructor({
+    workerPath,
+    size,
+    maxRespawns,
+    requireStartupReceipt = false,
+    requiredStartupReceiptTypes,
+    onStartupReceipt = null,
+    startupReceiptTimeoutMs = DEFAULT_STARTUP_RECEIPT_TIMEOUT_MS,
+  }) {
     this.workerPath = workerPath;
     this.size = clampInt(size, 1, 48, 2);
     this.maxRespawns = clampInt(maxRespawns, 0, 64, 3);
+    this.requiredStartupReceiptTypes = Object.freeze(
+      normalizeRequiredStartupReceiptTypes(requireStartupReceipt, requiredStartupReceiptTypes),
+    );
+    this.requireStartupReceipt = this.requiredStartupReceiptTypes.length > 0;
+    this.onStartupReceipt = typeof onStartupReceipt === "function" ? onStartupReceipt : null;
+    this.startupReceiptTimeoutMs = clampInt(startupReceiptTimeoutMs, 100, 60_000, DEFAULT_STARTUP_RECEIPT_TIMEOUT_MS);
     this.respawnsUsed = 0;
     this.failure = null;
     this.queue = [];
     this.workers = [];
     this.nextJobId = 1;
+    this.nextSpawnOrdinal = 1;
     this.isClosed = false;
     for (let i = 0; i < this.size; i += 1) {
       this.workers.push(this.createWorkerState());
@@ -82,6 +122,10 @@ class FrameWorkerPool {
     const worker = new Worker(this.workerPath);
     const state = {
       worker,
+      spawnOrdinal: this.nextSpawnOrdinal++,
+      ready: !this.requireStartupReceipt,
+      startupReceiptTypesReceived: new Set(),
+      startupReceiptTimer: null,
       busy: false,
       activeJob: null,
       dead: false,
@@ -95,6 +139,20 @@ class FrameWorkerPool {
       // Any exit before close() is unexpected; even code 0 strands the in-flight job.
       this.handleWorkerDeath(state, new Error(`Worker exited with code ${code}`));
     });
+    if (this.requireStartupReceipt) {
+      state.startupReceiptTimer = setTimeout(() => {
+        const missingReceiptTypes = this.requiredStartupReceiptTypes.filter(
+          (receiptType) => !state.startupReceiptTypesReceived.has(receiptType),
+        );
+        this.handleWorkerDeath(
+          state,
+          new Error(
+            `Worker spawn ${state.spawnOrdinal} did not provide all required startup receipts within ` +
+              `${this.startupReceiptTimeoutMs}ms; missing: ${missingReceiptTypes.join(", ")}`,
+          ),
+        );
+      }, this.startupReceiptTimeoutMs);
+    }
     return state;
   }
 
@@ -121,7 +179,7 @@ class FrameWorkerPool {
       return;
     }
     for (const state of this.workers) {
-      if (state.busy || state.dead) {
+      if (!state.ready || state.busy || state.dead) {
         continue;
       }
       const next = this.queue.shift();
@@ -164,6 +222,19 @@ class FrameWorkerPool {
   }
 
   handleMessage(state, message) {
+    if (
+      this.requireStartupReceipt &&
+      message !== null &&
+      typeof message === "object" &&
+      Object.prototype.hasOwnProperty.call(message, "type")
+    ) {
+      this.handleStartupReceipt(state, message);
+      return;
+    }
+    if (message?.type === FRAME_WORKER_STARTUP_RECEIPT_TYPE) {
+      this.handleStartupReceipt(state, message);
+      return;
+    }
     if (!state.activeJob) {
       return;
     }
@@ -185,11 +256,73 @@ class FrameWorkerPool {
     this.pump();
   }
 
+  handleStartupReceipt(state, message) {
+    if (state.dead || this.isClosed || !this.requireStartupReceipt) {
+      return;
+    }
+    const receiptType = message?.type;
+    if (!this.requiredStartupReceiptTypes.includes(receiptType)) {
+      this.handleWorkerDeath(
+        state,
+        new Error(
+          `Worker spawn ${state.spawnOrdinal} sent unknown startup receipt type ${JSON.stringify(receiptType)}; ` +
+            `required types: ${this.requiredStartupReceiptTypes.join(", ")}`,
+        ),
+      );
+      return;
+    }
+    const jobResponseField = JOB_RESPONSE_FIELDS.find((field) => Object.prototype.hasOwnProperty.call(message, field));
+    if (jobResponseField) {
+      this.handleWorkerDeath(
+        state,
+        new Error(
+          `Worker spawn ${state.spawnOrdinal} sent startup receipt type "${receiptType}" with reserved ` +
+            `job-response field "${jobResponseField}"`,
+        ),
+      );
+      return;
+    }
+    if (state.startupReceiptTypesReceived.has(receiptType)) {
+      this.handleWorkerDeath(
+        state,
+        new Error(`Worker spawn ${state.spawnOrdinal} sent duplicate startup receipt type "${receiptType}"`),
+      );
+      return;
+    }
+    const receipt = {
+      ...message,
+      spawnOrdinal: state.spawnOrdinal,
+    };
+    try {
+      if (!this.onStartupReceipt) {
+        throw new Error("Worker startup receipt forwarding is not configured");
+      }
+      this.onStartupReceipt(receipt);
+    } catch (error) {
+      this.handleWorkerDeath(state, error);
+      return;
+    }
+    state.startupReceiptTypesReceived.add(receiptType);
+    if (state.startupReceiptTypesReceived.size < this.requiredStartupReceiptTypes.length) {
+      return;
+    }
+    if (state.startupReceiptTimer) {
+      clearTimeout(state.startupReceiptTimer);
+      state.startupReceiptTimer = null;
+    }
+    state.ready = true;
+    this.pump();
+  }
+
   handleWorkerDeath(state, error) {
     if (state.dead || this.isClosed) {
       return;
     }
     state.dead = true;
+    if (state.startupReceiptTimer) {
+      clearTimeout(state.startupReceiptTimer);
+      state.startupReceiptTimer = null;
+    }
     const err = error instanceof Error ? error : new Error(String(error || "worker-error"));
     const index = this.workers.indexOf(state);
     if (index !== -1) {
@@ -235,6 +368,12 @@ class FrameWorkerPool {
 
   async close() {
     this.isClosed = true;
+    for (const state of this.workers) {
+      if (state.startupReceiptTimer) {
+        clearTimeout(state.startupReceiptTimer);
+        state.startupReceiptTimer = null;
+      }
+    }
     const terminations = this.workers.map((state) => state.worker.terminate().catch(() => undefined));
     await Promise.all(terminations);
     while (this.queue.length > 0) {
@@ -317,6 +456,8 @@ function reviveBodyBuffer(body) {
 
 module.exports = {
   AsyncSemaphore,
+  DEFAULT_STARTUP_RECEIPT_TIMEOUT_MS,
+  FRAME_WORKER_STARTUP_RECEIPT_TYPE,
   FrameWorkerPool,
   WORKER_METADATA_LRU_MAX_ENTRIES,
   reviveFrameArtifacts,

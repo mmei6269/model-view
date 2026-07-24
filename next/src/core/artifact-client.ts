@@ -22,7 +22,13 @@ import {
   resetResolvedArtifactBaseUrl,
   setResolvedArtifactBaseUrl,
 } from "./artifact-url";
-import { normalizeBinaryHoverGridPayload, normalizeHoverGridPayload } from "./hover-grid-payload";
+import { normalizeHoverGridPayload, normalizeOwnedBinaryHoverGridPayload } from "./hover-grid-payload";
+import {
+  isHoverGridWorkerOwnershipLostError,
+  isUsableHoverGridPayload,
+  normalizeOwnedBinaryHoverGridPayloadOffMainThread,
+  prewarmHoverGridPayloadWorker,
+} from "./hover-grid-worker-client";
 import { clearLayerImageObjectUrlCache, preloadImage } from "./image-prefetch-cache";
 import {
   resolveContourVectorRequestUrl,
@@ -77,6 +83,17 @@ interface RunListCacheEntry {
   expiresAt: number;
 }
 
+interface HoverGridPayloadCacheEntry {
+  payload: HoverGridPayload;
+  metadataBytes: number;
+  backingStores: ArrayBufferLike[];
+}
+
+interface HoverGridBackingStoreReference {
+  bytes: number;
+  references: number;
+}
+
 interface PrefetchOptions {
   decode?: boolean;
   signal?: AbortSignal;
@@ -97,7 +114,8 @@ const contourVectorPayloadCache = new Map<string, ContourVectorPayload>();
 const contourVectorPayloadInFlight = createSharedRequestMap<ContourVectorPayload>();
 const weatherVectorPayloadCache = new Map<string, WeatherVectorPayload>();
 const weatherVectorPayloadInFlight = createSharedRequestMap<WeatherVectorPayload>();
-const hoverGridPayloadCache = new Map<string, { payload: HoverGridPayload; bytes: number }>();
+const hoverGridPayloadCache = new Map<string, HoverGridPayloadCacheEntry>();
+const hoverGridBackingStoreReferences = new Map<ArrayBufferLike, HoverGridBackingStoreReference>();
 let hoverGridPayloadCacheBytes = 0;
 const hoverGridPayloadInFlight = createSharedRequestMap<HoverGridPayload>();
 const pointSoundingPayloadCache = new Map<string, PointSoundingPayload>();
@@ -413,18 +431,68 @@ async function fetchSingleHoverGridPayload(url: string, options: PrefetchOptions
   if (cached) {
     return cached;
   }
-  return runSharedRequest(hoverGridPayloadInFlight, url, options.signal, (sharedSignal) =>
-    fetch(url, { cache: "force-cache", signal: sharedSignal }).then(async (response) => {
-      if (!response.ok) {
-        throw new Error(`Hover grid request failed (${response.status}) for ${url}`);
-      }
-      const parsedPayload = /\.bin\.gz(?:$|[?#])/.test(url)
-        ? normalizeBinaryHoverGridPayload(await response.arrayBuffer())
-        : normalizeHoverGridPayload((await response.json()) as HoverGridPayload);
-      cacheHoverGridPayload(url, parsedPayload);
-      return parsedPayload;
-    }),
-  );
+  const isBinary = /\.bin\.(?:gz|br)(?:$|[?#])/.test(url);
+  if (isBinary && !options.signal?.aborted) {
+    // Start the same-origin module worker while the compressed response is in
+    // flight, hiding startup behind network transfer and Brotli/gzip decode.
+    prewarmHoverGridPayloadWorker();
+  }
+  return runSharedRequest(hoverGridPayloadInFlight, url, options.signal, async (sharedSignal) => {
+    const response = await fetch(url, { cache: "force-cache", signal: sharedSignal });
+    if (!response.ok) {
+      throw new Error(`Hover grid request failed (${response.status}) for ${url}`);
+    }
+    const parsedPayload = isBinary
+      ? await decodeFetchedBinaryHoverGridPayload(url, await response.arrayBuffer(), sharedSignal)
+      : normalizeHoverGridPayload((await response.json()) as HoverGridPayload);
+    assertHoverGridPayloadMatchesRequestSchema(url, parsedPayload);
+    cacheHoverGridPayload(url, parsedPayload);
+    return parsedPayload;
+  });
+}
+
+async function decodeFetchedBinaryHoverGridPayload(
+  url: string,
+  ownedBuffer: ArrayBuffer,
+  signal: AbortSignal,
+): Promise<HoverGridPayload> {
+  try {
+    const parsedPayload = await normalizeOwnedBinaryHoverGridPayloadOffMainThread(ownedBuffer, signal);
+    if (!isUsableHoverGridPayload(parsedPayload)) {
+      throw new Error(`Hover grid binary payload decoded to an unusable result for ${url}`);
+    }
+    assertHoverGridPayloadMatchesRequestSchema(url, parsedPayload);
+    return parsedPayload;
+  } catch (error) {
+    if (!isHoverGridWorkerOwnershipLostError(error)) {
+      throw error;
+    }
+    if (signal.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+
+    // A crashed/timed-out worker exclusively owns the detached response
+    // buffer; retaining a second 225+ MiB fallback copy would undo Pass 07.
+    // Refetch at most once (normally from the HTTP cache), then use the
+    // in-process parser. The worker client disables itself after a crash, so
+    // later frames also take the safe fallback instead of entering a loop.
+    const recoveryResponse = await fetch(url, { cache: "force-cache", signal });
+    if (!recoveryResponse.ok) {
+      throw new Error(
+        `Hover grid recovery request failed (${recoveryResponse.status}) after worker ownership loss for ${url}`,
+      );
+    }
+    const recoveryBuffer = await recoveryResponse.arrayBuffer();
+    if (signal.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+    const recoveredPayload = normalizeOwnedBinaryHoverGridPayload(recoveryBuffer);
+    if (!isUsableHoverGridPayload(recoveredPayload)) {
+      throw new Error(`Hover grid recovery payload decoded to an unusable result for ${url}`);
+    }
+    assertHoverGridPayloadMatchesRequestSchema(url, recoveredPayload);
+    return recoveredPayload;
+  }
 }
 
 function mergeHoverGridPayloadObjects(payloads: HoverGridPayload[]): HoverGridPayload {
@@ -432,12 +500,46 @@ function mergeHoverGridPayloadObjects(payloads: HoverGridPayload[]): HoverGridPa
     return payloads[0];
   }
   const [base] = payloads;
+  if (
+    payloads.some((payload) => Number(payload.rows) !== Number(base.rows) || Number(payload.cols) !== Number(base.cols))
+  ) {
+    throw new Error("Hover grid supplemental payload dimensions do not match the base payload");
+  }
   return {
     schemaVersion: Math.max(...payloads.map((payload) => Number(payload.schemaVersion) || 0)),
     rows: base.rows,
     cols: base.cols,
     variables: Object.assign({}, ...payloads.map((payload) => payload.variables || {})),
   };
+}
+
+function assertHoverGridPayloadMatchesRequestSchema(url: string, payload: HoverGridPayload): void {
+  const expected = hoverGridRequestSchemaVersion(url);
+  if (expected === null) {
+    return;
+  }
+  if (payload.schemaVersion !== expected) {
+    throw new Error(
+      `Hover grid schema mismatch for ${url}: request declared ${expected}, payload decoded as ${payload.schemaVersion}`,
+    );
+  }
+}
+
+function hoverGridRequestSchemaVersion(url: string): number | null {
+  let value: string | null;
+  try {
+    value = new URL(url, "http://modelview.invalid").searchParams.get("h");
+  } catch {
+    throw new Error(`Hover grid request URL is invalid: ${url}`);
+  }
+  if (value === null || value === "" || value === "0") {
+    return null;
+  }
+  const schemaVersion = Number(value);
+  if (!Number.isSafeInteger(schemaVersion) || schemaVersion < 1 || schemaVersion > 4) {
+    throw new Error(`Hover grid request URL has unsupported schema identity ${JSON.stringify(value)}: ${url}`);
+  }
+  return schemaVersion;
 }
 
 function buildHoverGridPayloadCacheKey(urls: string[]): string {
@@ -550,14 +652,10 @@ function getCachedHoverGridPayloadByKey(key: string): HoverGridPayload | null {
 }
 
 function cacheHoverGridPayload(key: string, payload: HoverGridPayload): void {
-  const existing = hoverGridPayloadCache.get(key);
-  if (existing) {
-    hoverGridPayloadCache.delete(key);
-    hoverGridPayloadCacheBytes = Math.max(0, hoverGridPayloadCacheBytes - existing.bytes);
-  }
-  const bytes = estimateHoverGridPayloadBytes(payload);
-  hoverGridPayloadCache.set(key, { payload, bytes });
-  hoverGridPayloadCacheBytes += bytes;
+  deleteCachedHoverGridPayload(key);
+  const entry = describeHoverGridPayloadCacheEntry(payload);
+  hoverGridPayloadCache.set(key, entry);
+  retainHoverGridPayloadCacheEntry(entry);
   while (
     hoverGridPayloadCache.size > HOVER_GRID_PAYLOAD_CACHE_MAX_ENTRIES ||
     hoverGridPayloadCacheBytes > HOVER_GRID_PAYLOAD_CACHE_LIMIT_BYTES
@@ -566,20 +664,91 @@ function cacheHoverGridPayload(key: string, payload: HoverGridPayload): void {
     if (!oldestKey) {
       break;
     }
-    const oldest = hoverGridPayloadCache.get(oldestKey);
-    hoverGridPayloadCache.delete(oldestKey);
-    hoverGridPayloadCacheBytes = Math.max(0, hoverGridPayloadCacheBytes - (oldest?.bytes || 0));
+    deleteCachedHoverGridPayload(oldestKey);
   }
 }
 
-function estimateHoverGridPayloadBytes(payload: HoverGridPayload): number {
-  let bytes = 64;
+function describeHoverGridPayloadCacheEntry(payload: HoverGridPayload): HoverGridPayloadCacheEntry {
+  let metadataBytes = 64;
+  const backingStores = new Set<ArrayBufferLike>();
   for (const [key, variable] of Object.entries(payload.variables || {})) {
-    bytes += key.length * 2 + 48;
-    bytes += variable?.values?.byteLength || 0;
-    bytes += typeof variable?.data === "string" ? variable.data.length * 2 : 0;
+    metadataBytes += key.length * 2 + 48;
+    const backingStore = variable?.values?.buffer;
+    if (backingStore && Number.isSafeInteger(backingStore.byteLength) && backingStore.byteLength >= 0) {
+      backingStores.add(backingStore);
+    }
+    metadataBytes += typeof variable?.data === "string" ? variable.data.length * 2 : 0;
   }
-  return bytes;
+  return { payload, metadataBytes, backingStores: Array.from(backingStores) };
+}
+
+function retainHoverGridPayloadCacheEntry(entry: HoverGridPayloadCacheEntry): void {
+  hoverGridPayloadCacheBytes += entry.metadataBytes;
+  for (const backingStore of entry.backingStores) {
+    const existing = hoverGridBackingStoreReferences.get(backingStore);
+    if (existing) {
+      existing.references += 1;
+      continue;
+    }
+    const bytes = backingStore.byteLength;
+    hoverGridBackingStoreReferences.set(backingStore, { bytes, references: 1 });
+    hoverGridPayloadCacheBytes += bytes;
+  }
+}
+
+function deleteCachedHoverGridPayload(key: string): boolean {
+  const entry = hoverGridPayloadCache.get(key);
+  if (!entry) {
+    return false;
+  }
+  hoverGridPayloadCache.delete(key);
+  hoverGridPayloadCacheBytes -= entry.metadataBytes;
+  for (const backingStore of entry.backingStores) {
+    const reference = hoverGridBackingStoreReferences.get(backingStore);
+    if (!reference) {
+      continue;
+    }
+    if (reference.references > 1) {
+      reference.references -= 1;
+      continue;
+    }
+    hoverGridBackingStoreReferences.delete(backingStore);
+    hoverGridPayloadCacheBytes -= reference.bytes;
+  }
+  return true;
+}
+
+export function _testGetHoverGridPayloadCacheStats(): {
+  entries: number;
+  bytes: number;
+  metadataBytes: number;
+  backingStores: number;
+  backingBytes: number;
+  backingReferences: number[];
+} {
+  const references = Array.from(hoverGridBackingStoreReferences.values());
+  return {
+    entries: hoverGridPayloadCache.size,
+    bytes: hoverGridPayloadCacheBytes,
+    metadataBytes: Array.from(hoverGridPayloadCache.values()).reduce((sum, entry) => sum + entry.metadataBytes, 0),
+    backingStores: references.length,
+    backingBytes: references.reduce((sum, reference) => sum + reference.bytes, 0),
+    backingReferences: references.map((reference) => reference.references).sort((left, right) => left - right),
+  };
+}
+
+export function _testCacheHoverGridPayload(key: string, payload: HoverGridPayload): void {
+  cacheHoverGridPayload(key, payload);
+}
+
+export function _testDeleteCachedHoverGridPayload(key: string): boolean {
+  return deleteCachedHoverGridPayload(key);
+}
+
+export function _testResetHoverGridPayloadCache(): void {
+  for (const key of Array.from(hoverGridPayloadCache.keys())) {
+    deleteCachedHoverGridPayload(key);
+  }
 }
 
 function resolveCacheLimitBytes(value: unknown, fallbackMb: number): number {

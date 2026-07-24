@@ -2278,7 +2278,7 @@ function setCorsHeaders(res) {
 
 function contentTypeFor(filePath) {
   const normalized = String(filePath || "").toLowerCase();
-  if (normalized.endsWith(".json.gz") || normalized.endsWith(".json")) {
+  if (normalized.endsWith(".json.gz") || normalized.endsWith(".json.br") || normalized.endsWith(".json")) {
     return "application/json; charset=utf-8";
   }
   if (normalized.endsWith(".png")) {
@@ -2291,6 +2291,9 @@ function encodingFor(filePath) {
   const normalized = String(filePath || "").toLowerCase();
   if (normalized.endsWith(".json.gz") || normalized.endsWith(".bin.gz")) {
     return "gzip";
+  }
+  if (normalized.endsWith(".json.br") || normalized.endsWith(".bin.br")) {
+    return "br";
   }
   return null;
 }
@@ -2315,6 +2318,8 @@ module.exports = {
   buildBuilderArgv,
   readJsonBody,
   targetHoursForMaxHour,
+  contentTypeFor,
+  encodingFor,
   ACTION_MODEL_KEYS,
   ACTION_VIEW_KEYS,
   ACTION_CATEGORY_IDS,

@@ -195,7 +195,10 @@ test("v3 delta encode through the kernel matches the pure-JS delta byte for byte
   // an odd tail, including wrap-heavy values near the i16 limits.
   const variables = {};
   const originals = [];
-  const lengths = [70_001, 40_000, 33];
+  // Each variable is a canonical full grid. The first size still crosses the
+  // 65,536-value SIMD/chunk boundary, while the additional variables exercise
+  // the schema-v3 global carry across variable boundaries.
+  const lengths = [70_001, 70_001, 70_001];
   for (let v = 0; v < lengths.length; v += 1) {
     const values = new Int16Array(lengths[v]);
     for (let i = 0; i < values.length; i += 1) {
@@ -205,7 +208,13 @@ test("v3 delta encode through the kernel matches the pure-JS delta byte for byte
     variables[`var${v}`] = { scale: 1, offset: 0, missing: -32768, values };
     originals.push(values);
   }
-  const body = encodeHoverGridBinaryPayload({ schemaVersion: 3, rows: 1, cols: 1, variables, gzipLevel: 1 });
+  const body = encodeHoverGridBinaryPayload({
+    schemaVersion: 3,
+    rows: 1,
+    cols: lengths[0],
+    variables,
+    gzipLevel: 1,
+  });
   const raw = zlib.gunzipSync(body);
   const headerLength = raw.readUInt32LE(4);
   const dataStart = 8 + headerLength;

@@ -158,7 +158,7 @@ function loadParcelKernelVariant(variant) {
       typeof exports.quantizeWindF64 === "function"
     ) {
       const quantChunk = Number(exports.QUANT_CHUNK?.value ?? exports.QUANT_CHUNK);
-      kernel.quantize = {
+      const quantize = {
         chunk: quantChunk,
         inA: new Float32Array(memory.buffer, Number(exports.QIN_A_PTR?.value ?? exports.QIN_A_PTR), quantChunk),
         inB: new Float32Array(memory.buffer, Number(exports.QIN_B_PTR?.value ?? exports.QIN_B_PTR), quantChunk),
@@ -167,7 +167,17 @@ function loadParcelKernelVariant(variant) {
         raw: exports.quantizeRawF64,
         affine: exports.quantizeAffineF64,
         wind: exports.quantizeWindF64,
+        deltaOutput: typeof exports.deltaEncodeQuantizedI16 === "function" ? exports.deltaEncodeQuantizedI16 : null,
       };
+      kernel.quantize = attachQuantizedGradientCapability(exports, memory, quantize);
+    }
+    // Exact continuous raw/affine RGBA colorizer. This capability is
+    // independently guarded so an old or malformed optional export cannot
+    // disable the parcel/derived kernel; the rasterizer simply retains its
+    // authoritative JS path.
+    const colorize = createContinuousColorizerCapability(exports, memory);
+    if (colorize) {
+      kernel.colorize = colorize;
     }
     // Presentation smoothing port (2026-07-12): EXACT f64 arithmetic with
     // f32 intermediate rounding identical to the JS scratch stores.
@@ -258,6 +268,296 @@ function loadParcelKernelVariant(variant) {
   }
 }
 
+const MAX_COLOR_CHUNK = 65536;
+const MAX_COLOR_PALETTE = 65536;
+const CONTINUOUS_COLORIZER_ABI_VERSION = 1;
+const MAX_GRADIENT_COLS = 32768;
+const QUANTIZED_GRADIENT_ABI_VERSION = 1;
+const QUANTIZED_GRADIENT_CANARY = 0x47523244;
+const COLORIZER_CANARY_INPUT = [-1, 0.25, 0.5, 0.75, 1, Number.NaN];
+const COLORIZER_CANARY_PALETTE = [3, 5, 7, 255, 11, 13, 17, 0, 19, 23, 29, 128, 31, 37, 41, 211];
+const COLORIZER_CANARY_OUTPUT = [0, 0, 0, 0, 3, 5, 7, 255, 0, 0, 0, 0, 31, 37, 41, 211, 0, 0, 0, 0, 0, 0, 0, 0];
+
+function createContinuousColorizerCapability(exports, memory) {
+  try {
+    if (!exports || typeof exports.colorizeContinuousF64 !== "function" || !memory?.buffer) {
+      return null;
+    }
+    const abiVersion = exportedNumber(exports.COLORIZER_ABI_VERSION);
+    const chunk = exportedNumber(exports.COLOR_CHUNK);
+    const paletteCap = exportedNumber(exports.COLOR_PALETTE_CAP);
+    const inputPtr = exportedNumber(exports.QIN_A_PTR);
+    const outputPtr = exportedNumber(exports.COLOR_OUT_PTR);
+    const palettePtr = exportedNumber(exports.COLOR_PALETTE_PTR);
+    const statsPtr = exportedNumber(exports.COLOR_STATS_PTR);
+    if (
+      abiVersion !== CONTINUOUS_COLORIZER_ABI_VERSION ||
+      !isBoundedPositiveInteger(chunk, MAX_COLOR_CHUNK) ||
+      chunk < COLORIZER_CANARY_INPUT.length ||
+      !isBoundedPositiveInteger(paletteCap, MAX_COLOR_PALETTE) ||
+      paletteCap < COLORIZER_CANARY_PALETTE.length / 4 ||
+      !isAlignedPointer(inputPtr, 4) ||
+      !isAlignedPointer(outputPtr, 4) ||
+      !isAlignedPointer(palettePtr, 4) ||
+      !isAlignedPointer(statsPtr, 4)
+    ) {
+      return null;
+    }
+    const ranges = [
+      [inputPtr, chunk * 4],
+      [outputPtr, chunk * 4],
+      [palettePtr, paletteCap * 4],
+      [statsPtr, 8],
+    ];
+    const byteLength = Number(memory.buffer.byteLength);
+    if (ranges.some(([start, length]) => start + length > byteLength) || rangesOverlap(ranges)) {
+      return null;
+    }
+    const capability = {
+      abiVersion,
+      chunk,
+      paletteCap,
+      memory,
+      input: new Float32Array(memory.buffer, inputPtr, chunk),
+      output: new Uint8Array(memory.buffer, outputPtr, chunk * 4),
+      palette: new Uint8Array(memory.buffer, palettePtr, paletteCap * 4),
+      stats: new Int32Array(memory.buffer, statsPtr, 2),
+      run: exports.colorizeContinuousF64,
+    };
+    if (!passesContinuousColorizerCanary(capability)) {
+      return null;
+    }
+    return Object.freeze(capability);
+  } catch {
+    return null;
+  }
+}
+
+function passesContinuousColorizerCanary(capability) {
+  let valid = false;
+  try {
+    capability.input.set(COLORIZER_CANARY_INPUT, 0);
+    capability.output.fill(0xa5, 0, COLORIZER_CANARY_OUTPUT.length);
+    capability.palette.set(COLORIZER_CANARY_PALETTE, 0);
+    capability.stats.fill(-1);
+    capability.run(
+      COLORIZER_CANARY_INPUT.length,
+      COLORIZER_CANARY_PALETTE.length / 4,
+      0,
+      1,
+      1,
+      0,
+      1,
+      1,
+      2,
+      -0.5,
+      1,
+      -1,
+    );
+    valid =
+      capability.stats[0] === 2 &&
+      capability.stats[1] === 5 &&
+      COLORIZER_CANARY_OUTPUT.every((value, index) => capability.output[index] === value);
+  } catch {
+    valid = false;
+  } finally {
+    // The canary runs before the capability becomes reachable. Leave every
+    // touched scratch byte neutral so optional validation cannot leak state
+    // into the parcel, hover, or first raster call.
+    try {
+      capability.input.fill(0, 0, COLORIZER_CANARY_INPUT.length);
+      capability.output.fill(0, 0, COLORIZER_CANARY_OUTPUT.length);
+      capability.palette.fill(0, 0, COLORIZER_CANARY_PALETTE.length);
+      capability.stats.fill(0);
+    } catch {
+      valid = false;
+    }
+  }
+  return valid;
+}
+
+function createQuantizedGradientCapability(exports, memory, quantize) {
+  try {
+    if (
+      !exports ||
+      typeof exports.resetQuantizedGradient2d !== "function" ||
+      typeof exports.gradientEncodeQuantizedI16 !== "function" ||
+      !memory?.buffer ||
+      !(quantize?.out instanceof Int16Array)
+    ) {
+      return null;
+    }
+    const abiVersion = exportedNumber(exports.GRADIENT_ABI_VERSION);
+    const cap = exportedNumber(exports.GRADIENT_COLS_CAP);
+    const canary = exportedNumber(exports.GRADIENT_CANARY);
+    const previousRowPtr = exportedNumber(exports.GRADIENT_PREVIOUS_ROW_PTR);
+    if (
+      abiVersion !== QUANTIZED_GRADIENT_ABI_VERSION ||
+      canary !== QUANTIZED_GRADIENT_CANARY ||
+      !isBoundedPositiveInteger(cap, MAX_GRADIENT_COLS) ||
+      !isBoundedPositiveInteger(quantize.chunk, MAX_GRADIENT_COLS) ||
+      !isAlignedPointer(previousRowPtr, Int16Array.BYTES_PER_ELEMENT)
+    ) {
+      return null;
+    }
+    const previousRowBytes = cap * Int16Array.BYTES_PER_ELEMENT;
+    const ranges = [
+      [previousRowPtr, previousRowBytes],
+      [quantize.inA.byteOffset, quantize.inA.byteLength],
+      [quantize.inB.byteOffset, quantize.inB.byteLength],
+      [quantize.out.byteOffset, quantize.out.byteLength],
+      [quantize.stats.byteOffset, quantize.stats.byteLength],
+    ];
+    if (previousRowPtr + previousRowBytes > Number(memory.buffer.byteLength) || rangesOverlap(ranges)) {
+      return null;
+    }
+    const capability = {
+      abiVersion,
+      canary,
+      cap,
+      chunk: quantize.chunk,
+      output: quantize.out,
+      previousRow: new Int16Array(memory.buffer, previousRowPtr, cap),
+      resetRaw: exports.resetQuantizedGradient2d,
+      encodeRaw: exports.gradientEncodeQuantizedI16,
+    };
+    if (!passesQuantizedGradientCanary(capability)) {
+      return null;
+    }
+    return Object.freeze({
+      abiVersion,
+      cap,
+      canEncode(cols, cells) {
+        return isBoundedPositiveInteger(cols, cap) && Number.isSafeInteger(cells) && cells > 0 && cells % cols === 0;
+      },
+      reset(cols) {
+        if (!isBoundedPositiveInteger(cols, cap)) {
+          return false;
+        }
+        return Number(capability.resetRaw(cols)) === cols;
+      },
+      encode(count) {
+        if (!isBoundedPositiveInteger(count, capability.chunk)) {
+          throw new RangeError(`quantized gradient chunk ${String(count)} is outside 1..${capability.chunk}`);
+        }
+        const progress = Number(capability.encodeRaw(count));
+        if (progress !== count) {
+          throw new Error(`quantized gradient advanced ${progress} values; expected ${count}`);
+        }
+        return progress;
+      },
+    });
+  } catch {
+    return null;
+  }
+}
+
+function attachQuantizedGradientCapability(exports, memory, quantize) {
+  const gradient = createQuantizedGradientCapability(exports, memory, quantize);
+  if (gradient) {
+    quantize.gradient = gradient;
+  }
+  return quantize;
+}
+
+const QUANTIZED_GRADIENT_CANARY_INPUT = Object.freeze([
+  32767, -32768, -1, 0, 1, 12345, -23456, 99, -100, -32768, 32767, 45, -46, 30000, -30000, 7, 8, 9, 101, 103, 107, 109,
+  113, 127, 131, 137, 139,
+]);
+
+function passesQuantizedGradientCanary(capability) {
+  const cols = 9;
+  const splits = [7, 11, QUANTIZED_GRADIENT_CANARY_INPUT.length - 18];
+  const expected = gradientEncodeInt16Oracle(QUANTIZED_GRADIENT_CANARY_INPUT, cols);
+  const outputTouched = Math.max(...splits) + 2;
+  const outputSnapshot = capability.output.slice(0, outputTouched);
+  const previousSnapshot = capability.previousRow.slice(0, cols + 1);
+  const actual = [];
+  let sourceOffset = 0;
+  let valid;
+  try {
+    capability.previousRow.fill(0x1234, 0, cols + 1);
+    if (Number(capability.resetRaw(cols)) !== cols) {
+      return false;
+    }
+    for (const count of splits) {
+      capability.output.fill(0x2a2a, 0, count + 2);
+      capability.output.set(QUANTIZED_GRADIENT_CANARY_INPUT.slice(sourceOffset, sourceOffset + count), 0);
+      if (Number(capability.encodeRaw(count)) !== count) {
+        return false;
+      }
+      if (capability.output[count] !== 0x2a2a || capability.output[count + 1] !== 0x2a2a) {
+        return false;
+      }
+      for (let index = 0; index < count; index += 1) {
+        actual.push(capability.output[index]);
+      }
+      sourceOffset += count;
+    }
+    valid =
+      capability.previousRow[cols] === 0x1234 &&
+      actual.length === expected.length &&
+      expected.every((value, index) => actual[index] === value);
+  } catch {
+    valid = false;
+  } finally {
+    try {
+      capability.output.set(outputSnapshot, 0);
+      capability.previousRow.set(previousSnapshot, 0);
+      capability.resetRaw(0);
+    } catch {
+      valid = false;
+    }
+  }
+  return valid;
+}
+
+function gradientEncodeInt16Oracle(input, cols) {
+  const absolute = Int16Array.from(input);
+  const encoded = new Int16Array(absolute.length);
+  for (let index = 0; index < absolute.length; index += 1) {
+    const row = Math.floor(index / cols);
+    const col = index - row * cols;
+    const predictor =
+      row === 0
+        ? col === 0
+          ? 0
+          : absolute[index - 1]
+        : col === 0
+          ? absolute[index - cols]
+          : absolute[index - 1] + absolute[index - cols] - absolute[index - cols - 1];
+    encoded[index] = absolute[index] - predictor;
+  }
+  return encoded;
+}
+
+function exportedNumber(value) {
+  return Number(value?.value ?? value);
+}
+
+function isBoundedPositiveInteger(value, maximum) {
+  return Number.isSafeInteger(value) && value > 0 && value <= maximum;
+}
+
+function isAlignedPointer(value, alignment) {
+  return Number.isSafeInteger(value) && value >= 0 && value % alignment === 0;
+}
+
+function rangesOverlap(ranges) {
+  for (let left = 0; left < ranges.length; left += 1) {
+    const [leftStart, leftLength] = ranges[left];
+    const leftEnd = leftStart + leftLength;
+    for (let right = left + 1; right < ranges.length; right += 1) {
+      const [rightStart, rightLength] = ranges[right];
+      const rightEnd = rightStart + rightLength;
+      if (leftStart < rightEnd && rightStart < leftEnd) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Identity of the parcel backend that buildProfileDerivedGrids will
 // actually use in this process. Part of the derived-grid cache key so
 // grids computed by different backends — including different kernel
@@ -300,11 +600,15 @@ function activeParcelKernelId() {
 }
 
 module.exports = {
+  CONTINUOUS_COLORIZER_ABI_VERSION,
+  QUANTIZED_GRADIENT_ABI_VERSION,
   activeParcelKernelId,
   derivedSlabRequested,
   getParcelKernel,
   loadParcelKernelVariant,
   parcelKernelRequested,
   requestedParcelKernelVariant,
+  _testCreateContinuousColorizerCapability: createContinuousColorizerCapability,
+  _testCreateQuantizedGradientCapability: createQuantizedGradientCapability,
   KERNEL_WASM_PATH,
 };

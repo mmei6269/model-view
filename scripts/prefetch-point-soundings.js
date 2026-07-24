@@ -4,16 +4,24 @@
 
 const fs = require("fs");
 const path = require("path");
+const { loadDotEnv, resolveCacheRootEnv } = require("./lib/env-config");
+
+const ROOT_DIR = path.resolve(__dirname, "..");
+
+// Keep artifact-key defaults consistent with the builder when this entrypoint
+// is launched directly rather than through a parent that already loaded .env.
+if (require.main === module) {
+  loadDotEnv(path.join(ROOT_DIR, ".env"));
+}
+
 const { AsyncSemaphore } = require("./lib/local-artifact-concurrency");
 const { LocalArtifactRuntime } = require("./lib/local-artifact-runtime");
 const { NOAA_BETA_SOURCE_NAME } = require("./lib/noaa-beta-renderer");
 const { DEFAULT_ARTIFACT_PREFIX, DEFAULT_VIEW_KEY, VIEW_CONFIG } = require("./lib/modelview-runtime");
 const { resolveModels } = require("./lib/noaa-build/run-resolution");
-const { loadDotEnv, resolveCacheRootEnv } = require("./lib/env-config");
 const { runSoundingPrefetch } = require("./lib/noaa-build/prefetch-soundings");
 const { parseArgs } = require("./build-noaa-beta-artifacts");
 
-const ROOT_DIR = path.resolve(__dirname, "..");
 const DEFAULT_CACHE_ROOT = path.join(ROOT_DIR, "output/noaa-beta-cache");
 const DEFAULT_LOCAL_WGRIB2_PATH = path.join(ROOT_DIR, "output/noaa-beta-tools/bin/wgrib2");
 const DEFAULT_MODELS = "nam3km,hrrr";
@@ -71,7 +79,6 @@ function parseHoursArg(raw) {
 }
 
 async function main() {
-  loadDotEnv(path.join(ROOT_DIR, ".env"));
   const args = parseArgs(process.argv.slice(2));
   const models = resolveModels(args.models || args.model || DEFAULT_MODELS);
   const view = String(args.view || DEFAULT_VIEW_KEY).trim() || DEFAULT_VIEW_KEY;

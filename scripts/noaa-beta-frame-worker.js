@@ -2,14 +2,42 @@
 
 "use strict";
 
-const { parentPort } = require("worker_threads");
+const { parentPort, threadId } = require("worker_threads");
+const { detectHoverGridContentEncoding } = require("./lib/hover-grid-compression");
 const { renderNoaaGribFrame } = require("./lib/noaa-beta-renderer");
+const {
+  CATALOG_COLOR_LOOKUP_RECEIPT_SCHEMA_VERSION,
+  CATALOG_COLOR_LOOKUP_RECEIPT_TYPE,
+  buildCatalogColorLookupStateSnapshot,
+} = require("./lib/noaa-beta/catalog-color-lookup-asset");
 const { drainDerivedGridCacheWrites } = require("./lib/noaa-beta/derived-grid-cache");
 const { prewarmDerivedWorkerPool } = require("./lib/noaa-beta/derived-parallel");
+const { STATIC_CONTINUOUS_COLOR_LOOKUP_STATE } = require("./lib/noaa-beta/raster");
+const { initializeSnowRfBenchmarkRole } = require("./lib/noaa-beta/snow-rf-role-receipt");
 const { WORKER_METADATA_LRU_MAX_ENTRIES } = require("./lib/local-artifact-concurrency");
 
 if (parentPort) {
   parentPort.on("message", handleWorkerMessage);
+  if (process.env.MODELVIEW_NOAA_BENCHMARK_RECEIPTS === "1") {
+    parentPort.postMessage({
+      schemaVersion: CATALOG_COLOR_LOOKUP_RECEIPT_SCHEMA_VERSION,
+      type: CATALOG_COLOR_LOOKUP_RECEIPT_TYPE,
+      role: "frame-worker",
+      processId: process.pid,
+      threadId,
+      state: buildCatalogColorLookupStateSnapshot(STATIC_CONTINUOUS_COLOR_LOOKUP_STATE),
+    });
+    // The pool stamps the authoritative spawnOrdinal onto every startup
+    // receipt, so the role's local ordinal is a placeholder. Loading the
+    // Snow-RF state here also primes the loader cache the render path reads.
+    parentPort.postMessage(
+      initializeSnowRfBenchmarkRole({
+        role: "frame-worker",
+        spawnOrdinal: 0,
+        threadId,
+      }),
+    );
+  }
 }
 
 // Run-constant latestMetadata hydrated once per identity key by the pool
@@ -130,7 +158,8 @@ function serializeFrameArtifacts(frameArtifacts) {
   if (frameArtifacts.hoverGrid && Buffer.isBuffer(frameArtifacts.hoverGrid.body)) {
     hoverGrid = {
       ...serializeBinaryArtifact(frameArtifacts.hoverGrid, "application/json", transferList, transferredBuffers),
-      contentEncoding: frameArtifacts.hoverGrid.contentEncoding || "gzip",
+      contentEncoding:
+        frameArtifacts.hoverGrid.contentEncoding || detectHoverGridContentEncoding(frameArtifacts.hoverGrid.body),
       schemaVersion: frameArtifacts.hoverGrid.schemaVersion || 1,
     };
   }

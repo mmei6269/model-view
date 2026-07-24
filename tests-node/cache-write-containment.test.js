@@ -52,7 +52,13 @@ const SNOW_LIQUID_REF = {
   maskSamples: [],
 };
 
-const PROFILE_PAYLOAD = { version: "test-profile-v1", hour: 3, width: WIDTH, height: HEIGHT, records: {} };
+const PROFILE_PAYLOAD = {
+  version: "test-profile-v1",
+  hour: 3,
+  width: WIDTH,
+  height: HEIGHT,
+  records: { hgt: { record: "1" }, tmp2m: { record: "2" } },
+};
 
 const SNOWFALL_PAYLOAD = { version: "test-snowfall-v1", targetHour: 6, width: WIDTH, height: HEIGHT, entries: [] };
 
@@ -210,7 +216,14 @@ test("writeCachedProfileGrids returns false and warns when the cache dir cannot 
 
   const warn = t.mock.method(console, "warn", () => {});
   await assert.doesNotReject(async () => {
-    assert.equal(await writeCachedProfileGrids(cachePath, PROFILE_PAYLOAD, { tmp2m: makeGrid(WIDTH * HEIGHT) }), false);
+    assert.equal(
+      await writeCachedProfileGrids(
+        cachePath,
+        { ...PROFILE_PAYLOAD, records: { tmp2m: PROFILE_PAYLOAD.records.tmp2m } },
+        { tmp2m: makeGrid(WIDTH * HEIGHT) },
+      ),
+      false,
+    );
   });
   assert.ok(warn.mock.callCount() >= 1, "expected a console.warn on cache-write failure");
   assert.match(String(warn.mock.calls[0].arguments[0]), /cache write failed/);
@@ -225,7 +238,14 @@ test("writeCachedProfileGrids cleans up temp files when the final rename fails",
   await fs.promises.mkdir(`${cachePath}.bin`);
 
   const warn = t.mock.method(console, "warn", () => {});
-  assert.equal(await writeCachedProfileGrids(cachePath, PROFILE_PAYLOAD, { tmp2m: makeGrid(WIDTH * HEIGHT) }), false);
+  assert.equal(
+    await writeCachedProfileGrids(
+      cachePath,
+      { ...PROFILE_PAYLOAD, records: { tmp2m: PROFILE_PAYLOAD.records.tmp2m } },
+      { tmp2m: makeGrid(WIDTH * HEIGHT) },
+    ),
+    false,
+  );
   assert.ok(warn.mock.callCount() >= 1, "expected a console.warn on cache-write failure");
   assert.deepEqual(await listTmpEntries(dir), []);
   assert.equal(fs.existsSync(`${cachePath}.json`), false);

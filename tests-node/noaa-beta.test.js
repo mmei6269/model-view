@@ -2249,7 +2249,7 @@ test("NOAA derived profile helpers use generic cache keys", () => {
 
   assert.equal(_testProfileDecodeKey("TMP", 850), "profileTmp850");
   assert.deepEqual(_testProfileSelector("UGRD", 700), { param: "UGRD", level: "700 mb" });
-  assert.equal(payload.version, "derived-profile-grid-v2-frame-local-provenance");
+  assert.equal(payload.version, "derived-profile-grid-v3-sha256-complete");
   assert.deepEqual(Object.keys(payload.records), ["profileHgt850", "profileTmp850"]);
 });
 
@@ -3981,6 +3981,10 @@ test("NOAA beta runtime writes current manifest contract into separate cache roo
   assert.equal(manifest.source, NOAA_BETA_SOURCE_NAME);
   assert.match(metadata.rendererSignature, /^[a-f0-9]{16}$/);
   assert.equal(manifest.rendererSignature, metadata.rendererSignature);
+  assert.deepEqual(manifest.forecastHourRoster, metadata.forecastHourRoster);
+  assert.equal(manifest.forecastHourPolicy.policy, "configured-sparse");
+  assert.equal(manifest.forecastHourPolicy.maxRenderedHour, 6);
+  assert.match(manifest.forecastHourPolicy.disclosure, /not a contiguous prefix/);
   assert.deepEqual(
     manifest.frames.map((frame) => frame.hour),
     [0, 3, 6],
@@ -4009,7 +4013,7 @@ test("NOAA beta runtime writes current manifest contract into separate cache roo
     assert.ok(frame.synopticVectorKeys.simple.endsWith("/synoptic-vector-simple.json"));
     assert.ok(frame.synopticVectorBytes.simple > 0);
     assert.ok(frame.synopticVectorBytes.detailed > 0);
-    assert.ok(frame.hoverGridKey.endsWith("/hover-grid.bin.gz"));
+    assert.ok(frame.hoverGridKey.endsWith("/hover-grid.bin.br"));
     assert.ok(frame.hoverGridBytes > 0);
   }
   const marker = JSON.parse(

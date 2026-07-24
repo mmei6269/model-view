@@ -77,7 +77,7 @@ test("missing compressor keeps filter-0 layers inline", () => {
   assert.deepEqual(descriptor, encodeLayerOrEmpty(layer, EMPTY_PNG, WIDTH, HEIGHT, 1, 0));
 });
 
-test("buildRenderedArtifacts collects deferred layer bodies into pendingEncodes", async () => {
+test("buildRenderedArtifacts drains deferred layer bodies before returning", async () => {
   const frameArgs = () => ({
     decoded: { temperature2m: new Float32Array([300, 300, 300, 300]) },
     selection: { catalog: [], availableParameters: [], records: {} },
@@ -90,18 +90,15 @@ test("buildRenderedArtifacts collects deferred layer bodies into pendingEncodes"
     pngCompressionLevel: 1,
     pngFilterType: 0,
   });
-  const deferred = buildRenderedArtifacts({ ...frameArgs(), layerEncodeContext: stubEncodeContext });
-  assert.ok(Array.isArray(deferred.pendingEncodes) && deferred.pendingEncodes.length > 0);
-  assert.equal(deferred.layers.temperature.body, null);
-  assert.equal(deferred.layers.temperature.bytes, 0);
-  await Promise.all(deferred.pendingEncodes);
+  const deferred = await buildRenderedArtifacts({ ...frameArgs(), layerEncodeContext: stubEncodeContext });
+  assert.equal(deferred.pendingEncodes, undefined);
   assert.ok(Buffer.isBuffer(deferred.layers.temperature.body));
   assert.deepEqual(deferred.layers.temperature.body.subarray(0, 8), PNG_SIGNATURE);
   assert.equal(deferred.layers.temperature.bytes, deferred.layers.temperature.body.length);
   // Empty layers (no wind grids decoded) encode inline in both modes, and the
   // deferred temperature body matches the no-compressor inline render exactly.
   assert.ok(Buffer.isBuffer(deferred.layers.wind.body));
-  const inline = buildRenderedArtifacts(frameArgs());
+  const inline = await buildRenderedArtifacts(frameArgs());
   assert.deepEqual(deferred.layers.temperature.body, inline.layers.temperature.body);
   assert.deepEqual(deferred.layers.wind.body, inline.layers.wind.body);
 });

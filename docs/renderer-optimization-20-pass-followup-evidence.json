@@ -1,0 +1,2959 @@
+{
+  "schemaVersion": 1,
+  "campaign": {
+    "name": "renderer-optimization-20-pass-followup-2026-07-22",
+    "branch": "codex/renderer-optimization-20-pass-followup",
+    "status": "active",
+    "upstreamMergeCommit": "41ce6e20b33484ddcb7bd03d5524e4f22a7874f0",
+    "infrastructureBaselineCommit": "0fefbc639b6abffa56551975fe050bb52848b4c1",
+    "acceptanceDocument": "docs/renderer-optimization-20-pass-followup-2026-07-22.md",
+    "requestedPasses": 20,
+    "scopeHistory": "Initially provisioned with a thirty-candidate queue, then reduced to twenty measured passes at the user's direction. Historical renderer-30pass benchmark paths remain immutable provenance identifiers."
+  },
+  "sourceBaseline": {
+    "scope": ["package.json", "package-lock.json", "scripts", "shared", "tools"],
+    "treeSha256": "4f52543575b76508f43fd49f86fbc0c5adddd0dcd22d2232ef5f56c5879fde9b",
+    "fileCount": 115,
+    "totalBytes": 101187275
+  },
+  "tools": {
+    "node": {
+      "version": "v22.23.1",
+      "sha256": "79bc31d84868436058ea7e020626a8046905bd5361e5d30d47917ee6e6d9120f"
+    },
+    "benchmarkHarness": {
+      "schemaVersion": 3,
+      "sha256": "48549674f92dacdea6056cb8fcee3b105e0228bc3702ee0db8be30609b36644d"
+    },
+    "artifactComparator": {
+      "schemaVersion": 1,
+      "sha256": "e10900752392f899694c4ce91c331cddd0af29b2a876491ff75b085038afdd8d"
+    },
+    "artifactComparatorPass05": {
+      "schemaVersion": 2,
+      "sha256": "085adb9f64625c54d2ddd4ad707a92732598f86e08ef8d14ac0a5e3e3a799174",
+      "pngComparisonModes": ["exact-container", "decoded-rgba"]
+    },
+    "wgrib2": {
+      "version": "3.8.0",
+      "sha256": "539dd9f1812cdd4b9023d20911498e6dffb147cbe50c1733ee90ba534d0a5c6c"
+    },
+    "builderSha256": "3f20bf143eb8b20028dfbfd13d99c8bf93a4afc18a3222c65c8e87a5698f2747",
+    "frameWorkerSha256": "42fc68be2eef2ff5ed7eca37b5c65065fc32a335414a69acd0a4e5b493671087",
+    "derivedWorkerSha256": "90d0c8246d54de7ffe258665496a3bab11c06cb5d57fc69a3b0a828aa35483c0",
+    "compressWorkerSha256": "92a10b94e31221f01b2e87d770c5bc5e03a9082232d6394a29f40c23dcda30c0",
+    "parcelKernelWasmSha256": "f4958603102744ff2d4b24ac34cfd4ccc51c2c900007b3f4cf53afd9fc0992be"
+  },
+  "fixture": {
+    "cachePolicy": "APFS clone per independent arm; never mutate the seed or application cache",
+    "models": {
+      "gfs": {
+        "date": "20260716",
+        "cycle": "06",
+        "hours": [0, 3, 6, 9]
+      },
+      "nam": {
+        "date": "20260716",
+        "cycle": "12",
+        "hours": [0, 1, 2, 3]
+      },
+      "nam3km": {
+        "date": "20260716",
+        "cycle": "12",
+        "hours": [0, 1, 2, 3]
+      },
+      "hrrr": {
+        "date": "20260716",
+        "cycle": "13",
+        "hours": [0, 1, 2, 3]
+      }
+    }
+  },
+  "baseline": {
+    "summary": "output/noaa-benchmarks/renderer-30pass/campaign-baseline-hrrr-hrrr-20260716-13z-20260723T034449215Z/summary.json",
+    "subprocessWallMs": [8859.49525, 8726.317709, 8704.02375],
+    "medianMs": 8726.317709,
+    "madMs": 22.293959,
+    "stageMediansMs": {
+      "baseWall": 1923.6,
+      "baseArtifacts": 1632.5,
+      "baseCompressWait": 1065.6,
+      "baseCatalogPng": 374.3,
+      "baseHoverGrid": 116.4
+    },
+    "rawLogs": [
+      {
+        "bytes": 8756,
+        "sha256": "fe247f0d5f9be8b493c16bb73fbea03f26d2bf936d61c14a549728cb8d00ed04"
+      },
+      {
+        "bytes": 8754,
+        "sha256": "7c2de3b3e1fcdca54e6902c5d3f6c81d4f8996e5347efaef87c0501e94be67ed"
+      },
+      {
+        "bytes": 8752,
+        "sha256": "60ea213cc032f2a07691a10e9a069e9bee9693857c60d98afa57f130bd896613"
+      }
+    ],
+    "warmCacheGate": {
+      "raw": "12/12",
+      "regridBin": "12/12",
+      "derivedGrids": "12/12",
+      "supplementalCache": "12/12",
+      "apcpCache": "15/15",
+      "frzrLiquidCache": "18/18",
+      "snowDeltaCache": "9/9",
+      "profileCache": "6/6",
+      "snowCumCache": "18/18"
+    }
+  },
+  "comparatorSelfParity": {
+    "manifest": "hrrr/20260716-1300Z--conus.json",
+    "payloads": 350,
+    "hoverPayloads": 7,
+    "canonicalBytes": 1119256570,
+    "canonicalSha256": "673899b1c087af628be0d3aeec1a2ebff2c376db1ae760e8f794393d9fe6b0de",
+    "mismatches": 0
+  },
+  "excludedSessions": [
+    {
+      "label": "30p-baseline-hrrr",
+      "reason": "sandbox denied the benchmark's loopback fetch before any profiled frame; rerun with approved local-server access",
+      "summary": "output/noaa-benchmarks/renderer-30pass/30p-baseline-hrrr-hrrr-20260716-13z-20260723T033134407Z/summary.json"
+    },
+    {
+      "label": "pass05-warm-a",
+      "reason": "sandbox denied the pinned NOAA run-resolution fetch; fixture validation failed and the session is excluded from all evidence",
+      "summary": "output/noaa-benchmarks/renderer-30pass/pass05-warm-a-hrrr-20260716-13z-20260723T065421605Z/summary.json"
+    },
+    {
+      "label": "pass05-warm2-a",
+      "reason": "isolated-cache migration warm-up; excluded from performance evidence",
+      "summary": "output/noaa-benchmarks/renderer-30pass/pass05-warm2-a-hrrr-20260716-13z-20260723T065514197Z/summary.json"
+    },
+    {
+      "label": "pass05-warm2-b",
+      "reason": "isolated-cache migration warm-up; excluded from performance evidence",
+      "summary": "output/noaa-benchmarks/renderer-30pass/pass05-warm2-b-hrrr-20260716-13z-20260723T065545005Z/summary.json"
+    },
+    {
+      "label": "pass05final2-warm-a",
+      "reason": "final-source symmetry warm-up; excluded from performance evidence",
+      "summary": "output/noaa-benchmarks/renderer-30pass/pass05final2-warm-a-hrrr-20260716-13z-20260723T074348157Z/summary.json"
+    },
+    {
+      "label": "pass05final2-warm-b",
+      "reason": "final-source symmetry warm-up; excluded from performance evidence",
+      "summary": "output/noaa-benchmarks/renderer-30pass/pass05final2-warm-b-hrrr-20260716-13z-20260723T074359538Z/summary.json"
+    }
+  ],
+  "passes": [
+    {
+      "pass": 1,
+      "name": "guarded-zero-copy-libdeflate-result-view",
+      "decision": "accepted-resource-only",
+      "candidateSourceTreeSha256": "e821858d0bf45abed4c6e35f5c4f5ea45b3d1fd5aa172c0152ab98afd0af09ed",
+      "cumulativeImprovementPct": 0,
+      "summaries": {
+        "a1": "output/noaa-benchmarks/renderer-30pass/pass01-a1-hrrr-20260716-13z-20260723T035345337Z/summary.json",
+        "b1": "output/noaa-benchmarks/renderer-30pass/pass01-b1-hrrr-20260716-13z-20260723T035410597Z/summary.json",
+        "b2": "output/noaa-benchmarks/renderer-30pass/pass01-b2-hrrr-20260716-13z-20260723T035437662Z/summary.json",
+        "a2": "output/noaa-benchmarks/renderer-30pass/pass01-a2-hrrr-20260716-13z-20260723T035506350Z/summary.json"
+      },
+      "renderer": {
+        "baselineSamplesMs": [8808.465667, 8826.820083, 8849.448, 8854.988291],
+        "candidateSamplesMs": [8868.825458, 8866.428417, 8918.267416, 8833.148583],
+        "baselineMedianMs": 8838.1340415,
+        "baselineMadMs": 14.084104,
+        "candidateMedianMs": 8867.6269375,
+        "candidateMadMs": 17.8384375,
+        "wallDeltaPct": 0.3337,
+        "stageDeltaPct": {
+          "baseArtifacts": -0.22873,
+          "baseCompressWait": -0.20766,
+          "baseCatalogPng": 0.93433
+        },
+        "interpretation": "neutral mixed movements inside noise; no end-to-end speed claim"
+      },
+      "resource": {
+        "pngIdatBodies": 332,
+        "transientCopyBytesRemoved": 206412185,
+        "approxBytesRemovedPerFrame": 51603046,
+        "adapterMedianMs": {
+          "baseline": 0.425167,
+          "candidate": 0.006
+        },
+        "adapterDeltaPct": -98.59,
+        "completeCodecMedianMs": {
+          "baseline": 13.707792,
+          "candidate": 13.73875
+        },
+        "completeCodecDeltaPct": 0.23,
+        "microPayload": {
+          "streams": 15,
+          "samplesPerArm": 31,
+          "rawBytes": 94094700,
+          "deflatedBytes": 15790250,
+          "aggregateSha256": "f3890cb09200fb5b332e8d69bbfe029a94ed146b3128469ebd245264caf057c9"
+        }
+      },
+      "parity": {
+        "payloads": 350,
+        "hoverPayloads": 7,
+        "canonicalBytes": 1119256570,
+        "canonicalSha256": "673899b1c087af628be0d3aeec1a2ebff2c376db1ae760e8f794393d9fe6b0de",
+        "manifestsEqual": 1,
+        "completionMarkersEqual": 4,
+        "mismatches": 0
+      },
+      "validation": {
+        "focusedTestsPassed": 28,
+        "eslint": "passed",
+        "prettier": "passed",
+        "independentReview": "passed after real libdeflate engagement and transfer test was added"
+      },
+      "scientificImpact": "none; compressed bytes, decoded artifacts, pixels, hover values, missingness, classifications, identities, and provenance are exact"
+    },
+    {
+      "pass": 2,
+      "name": "single-allocation-png-assembly",
+      "decision": "accepted-resource-only",
+      "candidateSourceTreeSha256": "480ca40196189e48fed236b9490c2e078aa451fe736a365b94c36f3436a5e87d",
+      "cumulativeImprovementPct": 0,
+      "summaries": {
+        "a1": "output/noaa-benchmarks/renderer-30pass/pass02f-a1-hrrr-20260716-13z-20260723T041251582Z/summary.json",
+        "b1": "output/noaa-benchmarks/renderer-30pass/pass02f-b1-hrrr-20260716-13z-20260723T041316481Z/summary.json",
+        "b2": "output/noaa-benchmarks/renderer-30pass/pass02f-b2-hrrr-20260716-13z-20260723T041342928Z/summary.json",
+        "a2": "output/noaa-benchmarks/renderer-30pass/pass02f-a2-hrrr-20260716-13z-20260723T041408109Z/summary.json"
+      },
+      "rawLogs": {
+        "a1": [
+          {
+            "bytes": 8741,
+            "sha256": "0cb7e64e43413650b72b96311fc5572dbbac75085fca1be4a3d2802440c0bea7"
+          },
+          {
+            "bytes": 8742,
+            "sha256": "385d4a4ad201d46360075a0458a64ba70bb558e588a7138c18bd6c2e2235371e"
+          }
+        ],
+        "b1": [
+          {
+            "bytes": 8740,
+            "sha256": "9efaef02a1d47a05d86752d55da41680cb4d879f61fa5ebc293b9052305e8ceb"
+          },
+          {
+            "bytes": 8743,
+            "sha256": "8f4ef0a07173f8f5741b7f1855c7bfa8123ce227f4b9e1d3727482e45cdfac50"
+          }
+        ],
+        "b2": [
+          {
+            "bytes": 8739,
+            "sha256": "73d79b7410fbb88e08afc65715529565494eb97438945b7813f9dfa6d255c822"
+          },
+          {
+            "bytes": 8740,
+            "sha256": "355f8882766a0688e9bbe86e0dc9b6f59fcd7273e8d3848a38bdf712f796ff04"
+          }
+        ],
+        "a2": [
+          {
+            "bytes": 8744,
+            "sha256": "d725f9b1cf51fcecfc07a5270a1345345798f7bb0b1383d25a4c5510655e4c34"
+          },
+          {
+            "bytes": 8742,
+            "sha256": "e4e29b0a0e0a58b04c4f33eb9c5353c10cf8e62b77dc53bb05decc042de73bfb"
+          }
+        ]
+      },
+      "renderer": {
+        "baselineSamplesMs": [8869.829333, 8813.638625, 8885.29475, 8833.811083],
+        "candidateSamplesMs": [8758.732375, 8815.624958, 8796.535167, 8836.885208],
+        "baselineMedianMs": 8851.820208,
+        "baselineMadMs": 25.7418335,
+        "candidateMedianMs": 8806.0800625,
+        "candidateMadMs": 20.1750205,
+        "wallDeltaPct": -0.51673,
+        "stageMedianMs": {
+          "baseline": {
+            "baseWall": 1956,
+            "baseArtifacts": 1667.4,
+            "baseCompressWait": 1085.05,
+            "baseCatalogPng": 379.15,
+            "baseCorePng": 52.55,
+            "baseHoverGrid": 115.95
+          },
+          "candidate": {
+            "baseWall": 1929.2,
+            "baseArtifacts": 1644.85,
+            "baseCompressWait": 1080.6,
+            "baseCatalogPng": 377.75,
+            "baseCorePng": 51.95,
+            "baseHoverGrid": 115.35
+          }
+        },
+        "stageDeltaPct": {
+          "baseWall": -1.37014,
+          "baseArtifacts": -1.3524,
+          "baseCompressWait": -0.41012,
+          "baseCatalogPng": -0.36925,
+          "baseCorePng": -1.14177,
+          "baseHoverGrid": -0.51746
+        },
+        "preReviewInterleaveWallDeltaPct": -0.13261,
+        "interpretation": "directionally faster but not repeatable enough for an end-to-end timing claim"
+      },
+      "resource": {
+        "pngIdatBodies": 332,
+        "idatBytes": 206409328,
+        "intermediateAllocationBytesRemoved": 206413312,
+        "transientCopyBytesRemoved": 206409328,
+        "transientCopyMiBRemoved": 196.847,
+        "approxCopyBytesRemovedPerFrame": 51602332,
+        "rotatingRealIdatMicro": {
+          "streams": 15,
+          "baselineMedianMs": 3.378,
+          "candidateMedianMs": 3.226,
+          "deltaPct": -4.51,
+          "exact": true
+        },
+        "largeRealIdatMicro": {
+          "fixture": "output/noaa-benchmarks/golden/hrrr-005/mlcape.png",
+          "idatBytes": 1232607,
+          "samplesPerArm": 31,
+          "callsPerSample": 12,
+          "warmupPairs": 8,
+          "baselineMedianMs": 0.062399,
+          "baselineMadMs": 0.001434,
+          "candidateMedianMs": 0.045514,
+          "candidateMadMs": 0.001219,
+          "deltaPct": -27.059729,
+          "baselineAllocatedBytes": 2465329,
+          "candidateAllocatedBytes": 1232664,
+          "pngSha256": "1b6dec6db455ec9da65fce4058c851769c08a33f862d693be75faad57f08f4d5",
+          "exact": true
+        },
+        "goldenPngSweep": {
+          "fixtures": 235,
+          "exact": 235,
+          "bytes": 210557502,
+          "mismatches": 0,
+          "rebuiltAggregateSha256": "b15719d687576c8e11d505b6d6c87b7a0c5425bdaf394499f23a1913cfd5f5eb"
+        }
+      },
+      "parity": {
+        "payloads": 350,
+        "hoverPayloads": 7,
+        "canonicalBytes": 1119256570,
+        "canonicalSha256": "673899b1c087af628be0d3aeec1a2ebff2c376db1ae760e8f794393d9fe6b0de",
+        "manifestsEqual": 1,
+        "completionMarkersEqual": 4,
+        "mismatches": 0
+      },
+      "validation": {
+        "focusedTestsPassed": 29,
+        "rendererTestsPassed": 134,
+        "randomizedDifferentialCases": 1000,
+        "nativeCrc": "passed",
+        "forcedFallbackCrc": "passed",
+        "eslint": "passed",
+        "prettier": "passed",
+        "diffCheck": "passed",
+        "independentReview": "passed after compatibility fixes for error ordering, detached IDAT, and detached RGBA scope"
+      },
+      "scientificImpact": "none; PNG bytes, decoded artifacts, pixels, hover values, missingness, classifications, identities, signatures, and provenance are exact"
+    },
+    {
+      "pass": 3,
+      "name": "dependency-proven-sparse-mercator-pack-reads",
+      "decision": "accepted",
+      "candidateSourceTreeSha256": "5d273b5a1d292e60ca3456649ede541e36a77b60d53d9b20636e94a37defe968",
+      "candidateSourceFileCount": 116,
+      "candidateSourceBytes": 101232616,
+      "cumulativeImprovementPct": 1.363382,
+      "cumulativeInterpretation": "directional candidate-versus-committed-campaign-baseline; final aggregate interleave will remeasure",
+      "summaries": {
+        "a1": "output/noaa-benchmarks/renderer-30pass/pass03-final-a1-hrrr-20260716-13z-20260723T050255432Z/summary.json",
+        "b1": "output/noaa-benchmarks/renderer-30pass/pass03-final-b1-hrrr-20260716-13z-20260723T050320875Z/summary.json",
+        "b2": "output/noaa-benchmarks/renderer-30pass/pass03-final-b2-hrrr-20260716-13z-20260723T050350057Z/summary.json",
+        "a2": "output/noaa-benchmarks/renderer-30pass/pass03-final-a2-hrrr-20260716-13z-20260723T050457897Z/summary.json",
+        "hrrrMigration": "output/noaa-benchmarks/renderer-30pass/pass03-crc-migration-hrrr-20260716-13z-20260723T045952588Z/summary.json",
+        "hrrrWarmValidation": "output/noaa-benchmarks/renderer-30pass/pass03-crc-sparse-validation-hrrr-20260716-13z-20260723T050219827Z/summary.json",
+        "gfsMigration": "output/noaa-benchmarks/renderer-30pass/pass03-crc-gfs-migration-gfs-20260716-06z-20260723T050722475Z/summary.json",
+        "gfsWarmValidation": "output/noaa-benchmarks/renderer-30pass/pass03-crc-gfs-warm-validation-gfs-20260716-06z-20260723T050748830Z/summary.json",
+        "namMigration": "output/noaa-benchmarks/renderer-30pass/pass03-crc-nam-migration-nam-20260716-12z-20260723T050714313Z/summary.json",
+        "namWarmValidation": "output/noaa-benchmarks/renderer-30pass/pass03-crc-nam-warm-validation-nam-20260716-12z-20260723T050740395Z/summary.json",
+        "nam3kmMigration": "output/noaa-benchmarks/renderer-30pass/pass03-crc-migration-nam3km-20260716-12z-20260723T050647701Z/summary.json",
+        "nam3kmWarmValidation": "output/noaa-benchmarks/renderer-30pass/pass03-crc-warm-validation-nam3km-20260716-12z-20260723T050732191Z/summary.json"
+      },
+      "rawLogs": {
+        "a1": [
+          {
+            "bytes": 8744,
+            "sha256": "2bb123c917144ff4410c060397510c6637c010c9e6a15608662dce8e6e461717"
+          },
+          {
+            "bytes": 8738,
+            "sha256": "5a69e4e414b5a4bfc017a86e52549fa45552f60f3237c594c9173a8437c9c93f"
+          }
+        ],
+        "b1": [
+          {
+            "bytes": 9113,
+            "sha256": "180189d12b29466825e2b9903f22cdcf7d85ad440cb7fe85309d5a34a842a8ed"
+          },
+          {
+            "bytes": 9111,
+            "sha256": "ad7a8789cf773fb6b6191d2f1054e69a488123040c5181ef8cfc6658be34d069"
+          }
+        ],
+        "b2": [
+          {
+            "bytes": 9108,
+            "sha256": "4e4efb4dcda225fe5bc517835a5896e475d908a1b9088169398f189e635dde42"
+          },
+          {
+            "bytes": 9111,
+            "sha256": "78cbe2c33cacd29e882df2a8bd8c39b72092819915553fff73c0bab91e7e7f05"
+          }
+        ],
+        "a2": [
+          {
+            "bytes": 8738,
+            "sha256": "544e05f5c16472e4a30bf905d30da6c79b25382ac82bb64453fb691e3eed7c86"
+          },
+          {
+            "bytes": 8738,
+            "sha256": "10754c8b01754a71b496d2d5b0c185a4d65c64f65f26b2486ba16eff8c69b184"
+          }
+        ],
+        "migrationAndWarm": {
+          "hrrrMigration": {
+            "bytes": 9726,
+            "sha256": "a9dd121d33b2b1cd493cce849a48e8ebc1a700b24b661a420659989ce8a18b44"
+          },
+          "hrrrWarm": {
+            "bytes": 9122,
+            "sha256": "89e82f816fec2db1eb291058938a03972e3e67a56542732a249ce5f6fe4c1502"
+          },
+          "gfsMigration": {
+            "bytes": 11024,
+            "sha256": "de1721eaf9f97711f56cbf81caa05742130b099a714c725e793a6952486a16ed"
+          },
+          "gfsWarm": {
+            "bytes": 10640,
+            "sha256": "af5875f98b2f905c8818d72449a0f4b22916a3ba99a42235dfff62881ccdb74c"
+          },
+          "namMigration": {
+            "bytes": 9796,
+            "sha256": "1b9464073e72f4d2367afcd2dcd35328ec183bf3c6675ed8e175cde834cbae3e"
+          },
+          "namWarm": {
+            "bytes": 9380,
+            "sha256": "0ce7277e6ddeaf0d9972bca4f87cb61c015602e1516394db109254feaae42132"
+          },
+          "nam3kmMigration": {
+            "bytes": 9859,
+            "sha256": "a5dcfd2c8a185a688bf00184b6fc1ecdf58f0f43eaa49490a0c47a88da07c15a"
+          },
+          "nam3kmWarm": {
+            "bytes": 9255,
+            "sha256": "b72a1611940e2064840a489d95d9cc4d600849127393f79fcaf2e932867774bc"
+          }
+        }
+      },
+      "renderer": {
+        "baselineSamplesMs": [8881.222, 8696.414958, 8573.187416, 8642.929708],
+        "candidateSamplesMs": [8698.14575, 8625.162084, 8580.448375, 8589.527209],
+        "baselineMedianMs": 8669.672333,
+        "baselineMadMs": 61.613771,
+        "candidateMedianMs": 8607.3446465,
+        "candidateMadMs": 22.3568545,
+        "wallDeltaPct": -0.718916,
+        "affectedStage": {
+          "name": "gridMap",
+          "baselineMedianMs": 76.25,
+          "candidateMedianMs": 38.95,
+          "deltaPct": -48.918033
+        },
+        "interpretation": "resource and affected-stage claim accepted; end-to-end direction is positive but modest relative to baseline variance"
+      },
+      "resource": {
+        "hrrrPerFrame": {
+          "nonzeroFieldsRead": 66,
+          "nonzeroFieldsTotal": 152,
+          "zeroFieldsRead": 64,
+          "zeroFieldsTotal": 150,
+          "bytesReadNonzero": 413952000,
+          "bytesTotalNonzero": 953344000,
+          "bytesSkipped": 539392000,
+          "bytesSkippedMiB": 514.404,
+          "fourFrameBytesSkipped": 2157568000
+        },
+        "allModelsRepresentative": {
+          "gfs": {
+            "fieldsRead": 61,
+            "fieldsTotal": 72,
+            "bytesRead": 382592000,
+            "bytesTotal": 451584000
+          },
+          "nam": {
+            "fieldsRead": 53,
+            "fieldsTotal": 64,
+            "bytesRead": 332416000,
+            "bytesTotal": 401408000
+          },
+          "nam3km": {
+            "fieldsRead": 65,
+            "fieldsTotal": 151,
+            "bytesRead": 407680000,
+            "bytesTotal": 947072000
+          },
+          "hrrr": {
+            "fieldsRead": 66,
+            "fieldsTotal": 152,
+            "bytesRead": 413952000,
+            "bytesTotal": 953344000
+          }
+        },
+        "checksumMicro": {
+          "bytes": 413952000,
+          "crc32MedianMs": 8.987,
+          "sha256MedianMs": 118.562,
+          "crc32Speedup": 13.19,
+          "threatModel": "accidental corruption in a local recomputable cache; not adversarial authentication"
+        },
+        "migrationCleanupObservedGiB": {
+          "legacyMainProfileSidecars": 13.54,
+          "legacyWinterProfileBodies": 25.147,
+          "combined": 38.687
+        }
+      },
+      "parity": {
+        "models": {
+          "gfs": {
+            "payloads": 305,
+            "canonicalBytes": 1008674503,
+            "canonicalSha256": "0ca02bc6f47e374b9b7830614736bf735eb1dbaf003a3053cf94b4977f9db582"
+          },
+          "nam": {
+            "payloads": 289,
+            "canonicalBytes": 926260411,
+            "canonicalSha256": "267a0dad2ccdbbbe19090a7eb648d1995b4e39fdd948a4c97895a02774bb5e3b"
+          },
+          "nam3km": {
+            "payloads": 343,
+            "canonicalBytes": 1130204756,
+            "canonicalSha256": "ebbf28107f6ebeca9c3a015fc832e6cd48275eb18e89f0411da52ef856e1e4e1"
+          },
+          "hrrr": {
+            "payloads": 350,
+            "canonicalBytes": 1119256570,
+            "canonicalSha256": "673899b1c087af628be0d3aeec1a2ebff2c376db1ae760e8f794393d9fe6b0de"
+          }
+        },
+        "payloads": 1287,
+        "hoverPayloads": 28,
+        "canonicalBytes": 4184396240,
+        "manifestsEqual": 4,
+        "completionMarkersEqual": 16,
+        "mismatches": 0
+      },
+      "validation": {
+        "fullNodeTestsPassed": 990,
+        "focusedAndRelevantTestsPassed": 205,
+        "typecheck": "passed",
+        "eslint": "passed",
+        "prettier": "passed",
+        "diffCheck": "passed",
+        "independentReviews": [
+          "selection dependency and meteorological support audit",
+          "renderer orchestration and exact provenance audit",
+          "bulk cache integrity, concurrency, corruption, and migration audit"
+        ]
+      },
+      "scientificImpact": "none; all rendered payloads, decoded hover values, finite/missing states, pressure-terrain masks, classifications, identities, and provenance are exact"
+    },
+    {
+      "pass": 4,
+      "name": "bounded-cooperative-artifact-encoding",
+      "decision": "accepted",
+      "candidateSourceTreeSha256": "e8504e00565c85933aaa4b539853d3b1c504b70355212a5166b55b940eab2b0c",
+      "candidateSourceFileCount": 117,
+      "candidateSourceBytes": 101250435,
+      "baselineSourceTreeSha256": "5d273b5a1d292e60ca3456649ede541e36a77b60d53d9b20636e94a37defe968",
+      "baselineSourceFileCount": 116,
+      "baselineSourceBytes": 101232616,
+      "cumulativeImprovementPct": 16.980225,
+      "cumulativeInterpretation": "fresh candidate-versus-committed-campaign-baseline measurement; final aggregate interleave will remeasure",
+      "summaries": {
+        "a1": "output/noaa-benchmarks/renderer-30pass/pass04-final-a1-hrrr-20260716-13z-20260723T055534250Z/summary.json",
+        "b1": "output/noaa-benchmarks/renderer-30pass/pass04-final-b1-hrrr-20260716-13z-20260723T055559283Z/summary.json",
+        "b2": "output/noaa-benchmarks/renderer-30pass/pass04-final-b2-hrrr-20260716-13z-20260723T055621523Z/summary.json",
+        "a2": "output/noaa-benchmarks/renderer-30pass/pass04-final-a2-hrrr-20260716-13z-20260723T055734892Z/summary.json",
+        "gfsCandidate": "output/noaa-benchmarks/renderer-30pass/pass04-allmodel-gfs-gfs-20260716-06z-20260723T060646455Z/summary.json",
+        "namCandidate": "output/noaa-benchmarks/renderer-30pass/pass04-allmodel-nam-nam-20260716-12z-20260723T060710351Z/summary.json",
+        "nam3kmCandidate": "output/noaa-benchmarks/renderer-30pass/pass04-allmodel-nam3km-nam3km-20260716-12z-20260723T060731928Z/summary.json",
+        "resourceProbeA5": "output/noaa-benchmarks/renderer-30pass/pass04-resource-probe-a5-hrrr-20260716-13z-20260723T060500746Z/summary.json",
+        "resourceProbeB5": "output/noaa-benchmarks/renderer-30pass/pass04-resource-probe-b5-hrrr-20260716-13z-20260723T060517393Z/summary.json",
+        "resourceProbeA6": "output/noaa-benchmarks/renderer-30pass/pass04-resource-probe-a6-hrrr-20260716-13z-20260723T060554441Z/summary.json"
+      },
+      "rawLogs": {
+        "a1": [
+          {
+            "bytes": 9108,
+            "sha256": "eb408c1dfd0a22317b1d1508e87e6c3283380ab2b5a0ac84ef19beecb779d3f5"
+          },
+          {
+            "bytes": 9109,
+            "sha256": "8ab0b13d2f98b9a633a365d254f929d3f61f018d08b56f853c573e4b86e4f1de"
+          }
+        ],
+        "b1": [
+          {
+            "bytes": 9477,
+            "sha256": "cea89d7beb7a5643469d27c41226348c272d10bbc95ad334193a06e18a7ddc58"
+          },
+          {
+            "bytes": 9474,
+            "sha256": "3d52919c5fa15e0e9432082adb05de51685e30f42ee77d803c440ad0e458cd09"
+          }
+        ],
+        "b2": [
+          {
+            "bytes": 9477,
+            "sha256": "0b79fecd4a478b599b1f643b8fd2511281788a1549737e5070fffca086b0f54f"
+          },
+          {
+            "bytes": 9477,
+            "sha256": "b21ce6fe6fea2d4f50f5ef5bf3c8787c42cce066e0b66037f008e37448076ff7"
+          }
+        ],
+        "a2": [
+          {
+            "bytes": 9108,
+            "sha256": "40d129953936e79d1407f9465e6bf3e3b78948e9ce016a96a4f6ea03c4945554"
+          },
+          {
+            "bytes": 9109,
+            "sha256": "d507a3463f54c93c71e914f85b25f37183a4d95713b577ef76afb90f3dcd27ac"
+          }
+        ],
+        "allModelCandidate": {
+          "gfs": {
+            "bytes": 11202,
+            "sha256": "b3e795250b3c2ec5a4400da2f3cf735cdd46a1da72dfc1abe3b0a6572f5719ae"
+          },
+          "nam": {
+            "bytes": 9973,
+            "sha256": "e4c0e785b68d0eb1dd1271c72b1cec7ba130ff4210db8416920665c2015b505a"
+          },
+          "nam3km": {
+            "bytes": 10206,
+            "sha256": "d8087464941d0e9350e4b537d0e23fd893a6d4ea410bd13b2e7bdaae882971df"
+          }
+        },
+        "resourceProbe": {
+          "a5": {
+            "bytes": 9119,
+            "sha256": "7b76652519b7759bcf4ce076c4ec5a52826ad50aa37ca466d61f219c0546017b"
+          },
+          "b5": {
+            "bytes": 9489,
+            "sha256": "d1033990e494f5db55a66944e9898a7c5e40483e0d185e39ef3ef077a6360074"
+          },
+          "a6": {
+            "bytes": 9120,
+            "sha256": "4a622bad8974e1f5dcded696d2be5f4fae2c63d1c6fe9ec25d56d901972b1b75"
+          },
+          "observationJsonl": {
+            "a5": {
+              "bytes": 40140,
+              "sha256": "6e8f918f7ae2cc2bb12606d00987d9eb34a3506fd038712c94e67904189a8a97"
+            },
+            "b5": {
+              "bytes": 40180,
+              "sha256": "df64131518e4538f09d6a1d39161ae8e6f9b02191e435e30c50e658179220ed2"
+            },
+            "a6": {
+              "bytes": 48590,
+              "sha256": "6f413bbfd1f75e1054148e580e20820d10063f5371a0ce6f5bd83051f2665c02"
+            }
+          }
+        },
+        "allHashesRecomputedAndMatched": true
+      },
+      "renderer": {
+        "baselineSamplesMs": [8575.30275, 8571.529291, 8519.572875, 8521.026666],
+        "candidateSamplesMs": [7291.770334, 7259.522959, 7226.740417, 7229.615625],
+        "baselineMedianMs": 8546.2779785,
+        "baselineMadMs": 25.978208,
+        "candidateMedianMs": 7244.569292,
+        "candidateMadMs": 16.391271,
+        "wallDeltaPct": -15.231294,
+        "fixedFourMainFrameSums": {
+          "wall": {
+            "baselineSamplesMs": [7583.9, 7605.9, 7595.4, 7610.8],
+            "candidateSamplesMs": [6281.1, 6306.1, 6296.9, 6300.9],
+            "baselineMedianMs": 7600.65,
+            "baselineMadMs": 7.7,
+            "candidateMedianMs": 6298.9,
+            "candidateMadMs": 4.6,
+            "deltaPct": -17.126825
+          },
+          "artifacts": {
+            "baselineSamplesMs": [6428.9, 6459.9, 6438.6, 6460.5],
+            "candidateSamplesMs": [5129.5, 5147.2, 5141.3, 5138.3],
+            "baselineMedianMs": 6449.25,
+            "baselineMadMs": 10.95,
+            "candidateMedianMs": 5139.8,
+            "candidateMadMs": 4.45,
+            "deltaPct": -20.303911
+          }
+        },
+        "perHourMedians": {
+          "f000": {
+            "baselineWallMs": 1555.15,
+            "candidateWallMs": 1281.15,
+            "wallDeltaPct": -17.618879,
+            "baselineArtifactsMs": 1393.5,
+            "candidateArtifactsMs": 1116.2,
+            "artifactsDeltaPct": -19.899534
+          },
+          "f001": {
+            "baselineWallMs": 1841.35,
+            "candidateWallMs": 1515.45,
+            "wallDeltaPct": -17.698971,
+            "baselineArtifactsMs": 1610.2,
+            "candidateArtifactsMs": 1283.4,
+            "artifactsDeltaPct": -20.295615
+          },
+          "f002": {
+            "baselineWallMs": 1891.7,
+            "candidateWallMs": 1568.65,
+            "wallDeltaPct": -17.077232,
+            "baselineArtifactsMs": 1628.8,
+            "candidateArtifactsMs": 1309.7,
+            "artifactsDeltaPct": -19.59111
+          },
+          "f003": {
+            "baselineWallMs": 2312.2,
+            "candidateWallMs": 1930.55,
+            "wallDeltaPct": -16.505925,
+            "baselineArtifactsMs": 1818,
+            "candidateArtifactsMs": 1429.45,
+            "artifactsDeltaPct": -21.372387
+          }
+        },
+        "diagnosticExposedCodecStall": {
+          "baselineLateWaitMedianMs": 4128.95,
+          "baselineLateWaitMadMs": 8.4,
+          "candidateBackpressureMedianMs": 2904.3,
+          "candidateFinalWaitMedianMs": 26,
+          "candidateCombinedMedianMs": 2930.35,
+          "candidateCombinedMadMs": 2.8,
+          "deltaPct": -29.029172,
+          "interpretation": "diagnostic only because Pass 04 changes stage-accounting boundaries; artifact and subprocess wall are the comparable performance claims"
+        },
+        "candidateTelemetryByHour": {
+          "compressJobs": [63, 74, 75, 75],
+          "artifactCheckpoints": [62, 73, 74, 74],
+          "artifactPeakActive": [2, 2, 2, 2],
+          "artifactPeakQueued": [0, 0, 0, 0],
+          "artifactSubmitted": [63, 74, 75, 75],
+          "compressFallbacks": [0, 0, 0, 0]
+        },
+        "interpretation": "accepted architecture improvement with a repeatable end-to-end signal, a larger affected-stage signal, and bounded memory ownership"
+      },
+      "resource": {
+        "realHrrrWaiterProbe": {
+          "recordsPerArm": 287,
+          "pngSubmitsPerArm": 283,
+          "brotliSubmitsPerArm": 4,
+          "identicalKindAndByteRoster": true,
+          "baselineWaiterSubmits": 279,
+          "baselinePngWaiterSnapshotBytes": 1725069500,
+          "baselineHoverWaiterSnapshotBytes": 865563000,
+          "baselineCumulativeWaiterSnapshotBytes": 2590632500,
+          "baselineCumulativeWaiterSnapshotMiB": 2470.619678,
+          "baselineCumulativeWaiterSnapshotGiB": 2.41271453,
+          "baselinePeakWaiters": 73,
+          "baselinePeakWaiterBytes": 677453604,
+          "baselinePeakWaiterMiB": 646.070103,
+          "candidateWaiterSubmits": 0,
+          "candidateCumulativeWaiterSnapshotBytes": 0,
+          "candidatePeakWaiters": 0,
+          "candidatePeakWaiterBytes": 0,
+          "baselineMaxPendingBeforeSubmit": 2,
+          "candidateMaxPendingBeforeSubmit": 1,
+          "peakCalculation": "max(waitersBefore + becomesWaiter, waiterBytesBefore + (becomesWaiter ? bytes : 0))",
+          "timingsUsedForPerformanceClaim": false
+        },
+        "probeSourceValidation": {
+          "baselineInstrumentedSha256": "27799db6f029ba08dd28f2f4d22e36cf1fead5b700acbe0532dab550230fcebf",
+          "candidateInstrumentedSha256": "9b1c9250b4495f4c9a34bd5a7e0e9fd290a6385432be058e9b7f7c359cc604d5",
+          "differenceFromFrozenSources": "only the observation require and recordSubmit call in compress-pool.js; all other files identical"
+        },
+        "reflectivityBound": {
+          "normalRosterGates": 3,
+          "maximumArbitraryRosterPlanes": 8,
+          "maximumRawRosterBytesFormula": "32 * width * height",
+          "batchPolicy": "min(8, max(4, pool.maxActive || 4))"
+        }
+      },
+      "parity": {
+        "models": {
+          "gfs": {
+            "payloads": 305,
+            "canonicalBytes": 1008674503
+          },
+          "nam": {
+            "payloads": 289,
+            "canonicalBytes": 926260411
+          },
+          "nam3km": {
+            "payloads": 343,
+            "canonicalBytes": 1130204756
+          },
+          "hrrr": {
+            "payloads": 350,
+            "canonicalBytes": 1119256570,
+            "canonicalSha256": "673899b1c087af628be0d3aeec1a2ebff2c376db1ae760e8f794393d9fe6b0de"
+          }
+        },
+        "payloads": 1287,
+        "hoverPayloads": 28,
+        "storedBytes": 1468692788,
+        "canonicalBytes": 4184396240,
+        "manifestsEqual": 4,
+        "completionMarkersEqual": 16,
+        "containerChanges": 0,
+        "mismatches": 0,
+        "readOrDecodeErrors": 0,
+        "inventorySha256": "91e65b67fbfda123016a68df878e2621544b486c1f3247388e72cd305be648cf",
+        "aggregateCanonicalSha256": "a015c6a0c7fa4c9300c56eda4a27012bc78c657892b718bb14909c8b2826b7c7"
+      },
+      "validation": {
+        "fullNodeTestsPassed": 1001,
+        "browserSmokeTestsPassed": 164,
+        "focusedAndRelevantTestsPassed": 188,
+        "strictConcurrencyReviewTestsPassed": 54,
+        "independentFullDirectoryPayloadsExact": 1348,
+        "typecheck": "passed",
+        "eslint": "passed",
+        "prettier": "passed",
+        "diffCheck": "passed",
+        "allSourcesStable": true,
+        "processFailures": 0,
+        "fixtureValidationFailures": 0,
+        "frameErrorLines": 0,
+        "reportedFailedFrames": 0,
+        "node": "v22.23.1",
+        "wgrib2Sha256": "539dd9f1812cdd4b9023d20911498e6dffb147cbe50c1733ee90ba534d0a5c6c",
+        "allModelPerformanceCaveat": "GFS, NAM, and NAM3km validation runs rebuilt cold regrid and derived sidecars; they support parity, telemetry, and failure validation only, not timing claims",
+        "independentReviews": [
+          "implementation architecture and complete-catalog output review",
+          "concurrency, failure ordering, memory bound, and worker-death review",
+          "science, hover, PNG filter, malformed-input, and fallback review",
+          "benchmark, raw-log integrity, resource-probe, provenance, and cumulative-calculation review"
+        ]
+      },
+      "scientificImpact": "none; all decoded artifacts, normalized manifests, completion metadata, PNGs, hover values, finite/missing states, classifications, identities, signatures, and provenance are exact"
+    },
+    {
+      "pass": 5,
+      "name": "exact-indexed-color-categorical-png",
+      "decision": "accepted",
+      "candidateSourceTreeSha256": "a741df0f2fe385f498a48ac64d6f4f53b3df05920ae6f3220046b10ad4faadc0",
+      "candidateSourceFileCount": 117,
+      "candidateSourceBytes": 101298247,
+      "baselineSourceTreeSha256": "e8504e00565c85933aaa4b539853d3b1c504b70355212a5166b55b940eab2b0c",
+      "baselineSourceFileCount": 117,
+      "baselineSourceBytes": 101250435,
+      "cumulativeImprovementPct": 18.482242,
+      "cumulativeInterpretation": "fresh candidate-versus-committed-campaign-baseline measurement; final aggregate interleave will remeasure",
+      "summaries": {
+        "a1": "output/noaa-benchmarks/renderer-30pass/pass05final2-a1-hrrr-20260716-13z-20260723T074419953Z/summary.json",
+        "b1": "output/noaa-benchmarks/renderer-30pass/pass05final2-b1-hrrr-20260716-13z-20260723T074442848Z/summary.json",
+        "b2": "output/noaa-benchmarks/renderer-30pass/pass05final2-b2-hrrr-20260716-13z-20260723T074500319Z/summary.json",
+        "a2": "output/noaa-benchmarks/renderer-30pass/pass05final2-a2-hrrr-20260716-13z-20260723T074517576Z/summary.json",
+        "gfsCandidate": "output/noaa-benchmarks/renderer-30pass/pass05final2-allmodel-gfs-gfs-20260716-06z-20260723T074605360Z/summary.json",
+        "namCandidate": "output/noaa-benchmarks/renderer-30pass/pass05final2-allmodel-nam-nam-20260716-12z-20260723T074615005Z/summary.json",
+        "nam3kmCandidate": "output/noaa-benchmarks/renderer-30pass/pass05final2-allmodel-nam3km-nam3km-20260716-12z-20260723T074624269Z/summary.json"
+      },
+      "rawLogs": {
+        "a1": [
+          {
+            "bytes": 9475,
+            "sha256": "ebd9a23cd30838be03f9e2a51f8e8fadcd681f5bf130124530cb72fa86db908b"
+          },
+          {
+            "bytes": 9475,
+            "sha256": "7d12c1c70891e16eba1a0081e4ea3ccea1490a000cabe522a29c10909d0151dc"
+          }
+        ],
+        "b1": [
+          {
+            "bytes": 9734,
+            "sha256": "92a7e05d31efc91573b652330f2f23bd0b4b5d639b534caef0275989dee9a84e"
+          },
+          {
+            "bytes": 9733,
+            "sha256": "0235c026d4b8f7eb6c83440e46d2a221478ffc9e1bf3e978b1f932e1f121d404"
+          }
+        ],
+        "b2": [
+          {
+            "bytes": 9731,
+            "sha256": "d4767e0223467cc4460f05917dc003ad9a7316348921f312730a3de819b22a50"
+          },
+          {
+            "bytes": 9733,
+            "sha256": "4ea13fef2c51041053e9c4be92668f72f40fdfb2f8d125de5acdb645b1ad2528"
+          }
+        ],
+        "a2": [
+          {
+            "bytes": 9474,
+            "sha256": "b906a975b7d18cab11e24a60311f0d27ed676c15c0827b4bfb9ac503c9487b45"
+          },
+          {
+            "bytes": 9475,
+            "sha256": "20634bb4b8eeeb658868c2f2f51e4b33e3431b347927d02d9caf4a71b12a70a7"
+          }
+        ],
+        "allModelCandidate": {
+          "gfs": {
+            "bytes": 11250,
+            "sha256": "9bdde6170a21ce24b65bc92dcb94fffdc844cd6a7952a0d86c6debe492221375"
+          },
+          "nam": {
+            "bytes": 9998,
+            "sha256": "e6187419d560b51fb0e5cb053bb16545c9d24f7c0159ed248ff44130fee39ead"
+          },
+          "nam3km": {
+            "bytes": 9862,
+            "sha256": "1b1bec4ce4182b68709c3316fd697c4c967a9964bd95c927da731fc6413a5451"
+          }
+        },
+        "allHashesRecomputedAndMatched": true
+      },
+      "renderer": {
+        "baselineSamplesMs": [7344.621125, 7312.67775, 7363.8495, 7308.739041],
+        "candidateSamplesMs": [7165.038875, 7118.16675, 7108.830417, 7087.877334],
+        "baselineMedianMs": 7328.649438,
+        "baselineMadMs": 17.941042,
+        "candidateMedianMs": 7113.498584,
+        "candidateMadMs": 15.144708,
+        "wallDeltaPct": -2.93575,
+        "mainFrameStageMedians": {
+          "wall": {
+            "baselineMedianMs": 1560.45,
+            "baselineMadMs": 149.5,
+            "candidateMedianMs": 1492.5,
+            "candidateMadMs": 129.65,
+            "deltaPct": -4.354513
+          },
+          "artifacts": {
+            "baselineMedianMs": 1309.2,
+            "baselineMadMs": 75.15,
+            "candidateMedianMs": 1240.95,
+            "candidateMadMs": 74.2,
+            "deltaPct": -5.213107
+          },
+          "artifactBackpressure": {
+            "baselineMedianMs": 746.95,
+            "baselineMadMs": 17.95,
+            "candidateMedianMs": 683.7,
+            "candidateMadMs": 14.95,
+            "deltaPct": -8.467769
+          }
+        },
+        "interpretation": "accepted exact format/transport optimization with a clear end-to-end signal, matching affected-stage movement, and deterministic raw-byte reduction"
+      },
+      "resource": {
+        "indexedByModel": {
+          "gfs": {
+            "jobs": 47,
+            "indexedRawBytes": 73742060,
+            "rgbaRawBytesAvoided": 221088000
+          },
+          "nam": {
+            "jobs": 46,
+            "indexedRawBytes": 72173080,
+            "rgbaRawBytesAvoided": 216384000
+          },
+          "nam3km": {
+            "jobs": 50,
+            "indexedRawBytes": 78449000,
+            "rgbaRawBytesAvoided": 235200000
+          },
+          "hrrr": {
+            "jobs": 48,
+            "indexedRawBytes": 75311040,
+            "rgbaRawBytesAvoided": 225792000
+          }
+        },
+        "totalJobs": 191,
+        "totalIndexedRawBytes": 299675180,
+        "totalRgbaRawBytesAvoided": 898464000,
+        "activeChangedContainerBytes": {
+          "baseline": 9767675,
+          "candidate": 4985465,
+          "saved": 4782210,
+          "deltaPct": -48.959553
+        }
+      },
+      "parity": {
+        "mode": "decoded-rgba",
+        "hrrr": {
+          "payloads": 350,
+          "hoverPayloads": 7,
+          "declaredPngReferences": 712,
+          "changedPngContainers": 48,
+          "baselineChangedContainerBytes": 1836479,
+          "candidateChangedContainerBytes": 888785,
+          "changedContainerDeltaPct": -51.603857,
+          "canonicalBytes": 2888616903,
+          "canonicalSha256": "d2fc6d85e95efbfbe7da521f6918da1c5fe4237a0b54ff9048668ff4186ea05f",
+          "changedContainerInventorySha256": "76031da7f75fb9814685b3879f2a590e6b136402f0197ddd45e287564412affa",
+          "comparatorReportSha256": "a745edc7831bc1878392d18bb6cc1a3b2713a2d362b8bb190a9e7c30862d9474"
+        },
+        "allModels": {
+          "payloads": 1287,
+          "hoverPayloads": 28,
+          "declaredPngReferences": 2608,
+          "changedPngContainers": 191,
+          "baselineStoredBytes": 1468692788,
+          "candidateStoredBytes": 1463910578,
+          "canonicalBytes": 10530606664,
+          "canonicalSha256": "84c54df19c11124617132bde108459c1863637d141984ae4491a2a11629f0454",
+          "changedContainerInventorySha256": "1e7ecb540537364bce3c8fc6fad40db40bd84d8afe4cc5a737ac1e3e15e25370",
+          "comparatorReportSha256": "d84d44b0b346242ed1f69a32919a6a2509ce27db4ea0625b1c3f89cf8310cbf7",
+          "manifestsEqual": 4,
+          "completionMarkersEqual": 16,
+          "mismatches": 0,
+          "readOrDecodeErrors": 0,
+          "signatureTransitionsValid": 4
+        }
+      },
+      "validation": {
+        "fullNodeTestsPassed": 1034,
+        "browserSmokeTestsPassed": 164,
+        "targetedRendererBrowserTestsPassed": 60,
+        "randomizedDifferentialProbes": 600245,
+        "randomizedDifferentialMismatches": 0,
+        "directChromiumDecoders": ["createImageBitmap", "img", "canvas"],
+        "typecheck": "passed",
+        "eslint": "passed",
+        "prettier": "passed",
+        "diffCheck": "passed",
+        "allSourcesStable": true,
+        "processFailures": 0,
+        "fixtureValidationFailures": 0,
+        "frameErrorLines": 0,
+        "reportedFailedFrames": 0,
+        "node": "v22.23.1",
+        "rendererSignature": "noaa-grib2-beta-v52-indexed-categorical-png",
+        "allModelPerformanceCaveat": "GFS, NAM, and NAM3km candidate sessions are cold migration/validation runs; they support parity and resource claims only",
+        "independentReviews": [
+          "indexed PNG implementation, palette/alpha/CRC, API validation, pool ownership, and worker-death review",
+          "science thresholds, adjacent-float, NaN/missing, precipitation precedence, and browser decode review",
+          "all-model hotspot inventory, raw-byte savings, and next-pass architecture ranking",
+          "root diff, trust-boundary, failure-path, comparator, and benchmark-evidence review",
+          "final metadata-only WeakMap ownership, snapshot-before-validation, mutable-palette cache invalidation, and stateful-dimension coercion audit"
+        ],
+        "nonBlockingFollowup": "P3: encapsulate CommonJS-exported trusted indexed-encoder helpers in a future module-boundary cleanup without restoring the eliminated production bounds scan; current call graph reaches them only after raster.js private WeakMap ownership validation"
+      },
+      "scientificImpact": "none; this pass changes only the lossless PNG container representation for an exact allowlist, and every decoded RGBA byte, meteorological value, finite/missing state, threshold decision, classification, manifest, and completion marker is semantically exact"
+    },
+    {
+      "pass": 6,
+      "name": "direct-rgba-to-filter0-scanline-rendering",
+      "decision": "rejected-low-ceiling",
+      "productionSourceTreeSha256": "a741df0f2fe385f498a48ac64d6f4f53b3df05920ae6f3220046b10ad4faadc0",
+      "productionSourceFileCount": 117,
+      "productionSourceBytes": 101298247,
+      "productionCodeRetained": false,
+      "cumulativeImprovementPct": 18.482242,
+      "cumulativeInterpretation": "unchanged from Pass 05 because the measured architectural candidate was rejected before production implementation",
+      "hypothesis": "render the remaining RGBA layers directly into PNG filter-0 scanlines to remove the post-raster copy and one transient plane",
+      "scope": {
+        "eligibleActiveJobs": 215,
+        "continuousJobs": 157,
+        "affineVectorJobs": 58,
+        "rgbaBytes": 1348480000,
+        "currentMaximumLivePlanes": 2,
+        "currentMaximumLivePlaneBytes": 12544000
+      },
+      "benchmark": {
+        "evidencePath": "/private/tmp/pass06-scanline-pack-evidence.json",
+        "evidenceSha256": "f216c7991de6295a71b058862d430cb1acf72ff7a2a129d1be54830d3433ae51",
+        "reproducerPath": "/private/tmp/pass06-scanline-pack-micro.js",
+        "reproducerSha256": "57996a2f6e1f7615dd3ea22a6fdeab9a76024503cb928c1b72bb2d7e849ae4d5",
+        "fixtureAggregateSha256": "b2f490d94403dc7a00fec800fdbdf87e6c7f97e761b2ecbe30f00faa6d148708",
+        "realArtifactsPerTrial": 15,
+        "rgbaBytesPerTrial": 94080000,
+        "warmups": 5,
+        "samplesMs": [
+          2.220124999999996, 2.2339999999999804, 2.2332079999999905, 2.270249999999976, 2.1836660000000165,
+          2.2163329999999632, 2.255625000000009, 2.240542000000005, 2.2114590000000476, 2.1464169999999854,
+          2.167041999999981, 2.16862500000002, 2.2487500000000296, 2.2074589999999716, 2.2178329999999846,
+          2.169916999999998, 2.1712079999999787, 2.1666250000000105, 2.203791000000024, 2.1892499999999586,
+          2.1832089999999766, 2.179208000000017, 2.1559579999999983, 2.12745799999999, 2.151125000000036,
+          2.1606250000000387, 2.249582999999973, 2.171375000000012, 2.1672080000000165, 2.1192080000000146,
+          2.170166999999992
+        ],
+        "medianMs": 2.183209,
+        "madMs": 0.027251,
+        "p10Ms": 2.151125,
+        "p90Ms": 2.24875,
+        "extrapolated215JobCeilingMs": 31.292662,
+        "pass04MedianMs": 7244.569,
+        "wallCeilingPct": 0.431947
+      },
+      "decisionEvidence": {
+        "nativeUint32RasterizerAdvantagePct": 4.77,
+        "interpretation": "the measured pack copy is only an upper bound; a direct writer would duplicate colorization and helper-failure logic, lose the common native Uint32 store advantage, and likely realize less than 0.432% end-to-end",
+        "reviewFindingAppliedElsewhere": "the adjacent indexed-PNG audit found stateful repeated dimension coercion; Pass 05 canonicalizes dimensions once and regression-tests sync and pooled generic entry points before its final timing"
+      },
+      "validation": {
+        "microReproducedByRoot": true,
+        "focusedIndexedTestsPassed": 24,
+        "focusedCoordinatorTestsPassed": 11,
+        "fullNodeTestsPassed": 1034,
+        "browserSmokeTestsPassed": 164,
+        "typecheck": "passed",
+        "eslint": "passed",
+        "prettier": "passed",
+        "diffCheck": "passed"
+      },
+      "scientificImpact": "none; this pass retained no production renderer change and made no meteorological, numerical, classification, artifact, or decoded-pixel change"
+    },
+    {
+      "pass": 7,
+      "name": "owned-buffer-browser-hover-decoding",
+      "decision": "accepted-client-performance-and-resource",
+      "commit": "eac2871",
+      "serverRendererCumulativeImprovementPct": 18.482242,
+      "cumulativeInterpretation": "client-only parser and cache ownership optimization; server renderer cumulative timing is unchanged from Pass 05",
+      "hypothesis": "consume the exclusively owned response ArrayBuffer, reconstruct canonical v3 hover data in place, and expose exact typed-array views rather than copying 72 planes",
+      "implementation": {
+        "finalParserSourceSha256": "ff6d5a85b7ed3e35e10f469bb13c952a81f3b6b97701e92ca6107547a6055c47",
+        "baselineParserSourceSha256": "6242da667b4660aad9b8b6711839405d9a0c38888ac3085c7cbfda1558389bdb",
+        "ownedFetchPathOnly": true,
+        "genericParserRetainsCopyIsolation": true,
+        "canonicalRequirements": [
+          "native little endian",
+          "positive safe rows, columns, and product",
+          "matching magic and schema",
+          "aligned exact rows-times-cols descriptors",
+          "ordered contiguous non-overlapping coverage",
+          "no gaps or trailing bytes"
+        ],
+        "fallbackMaximumDataAmplification": 2,
+        "jsonMaximumCells": 16777216,
+        "jsonMaximumDecodedBytes": 536870912,
+        "jsonMaximumEncodedChars": 805306368,
+        "cacheAccounting": "charge each retained ArrayBuffer.byteLength once globally, refcount across URL/supplemental/merged entries, and charge metadata per entry"
+      },
+      "productionBrowserBenchmark": {
+        "reproducerPath": "/private/tmp/pass07-hover-zero-copy-production-browser-bench.js",
+        "reproducerSha256": "db4ed3f6ac476cc47e7fbeebc6f2cbb6b573d82b30dafba997b9bf0f9fa4258a",
+        "evidencePath": "/private/tmp/pass07-hover-zero-copy-production-browser-final-evidence.json",
+        "evidenceSha256": "ec13eb6d6bd9da3309425a63d732fca5d6d615883706c31c687c25455c36ffa6",
+        "fixture": {
+          "model": "hrrr",
+          "hour": 3,
+          "rows": 980,
+          "cols": 1600,
+          "variables": 72,
+          "storedBytes": 41461711,
+          "rawBytes": 225799044,
+          "variableBytes": 225792000,
+          "samples": 112896000,
+          "rawSha256": "afef33fb4f16c88ae6417d05fa1eccf1a1c4ab38568e2b0f8bf579764edd2c7e"
+        },
+        "interleave": "ABBA/BAAB alternating",
+        "cycles": 8,
+        "excludedWarmupsPerArm": 1,
+        "retainedSamplesPerArm": 16,
+        "decode": {
+          "baselineMedianMs": 133.11499999836087,
+          "baselineMadMs": 0.6775000020861626,
+          "candidateMedianMs": 54.7825000025332,
+          "candidateMadMs": 0.2775000035762787,
+          "deltaMs": -78.33249999582767,
+          "deltaPct": -58.845734888474055
+        },
+        "fetchToDecoded": {
+          "baselineMedianMs": 409.88749999552965,
+          "baselineMadMs": 0.7724999971687794,
+          "candidateMedianMs": 331.8475000038743,
+          "candidateMadMs": 0.42500000074505806,
+          "deltaMs": -78.03999999165535,
+          "deltaPct": -19.039370557166656,
+          "scope": "fetch and browser Brotli decompression through parser normalization; cache describe/refcount and supplemental merge are excluded"
+        },
+        "steadySampling": {
+          "variableReadsPerSample": 4718592,
+          "baselineMedianMs": 41.60249999910593,
+          "candidateMedianMs": 40.50999999791384,
+          "deltaPct": -2.626044110848078
+        },
+        "backingAccounting": {
+          "baselineStores": 72,
+          "candidateStores": 1,
+          "baselinePeakHeldBytes": 451591044,
+          "candidatePeakHeldBytes": 225799044,
+          "deltaBytes": -225792000,
+          "deltaPct": -49.999220090821815,
+          "qualification": "exact backing-store accounting at parser boundary, not measured whole-process JavaScript heap"
+        },
+        "exactAggregateSampleSha256": "591853278cfd9406961af78a9965650545825e0f4b7d8e9ce869b41e0c04d3f4"
+      },
+      "layoutAudit": {
+        "evidencePath": "/private/tmp/pass07-hover-zero-copy-layout-evidence.json",
+        "evidenceSha256": "6a330bfe7ba532570570b5bbcf70e4ae20c0d662b1b83d0301208a675102d722",
+        "containers": 28,
+        "samples": 1666784000,
+        "avoidableCopyBytes": 3333568000,
+        "allCanonical": true
+      },
+      "review": {
+        "independent": true,
+        "findingsFixed": [
+          "truncated v3 fallback padded missing tail cells with scientifically valid-looking zeros",
+          "hostile JSON dimensions could request an unbounded typed-array allocation"
+        ],
+        "remainingFindings": 0
+      },
+      "validation": {
+        "rootFocusedTestsPassed": 35,
+        "independentWiderTestsPassed": 89,
+        "typecheck": "passed",
+        "eslint": "passed",
+        "prettier": "passed",
+        "diffCheck": "passed"
+      },
+      "scientificImpact": "none; 112,896,000 real samples and their scale, offset, and missing metadata are exact, and no server artifact, weather value, threshold, classification, or decoded pixel changes"
+    },
+    {
+      "pass": 8,
+      "name": "exact-continuous-catalog-colorizer-wasm",
+      "decision": "accepted",
+      "commit": "839a220",
+      "baselineSourceTreeSha256": "a741df0f2fe385f498a48ac64d6f4f53b3df05920ae6f3220046b10ad4faadc0",
+      "baselineSourceFileCount": 117,
+      "baselineSourceBytes": 101298247,
+      "candidateSourceTreeSha256": "c3533b29fdf4a5abc70295901b0006fca6eee6f5e0b05828e3ed2e2e76acd1e4",
+      "candidateSourceFileCount": 117,
+      "candidateSourceBytes": 101311455,
+      "cumulativeImprovementPct": 19.842252,
+      "cumulativeInterpretation": "fresh Pass 08 candidate median 6,994.819729 ms versus committed campaign baseline median 8,726.317709 ms",
+      "queueChange": "original Pass 12 pulled forward after Pass 06 removed the earlier scanline opportunity and a production roster audit ranked continuous colorization as the highest-yield remaining compute loop",
+      "implementation": {
+        "colorizerAbiVersion": 1,
+        "chunkCells": 32768,
+        "paletteCap": 65536,
+        "wasmBytes": 53726,
+        "wasmSha256": "0673dbd155f2f63216e7ab9171f8852d0d93dd650b9c2c82c01911dcfe405c93",
+        "wasmImports": 0,
+        "exactArithmetic": "Float32 source load followed by JavaScript-order f64 affine, finite, visibility, lookup, bucket, and counter operations",
+        "unsupportedFallbacks": [
+          "log lookup",
+          "callback transform",
+          "non-Float32 input",
+          "invalid lookup shape or nonpositive scale"
+        ],
+        "failureContainment": [
+          "exact ABI gate",
+          "bounded aligned non-overlapping memory ranges",
+          "semantic loader canary",
+          "per-call stats poisoned to -1",
+          "partial output zeroed before authoritative JavaScript rerun",
+          "failed optional capability quarantined without disabling parcel kernel"
+        ],
+        "threadOwnership": "one unshared synchronous kernel instance per render worker; returned RGBA is copied into an owned Buffer"
+      },
+      "productionRosterBenchmark": {
+        "reproducerPath": "/private/tmp/pass08-production-colorizer-ab.js",
+        "reproducerSha256": "3ba01d8e65c9ff4ba56b84fa6196f96b189781b84bd2c2d66dafc16c0f28150b",
+        "evidencePath": "/private/tmp/pass08-production-colorizer-ab-evidence.json",
+        "evidenceSha256": "3b45b3efe84c423b76035eb69fa345cfa89412a5780bae5fd39127dd40323c4c",
+        "model": "hrrr",
+        "hours": [0, 1, 2, 3],
+        "fields": 226,
+        "cells": 354368000,
+        "rgbaBytes": 1417472000,
+        "retainedSamplesPerArm": 16,
+        "baselineMedianMs": 881.5406,
+        "baselineMadMs": 64.5452,
+        "baselineP10Ms": 836.5841,
+        "baselineP90Ms": 1017.1602,
+        "candidateMedianMs": 506.2626,
+        "candidateMadMs": 1.489,
+        "candidateP10Ms": 503.9329,
+        "candidateP90Ms": 507.9302,
+        "deltaMs": -375.2781,
+        "deltaPct": -42.5707,
+        "perFixtureConservativeGapMs": 284.2029,
+        "isolatedWallCeilingPct": 5.2756,
+        "exactRgbaAndCounters": true
+      },
+      "renderer": {
+        "interleave": "A/B/B/A",
+        "repetitionsPerLeg": 2,
+        "baselineSamplesMs": [7072.835667, 7063.916042, 7053.091875, 7138.525417],
+        "candidateSamplesMs": [7025.096667, 6962.641334, 6981.80475, 7007.834708],
+        "baselineMedianMs": 7068.3758545,
+        "baselineMadMs": 9.871896,
+        "baselineP10Ms": 7056.3391251,
+        "candidateMedianMs": 6994.819729,
+        "candidateMadMs": 21.6459585,
+        "candidateP90Ms": 7019.9180793,
+        "deltaMs": -73.5561255,
+        "deltaPct": -1.040637,
+        "conservativeBandsSeparated": true,
+        "fixtureFailures": 0,
+        "frameFailures": 0,
+        "sourceStable": true
+      },
+      "summaries": {
+        "a1": "output/noaa-benchmarks/renderer-30pass/pass08f-final-a1-hrrr-20260716-13z-20260723T083417154Z/summary.json",
+        "b1": "output/noaa-benchmarks/renderer-30pass/pass08f-final-b1-hrrr-20260716-13z-20260723T083445802Z/summary.json",
+        "b2": "output/noaa-benchmarks/renderer-30pass/pass08f-final-b2-hrrr-20260716-13z-20260723T083513815Z/summary.json",
+        "a2": "output/noaa-benchmarks/renderer-30pass/pass08f-final-a2-hrrr-20260716-13z-20260723T083538584Z/summary.json",
+        "gfs": "output/noaa-benchmarks/renderer-30pass/pass08f-all-model-gfs-gfs-20260716-06z-20260723T083714498Z/summary.json",
+        "nam": "output/noaa-benchmarks/renderer-30pass/pass08f-all-model-nam-nam-20260716-12z-20260723T083728941Z/summary.json",
+        "nam3km": "output/noaa-benchmarks/renderer-30pass/pass08f-all-model-nam3km-nam3km-20260716-12z-20260723T083742935Z/summary.json"
+      },
+      "parity": {
+        "models": ["gfs", "nam", "nam3km", "hrrr"],
+        "payloads": 1287,
+        "hoverPayloads": 28,
+        "canonicalBytes": 4179614030,
+        "manifests": 4,
+        "completionMarkers": 16,
+        "mismatches": 0,
+        "aggregateCanonicalSha256": "5b87eb008e1906ba08078b3d87780847cb782cdf08c3b6448b2354cf92b9f526"
+      },
+      "review": {
+        "independent": true,
+        "findingFixed": "same-shape stale or no-op optional colorizer could initially return a blank 0/0 layer without triggering fallback",
+        "independentRebuildExact": true,
+        "remainingFindings": 0
+      },
+      "validation": {
+        "rootDedicatedTestsPassed": 11,
+        "independentKernelRasterTestsPassed": 84,
+        "typecheck": "passed",
+        "eslint": "passed",
+        "prettier": "passed",
+        "wasmRebuild": "byte-identical",
+        "diffCheck": "passed"
+      },
+      "scientificImpact": "none; exact arithmetic and all-model container parity produced no meteorological value, finite/missing state, threshold, classification, PNG byte, decoded pixel, counter, manifest, or completion-marker change"
+    },
+    {
+      "pass": 9,
+      "name": "bounded-browser-worker-hover-reconstruction",
+      "decision": "accepted-client-responsiveness",
+      "commit": "178e83f",
+      "serverRendererCumulativeImprovementPct": 19.842252,
+      "cumulativeInterpretation": "client-only scheduling and ownership optimization; server renderer cumulative timing is unchanged from Pass 08",
+      "hypothesis": "transfer the exclusively owned decompressed hover buffer through a persistent same-origin module worker so v3 reconstruction no longer blocks the browser main thread",
+      "implementation": {
+        "artifactClientSha256": "23e762dbaf9ff944557cd34dc4ca6db5bfa1542bee467f6c300899f5c7efb0e1",
+        "workerClientSha256": "b53989c85767f9feb31bb71e0bd1ffff3328133e69aad262b460473b809457c1",
+        "workerSourceSha256": "1d0f743444951c4b03c17ea28a8addd5c36e17d0226494d482288ef6497b0493",
+        "workerProtocolVersion": 1,
+        "maximumActiveOwners": 1,
+        "maximumQueuedOwners": 1,
+        "overflowPolicy": "consume the still-attached owner immediately with the in-place main parser",
+        "ownershipLossPolicy": "permanent session circuit breaker, exactly one refetch, then hardened main decode",
+        "recoveryFetchLimit": 1,
+        "normalTotalFetchLimit": 2,
+        "deepResultGate": [
+          "plain payload and variable map",
+          "positive safe schema, rows, columns, and product",
+          "nonempty safe variable roster",
+          "finite scale, offset, and missing metadata",
+          "exact Int16Array rows-times-cols values",
+          "ordinary ArrayBuffer backing"
+        ],
+        "fallbacks": [
+          "SSR or missing Worker",
+          "CSP or constructor failure",
+          "postMessage failure before transfer",
+          "worker crash, timeout, messageerror, stale id, or protocol failure",
+          "unusable worker or recovery payload"
+        ]
+      },
+      "productionBrowserBenchmark": {
+        "evidencePath": "/private/tmp/pass09-hover-worker-production-evidence.json",
+        "evidenceSha256": "d40e310865132c55f2468dd6c7e70f1099b65424859c59297c337b42ac770fba",
+        "reproducerPath": "/private/tmp/pass09-hover-worker-production-validation.js",
+        "reproducerSha256": "7749b5789eb85c37290b783cf634201dcc3b2fe8961438181825d7998bdd7430",
+        "fixture": {
+          "model": "hrrr",
+          "hour": 3,
+          "storedBytes": 41461711,
+          "rawBytes": 225799044,
+          "variables": 72,
+          "samples": 112896000,
+          "rawSha256": "afef33fb4f16c88ae6417d05fa1eccf1a1c4ab38568e2b0f8bf579764edd2c7e"
+        },
+        "interleave": "ABBA/BAAB alternating",
+        "excludedWarmupsPerArm": 1,
+        "retainedSamplesPerArm": 16,
+        "main": {
+          "syncMedianMs": 55.3,
+          "maxEventLoopGapMedianMs": 55.4,
+          "maxEventLoopGapP95Ms": 56.95,
+          "maxLongTaskMedianMs": 55,
+          "decodeReadyMedianMs": 55.3,
+          "fetchToReadyMedianMs": 357.5
+        },
+        "worker": {
+          "syncMedianMs": 0,
+          "maxEventLoopGapMedianMs": 5.1,
+          "maxEventLoopGapP95Ms": 5.55,
+          "maxLongTaskMedianMs": 0,
+          "decodeReadyMedianMs": 56.2,
+          "fetchToReadyMedianMs": 358.65
+        },
+        "deltas": {
+          "maxEventLoopGapMs": -50.3,
+          "maxEventLoopGapPct": -90.79,
+          "longTaskMs": -55,
+          "decodeReadyMs": 0.9,
+          "decodeReadyPct": 1.63,
+          "fetchToReadyMs": 1.15,
+          "fetchToReadyPct": 0.322
+        },
+        "coldWorkerReadyMs": 59.2,
+        "coldWorkerMaxGapMs": 5.7,
+        "twoOwnerSerializedReadyMs": 112.7,
+        "twoOwnerResultBackingBytes": 451598088,
+        "exactAggregateSampleSha256": "591853278cfd9406961af78a9965650545825e0f4b7d8e9ce869b41e0c04d3f4",
+        "resultBackingStores": 1,
+        "resultBackingBytes": 225799044,
+        "productionWorkerBytes": 5382,
+        "productionWorkerSha256": "e1c93ae94e4b6ee9a4dea15a2d83c26d3869b59ee20b688e3d63fe25abde24d0"
+      },
+      "failureBenchmark": {
+        "evidencePath": "/private/tmp/pass09-hover-worker-browser-evidence.json",
+        "evidenceSha256": "1ba6d414591f9086d37a476cda8c87857bb9b5a9727495407e4d716162d55bad",
+        "crashAfterTransferRecoveryMs": 643.9,
+        "recoveryExact": true,
+        "recoveryFetches": 1,
+        "failedRecoveryTotalFetchAttempts": 2,
+        "failedRecoveryCachedBlankPayload": false
+      },
+      "review": {
+        "independent": true,
+        "findingsFixed": [
+          "unbounded completed-response owner FIFO retained approximately 1.472 GiB at eight real-sized requests",
+          "shallow worker/recovery result validation could cache malformed typed views or blank weather"
+        ],
+        "adversarialTestPath": "/private/tmp/pass09-readonly-adversarial.test.js",
+        "adversarialTestSha256": "e7bfb668e325458dc7a4f3cdd4cb8177e110a611c54eb4f05a6336e9bb284119",
+        "remainingP0": 0,
+        "remainingP1": 0,
+        "remainingP2": 0,
+        "remainingP3": 0
+      },
+      "validation": {
+        "fullNodeTestsPassed": 1073,
+        "browserSmokeTestsPassed": 164,
+        "rootFocusedTestsPassed": 34,
+        "independentFocusedTestsPassed": 38,
+        "independentAdversarialTestsPassed": 3,
+        "typecheck": "passed",
+        "eslint": "passed",
+        "prettier": "passed",
+        "productionBuild": "passed",
+        "diffCheck": "passed"
+      },
+      "scientificImpact": "none; scheduling and ownership moved to a worker while every one of 112,896,000 real samples, all metadata, the one-backing result, server artifacts, thresholds, classifications, pixels, and meteorological values remained exact"
+    },
+    {
+      "pass": 10,
+      "name": "exact-hover-predictor-evaluation",
+      "decision": "accepted-design-for-versioned-rollout",
+      "commit": null,
+      "serverRendererCumulativeImprovementPct": 19.842252,
+      "cumulativeInterpretation": "design-only format evaluation; no production source was retained, so server renderer cumulative timing is unchanged from Pass 08",
+      "hypothesis": "replace the schema-v3 global horizontal delta with either row-reset horizontal deltas for lazy access or a two-dimensional gradient predictor for lower Brotli transfer size",
+      "scope": {
+        "productionContainers": 28,
+        "samplesPerArm": 1666784000,
+        "exactComparedSamplesAllArms": 5000352000,
+        "models": ["gfs", "nam", "nam3km", "hrrr"],
+        "forecastHoursPerModel": [0, 1, 2, 3],
+        "retainedSamplesPerArm": 7,
+        "interleave": "rotated arm order each round",
+        "brotliQuality": 0
+      },
+      "evidence": {
+        "path": "/private/tmp/pass10-hover-predictor-evidence.json",
+        "sha256": "decd97548e447d414d84321ea33d2634af0d2e6254bc835077cdd911c0dc4131",
+        "reproducerPath": "/private/tmp/pass10-hover-predictor-bench.js",
+        "reproducerSha256": "6fb52ca4ea937d6ae2ca90dd7245bfde230b9810f01733b422268d8c0e9cc217",
+        "startedAt": "2026-07-23T09:17:27.763Z",
+        "finishedAt": "2026-07-23T09:21:42.404Z",
+        "node": "v22.23.1",
+        "platform": "darwin-arm64"
+      },
+      "currentGlobal": {
+        "rawBytes": 3333671912,
+        "storedBytes": 617968460,
+        "encodeToStoredMedianMs": 4089.96217,
+        "decompressMedianMs": 4455.311376,
+        "reconstructMedianMs": 794.898706,
+        "decodeToAbsoluteMedianMs": 5250.330213,
+        "coldRandomPointMedianMs": 822.218873,
+        "coldRandomRowMedianMs": 804.805545
+      },
+      "rowResetHorizontal": {
+        "rawBytes": 3333672814,
+        "storedBytes": 618504811,
+        "storedDeltaBytes": 536351,
+        "storedDeltaPct": 0.086793,
+        "encodeToStoredMedianMs": 4097.415085,
+        "decodeToAbsoluteMedianMs": 5281.604123,
+        "coldRandomPointMedianMs": 0.645418,
+        "coldRandomRowMedianMs": 2.17696,
+        "decision": "rejected-primary-format",
+        "reason": "adds stored bytes and eager reconstruction cost despite excellent lazy point and row sampling"
+      },
+      "gradient2d": {
+        "rawBytes": 3333672590,
+        "storedBytes": 546874878,
+        "storedDeltaBytes": -71093582,
+        "storedDeltaPct": -11.504403,
+        "encodeToStoredMedianMs": 4274.460586,
+        "encodeToStoredDeltaPct": 4.3,
+        "decompressMedianMs": 4224.44375,
+        "decompressDeltaPct": -5.34,
+        "reconstructMedianMs": 1582.626916,
+        "reconstructDeltaPct": 99.05,
+        "decodeToAbsoluteMedianMs": 5805.577539,
+        "decodeToAbsoluteDeltaPct": 10.44,
+        "coldRandomPointMedianMs": 175.157545,
+        "coldRandomPointDeltaPct": -78.71,
+        "coldRandomRowMedianMs": 482.621374,
+        "coldRandomRowDeltaPct": -39.32,
+        "transferCpuBreakEvenMBps": 129.4,
+        "transferCpuBreakEvenGbps": 1.04,
+        "decision": "accepted-for-versioned-rollout"
+      },
+      "rolloutDesign": {
+        "format": "MVH4/schemaVersion 4",
+        "predictor": "gradient2d",
+        "decoder": "dual v3/v4 decoder with eager reconstruction in the Pass 09 browser worker",
+        "compatibility": "preserve v3 decode, propagate per-artifact schema, and keep unknown magic fail-closed",
+        "rollback": "producer feature flag",
+        "lazySampling": "deferred; initial rollout reconstructs eagerly off-main"
+      },
+      "validation": {
+        "existingV3RawAndStoredBytesReproduced": true,
+        "exactSampleComparisons": 5000352000,
+        "mismatches": 0,
+        "wrapIdentitiesChecked": 262142,
+        "signedBoundarySamples": 30,
+        "nativeLittleEndianGate": "passed",
+        "malformedOrTruncatedContainersRejected": 3,
+        "boundSourcesStable": true
+      },
+      "review": {
+        "independent": true,
+        "methodologyCorrections": [
+          "replace pessimistic point reconstruction with an exact rectangular-prefix identity",
+          "replace full-grid scratch reconstruction with streaming left/up/up-left registers",
+          "discard and rerun one externally contended final sample"
+        ],
+        "remainingFindings": 0
+      },
+      "scientificImpact": "none; all three arms reconstructed every signed-int16 sample exactly, with no finite/missing, threshold, classification, or meteorological-value shift"
+    },
+    {
+      "pass": 11,
+      "name": "bounded-compression-input-ownership",
+      "decision": "accepted-resource-only",
+      "commit": "1a98f869533cad17ee69092d445a1cc3b7d082e3",
+      "serverRendererCumulativeImprovementPct": 19.842252,
+      "cumulativeInterpretation": "Pass 11 wall timing is neutral; retain the verified Pass 08 cumulative timing until the final aggregate interleave. A contemporaneous candidate-versus-campaign-baseline value of 18.759044% is context only, not a causal Pass 11 result.",
+      "hypothesis": "transfer exact renderer-owned PNG scanline ArrayBuffers to compression helpers and pack hover input directly into one immutable SharedArrayBuffer while preserving generic caller isolation and deterministic failure reconstruction",
+      "architecture": {
+        "protocolVersion": 2,
+        "inputModes": [
+          "clone for generic callers",
+          "owned-array-buffer for renderer-private PNG scanlines",
+          "shared-array-buffer for immutable renderer hover bodies"
+        ],
+        "admission": "owned/shared jobs require immediate frame-local plus pool-scoped admission and never enter the generic waiter queue",
+        "recyclerBound": "free plus checked-out exact scanline owners cannot exceed the global maxPending cap; changing sizes replace an idle slab",
+        "genericIsolation": "synchronous snapshot plus structured clone, including direct and subview SharedArrayBuffer inputs",
+        "ownedFailurePolicy": "compress attached bytes in place before transfer; after ownership loss discard the slab and rebuild from immutable RGBA/index source",
+        "sharedFailurePolicy": "retain the same immutable exact SharedArrayBuffer for inline fallback",
+        "protocolGuards": [
+          "request/result type and protocol version",
+          "safe numeric job id and never-reused BigInt ABA token",
+          "input mode and backing-store type",
+          "nonempty exact ArrayBuffer result",
+          "returned owned-input size and state",
+          "returned output cannot alias the recyclable input"
+        ],
+        "containedFailures": [
+          "spawn error",
+          "postMessage before and after detachment",
+          "messageerror",
+          "worker error or exit",
+          "worker codec error",
+          "malformed, duplicate, or stale response",
+          "numeric job-id reuse",
+          "pool death under concurrent work"
+        ]
+      },
+      "source": {
+        "sealedRoot": "/private/tmp/renderer-pass11.IxRMbX/candidate-src-v3",
+        "sha256": "597577cbc44395f9de92c7714edcd09b3c87d719078d075b422a60776d3c5d93",
+        "scopedFiles": 117,
+        "scopedBytes": 101339335,
+        "totalRegularFiles": 1216,
+        "writableFiles": 0,
+        "writableDirectories": 0,
+        "compressPoolSha256": "2ca3bea09b91bec1a8cc9d15255cd90edaac67c283f32b6087ee1984b247ea98",
+        "ownershipTestSha256": "700900ff23580e974b0375a1ea31b9b3afd19afce0612d39c5c877ce48af7763"
+      },
+      "wallBenchmark": {
+        "evidencePath": "/private/tmp/pass11-final-wall-evidence.json",
+        "evidenceSha256": "f2d324461aab6787d12d1dbf08bdafe796ee0db4c9e673cae895b56debb6cb4e",
+        "baselineSourceSha256": "c3533b29fdf4a5abc70295901b0006fca6eee6f5e0b05828e3ed2e2e76acd1e4",
+        "candidateSourceSha256": "597577cbc44395f9de92c7714edcd09b3c87d719078d075b422a60776d3c5d93",
+        "order": "A/B/B/A",
+        "excludedWarmupCycles": 4,
+        "retainedCycles": 8,
+        "samplesPerArm": 16,
+        "retainedSummaryCount": 32,
+        "summaryHashIndexSha256": "42c0e232e59fe752ad1b76eb51ad9e0f30790d8c91bc0de8012cdddfc790fa04",
+        "processFailures": 0,
+        "fixtureFailures": 0,
+        "sourceChanges": 0,
+        "rawLogHashMismatches": 0,
+        "baseline": {
+          "medianMs": 7089.4690835,
+          "madMs": 21.1159795,
+          "p10Ms": 7067.821396,
+          "p90Ms": 7147.170583,
+          "meanMs": 7098.75678125
+        },
+        "candidate": {
+          "medianMs": 7089.3439585,
+          "madMs": 8.6288335,
+          "p10Ms": 7075.96275,
+          "p90Ms": 7117.5560205,
+          "meanMs": 7095.17598956
+        },
+        "medianDeltaMs": -0.125125,
+        "medianDeltaPct": -0.00176494,
+        "meanDeltaPct": -0.0504425,
+        "verdict": "timing-neutral"
+      },
+      "peakRssBenchmark": {
+        "evidencePath": "/private/tmp/pass11-final-rss-evidence.json",
+        "evidenceSha256": "c4b7f3511e3720e6190589cf2580ffa99f3f4a40fbd9c70c0b5435fe9ac09dca",
+        "reproducerPath": "/private/tmp/pass11-production-rss.js",
+        "reproducerSha256": "146f7866fdb4982723750702dd66eed11b3d80c63b04b654186e20ff0b94977f",
+        "method": "/usr/bin/time -l over a fresh production builder process per sample; one distinct fresh APFS COW cache clone per arm was reused with --force",
+        "order": "A/B/B/A",
+        "excludedWarmupCycles": 1,
+        "retainedCycles": 2,
+        "samplesPerArm": 4,
+        "baselineSamplesBytes": [3218751488, 3230515200, 3223666688, 3224600576],
+        "candidateSamplesBytes": [2746515456, 2773860352, 2750103552, 2777186304],
+        "baselineMedianBytes": 3224133632,
+        "baselineMadBytes": 2924544,
+        "candidateMedianBytes": 2761981952,
+        "candidateMadBytes": 13541376,
+        "medianDeltaBytes": -462151680,
+        "medianDeltaMiB": -440.7421875,
+        "medianDeltaPct": -14.334135391073023,
+        "strictSampleSeparation": true,
+        "candidateMaxBelowBaselineMinBytes": 441565184,
+        "deterministicRemovedHoverBackingBytes": 225799044,
+        "causalCaveat": "whole-process peak RSS includes allocator and serializer high-water effects and is not asserted to equal deterministic live-byte arithmetic"
+      },
+      "transportPerProductionBuild": {
+        "jobs": 287,
+        "ownedJobs": 283,
+        "ownedBytes": 1549461340,
+        "sharedJobs": 4,
+        "sharedBytes": 865563000,
+        "cloneJobs": 0,
+        "fallbacks": 0,
+        "ownedFallbacks": 0,
+        "ownedRebuilds": 0,
+        "sharedFallbacks": 0,
+        "retainedRecyclerBytes": 12545960,
+        "sharedHoverPeakBytes": 225799044,
+        "transportPeakBytes": 238345004
+      },
+      "parity": {
+        "evidencePath": "/private/tmp/pass11-final-parity-evidence.json",
+        "evidenceSha256": "14234471bbd4d3556cd90960a6e22a8ea8c7da2ceb38fcc67a704d56346acb47",
+        "sealedFilesPerArm": 5354,
+        "manifestsEqual": 4,
+        "manifestComparison": "normalized; documented volatile generatedAt timestamps excluded",
+        "completionMarkersEqual": 16,
+        "completionMarkerComparison": "normalized; volatile renderedAt, timing profile, and Pass 11 transport telemetry excluded",
+        "payloadsEqual": 1287,
+        "hoverPayloadsEqual": 28,
+        "canonicalBytesPerArm": 4179614030,
+        "storedBytesPerArm": 1463910578,
+        "inventorySha256": "91e65b67fbfda123016a68df878e2621544b486c1f3247388e72cd305be648cf",
+        "canonicalPayloadSha256": "5b87eb008e1906ba08078b3d87780847cb782cdf08c3b6448b2354cf92b9f526",
+        "containerChanges": 0,
+        "mismatches": 0
+      },
+      "review": {
+        "independent": true,
+        "findingsFixed": [
+          "profile finalization dropped new transport telemetry",
+          "shared hover path briefly allocated a second full backing",
+          "worker messageerror was not contained",
+          "successful zero-byte codec output was accepted",
+          "generic SAB-backed views bypassed the explicit shared-input trust boundary",
+          "public deferred RGBA could mutate before coordinator admission",
+          "job-id allocation used a constant-condition loop",
+          "retained recycler memory was absent from peak telemetry",
+          "an early mutable temporary baseline clone was contaminated and all dependent evidence was disqualified",
+          "dead/null pools created an ordinary hover Buffer followed by a full snapshot",
+          "deferred hover packing timing omitted work under cap one",
+          "deferred hover packing was subtracted twice from core PNG timing",
+          "scheduling test doubles did not implement the shared-input API",
+          "an evidence snapshot was writable despite an immutable label and all partial evidence was discarded",
+          "an owned success could alias the recyclable input and later corrupt resolved IDAT bytes"
+        ],
+        "remainingP0": 0,
+        "remainingP1": 0,
+        "remainingP2": 0,
+        "remainingP3": 0,
+        "independentEvidenceRehash": "passed",
+        "independentStatisticsReproduction": "passed"
+      },
+      "validation": {
+        "fullNodeTestsPassed": 1107,
+        "browserSmokeTestsPassed": 164,
+        "focusedTestsPassed": 128,
+        "ownershipTestsPassed": 31,
+        "finalFocusedTapPath": "/private/tmp/pass11-v3-focused.tap",
+        "finalFocusedTapSha256": "23b5ca69d0c9f96937d33bcf07d0f139d067090fc6a19dc852fb60bf93a4bbf0",
+        "finalOwnershipTapPath": "/private/tmp/pass11-v3-ownership.tap",
+        "finalOwnershipTapSha256": "02903a2a652da836193769174d6b1a4ab7a34c247f5b3dd02103366082f232c4",
+        "typecheck": "passed",
+        "eslint": "passed with zero errors",
+        "prettier": "passed",
+        "productionBuild": "passed",
+        "diffCheck": "passed"
+      },
+      "disqualifiedEvidence": [
+        "all pre-v3 source/evidence sessions",
+        "the mutable pass08-accepted-cache comparison path",
+        "all partial evidence created before final permission sealing"
+      ],
+      "scientificImpact": "none; ownership, scheduling, and transport changed while all referenced payload/container bytes, samples, finite/missing states, thresholds, classifications, pixels, signatures, nonvolatile provenance fields, and meteorological values remained exact; all four manifests and all sixteen completion markers matched after excluding documented volatile timestamps, timing profile, and transport telemetry"
+    },
+    {
+      "pass": 12,
+      "name": "exact-mvh4-gradient-rollout-with-fused-stage-d",
+      "decision": "accepted-transfer-resource",
+      "commit": "5dc9acf6177afb1a65b80c40fda37026a6965ce3",
+      "serverRendererCumulativeImprovementPct": 17.956836276816798,
+      "cumulativeInterpretation": "Contextual non-interleaved comparison of the final fused candidate median (7159.347125 ms) with the committed campaign baseline (8726.317709 ms). Pass 12 itself is a measured 0.601036% wall regression versus Pass 11/MVH3; the final aggregate interleave will replace this contextual cumulative value.",
+      "hypothesis": "roll out the exact gradient2d hover predictor accepted in Pass 10, then fuse prediction into the existing WASM quantization scratch so its 11.5% production storage reduction does not incur a second full JavaScript sweep",
+      "format": {
+        "default": {
+          "id": "mvh4",
+          "magic": "MVH4",
+          "schemaVersion": 4,
+          "predictor": "gradient2d"
+        },
+        "rollback": {
+          "id": "mvh3",
+          "magic": "MVH3",
+          "schemaVersion": 3,
+          "predictor": "global1d"
+        },
+        "configuration": "blank selects mvh4; only mvh4 and mvh3 are accepted",
+        "parserContract": [
+          "exact magic/schema/predictor identity",
+          "positive safe dimensions and exact cells per variable",
+          "canonical contiguous ranges and exact payload length",
+          "finite scale/offset and signed-Int16 missing value",
+          "safe variable keys",
+          "mixed-schema merges decode to absolutes and explicitly re-encode the requested target"
+        ]
+      },
+      "rejectedUnfusedSubvariant": {
+        "evidencePath": "/private/tmp/pass12-final-wall-evidence.json",
+        "evidenceSha256": "09bc176a866f332f8ffa270e2ceede7d69a59e99a5266a6c8ce142f249cd1625",
+        "method": "4 excluded warm-up cycles plus 8 retained A/B/B/A cycles, n=16 per arm",
+        "baselineWallMedianMs": 7096.03675,
+        "candidateWallMedianMs": 7688.909479,
+        "wallDeltaMs": 592.872729,
+        "wallDeltaPct": 8.354984,
+        "baselineHoverMedianMs": 733.65,
+        "candidateHoverMedianMs": 1317.75,
+        "hoverDeltaMs": 584.1,
+        "hoverDeltaPct": 79.6156,
+        "pairedCyclesLost": 8,
+        "cause": "a complete reverse JavaScript gradient sweep followed exact quantization, while MVH3 already fused its predictor into the WASM QOUT scratch",
+        "disposition": "rejected; no unfused production source accepted"
+      },
+      "fusedArchitecture": {
+        "abiVersion": 1,
+        "columnsCap": 32768,
+        "previousRowBytes": 65536,
+        "simdLanes": 8,
+        "stateAcrossArbitraryChunks": true,
+        "loaderGuards": [
+          "ABI version and constant canary",
+          "bounded positive chunk and column capacities",
+          "alignment and disjoint scratch ranges",
+          "exact progress",
+          "active split-row semantic canary"
+        ],
+        "eligibleQuantizers": ["raw Float32", "affine Float32", "wind Float32 pair"],
+        "fallback": "missing or incompatible capability chooses absolute quantization before mutation; the authoritative packer then applies the exact reverse gradient",
+        "marker": {
+          "value": "predictorEncoded:gradient2d",
+          "serialized": false,
+          "ownPropertyRequired": true,
+          "mixedFusedAndAbsolutePlanesSupported": true
+        },
+        "mvh3Changed": false
+      },
+      "source": {
+        "sealedRoot": "/private/tmp/renderer-pass12-fused.Z1fPLw/candidate-src-final-v2",
+        "sha256": "518bb8baf8f88150f722df90dd6570675571eefcf79760115ae0cb6c841e63e9",
+        "scopedFiles": 118,
+        "scopedBytes": 101397749,
+        "totalRegularFiles": 8861,
+        "writableFiles": 0,
+        "writableDirectories": 0,
+        "wasmSha256": "a9837c69f74d3823744c7279d927896a875468c73975f3e023139a4abac71429",
+        "finalBehavioralTestSha256": "50e6c8b0d9aa2e2e9617cdfd923b285fdef635e33a1f9d3a3dc4f3bae33a8d99"
+      },
+      "productionFormat": {
+        "evidencePath": "/private/tmp/pass12-production-format-evidence.json",
+        "evidenceSha256": "55aec8c71f469105c068d896e1bd6115a788e8746acbe92ac2ab9cf3321daf1c",
+        "containers": 28,
+        "samplesPerFormat": 1666784000,
+        "combinedDecodedSampleComparisons": 3333568000,
+        "mvh3StoredBytes": 617968460,
+        "mvh4StoredBytes": 546874878,
+        "storedDeltaBytes": -71093582,
+        "storedDeltaPct": -11.5044029917,
+        "mvh3RawAndStoredRollbackExact": true,
+        "mvh4MatchesAcceptedPass10Oracle": true,
+        "sharedAndOrdinaryBufferParity": true,
+        "decodedValuesAndMetadataExact": true
+      },
+      "independentOracle": {
+        "evidencePath": "/private/tmp/pass12-independent-hover-evidence.json",
+        "evidenceSha256": "373d09d61ba7668c745bb996e4bd750741ce66046265573d7beee98625886748",
+        "logicalAssertions": 2862,
+        "randomMvh4Payloads": 100,
+        "randomVariables": 200,
+        "coverage": [
+          "MVH3 rollback",
+          "malformed parser gates",
+          "both merge directions",
+          "canonical empty contract",
+          "buffer/shared-buffer parity"
+        ],
+        "failures": 0
+      },
+      "hotPathMicrobenchmark": {
+        "evidencePath": "/private/tmp/pass12-fused-gradient-evidence.json",
+        "evidenceSha256": "a00ba81597a6b4dc4180b80d078e980474a80a3bddf08b6e7c4a4a79a04b7eed",
+        "shape": "980x1600",
+        "variables": 16,
+        "samplesPerRun": 25088000,
+        "warmupsPerArm": 2,
+        "retainedPerArm": 12,
+        "mvh3FusedDeltaMedianMs": 16.9074995,
+        "mvh4UnfusedMedianMs": 45.6236665,
+        "mvh4FusedMedianMs": 19.594479,
+        "fusedVsUnfusedImprovementPct": 57.05194145236003,
+        "oldRegressionRecoveredPct": 90.64297299845038,
+        "exactMvh4RawBytes": true
+      },
+      "wallBenchmark": {
+        "evidencePath": "/private/tmp/pass12-fused-final-wall-evidence.json",
+        "evidenceSha256": "f48daaa4670fa3822c9764bb669c506eaa1dc74c6c278c1f632516ae69c40cfd",
+        "measurementRunnerPath": "/private/tmp/pass12-fused-final-wall-runner.js",
+        "measurementRunnerSha256": "72afa4efe3a82edc39326ca32063cdac8365bc8d97fc9a5c9250c7bc4b2e71db",
+        "evidenceFinalizerPath": "/private/tmp/pass12-fused-final-wall-finalizer.js",
+        "evidenceFinalizerSha256": "7d1dd79d44a742a293422fcf91a2edcdb6604f5daa8a5961c7759882253506d5",
+        "order": "A/B/B/A",
+        "excludedWarmupCycles": 4,
+        "retainedCycles": 8,
+        "samplesPerArm": 16,
+        "processFailures": 0,
+        "fixtureFailures": 0,
+        "sourceChanges": 0,
+        "baseline": {
+          "wallMedianMs": 7116.5739375,
+          "wallMadMs": 14.7076255,
+          "wallMeanMs": 7120.022828187499,
+          "hoverMedianMs": 744.55,
+          "hoverMadMs": 2.45
+        },
+        "candidate": {
+          "wallMedianMs": 7159.347125,
+          "wallMadMs": 18.143333,
+          "wallMeanMs": 7160.889203187499,
+          "hoverMedianMs": 792.8,
+          "hoverMadMs": 4.6
+        },
+        "wallDeltaMs": 42.7731875,
+        "wallDeltaPct": 0.6010362272021411,
+        "hoverDeltaMs": 48.25,
+        "hoverDeltaPct": 6.4804244174333645,
+        "oldUnfusedWallRegressionRecoveredPct": 92.78543515196836,
+        "oldUnfusedHoverRegressionRecoveredPct": 91.73942818010615,
+        "candidateFasterPairedWallCycles": 0,
+        "candidateFasterPairedHoverCycles": 0,
+        "acceptanceGuardrailPct": 1.5,
+        "guardrailPassed": true,
+        "evidenceFinalizerRepair": "the measurement runner completed all 48 immutable runs but initially compared full pin hashes across intentionally distinct cache roots; the sealed finalizer required one stable full hash per arm and one shared hash after removing only cache-root"
+      },
+      "browserBenchmark": {
+        "evidencePath": "/private/tmp/pass12-browser-benchmark-evidence-browser-scoped.json",
+        "evidenceSha256": "5dda1528bbd3e2e00e2d37422a37476822a0d04808c3b83f2860fbce4b7f4de4",
+        "auditPath": "/private/tmp/pass12-browser-benchmark-evidence-browser-scoped.audit.json",
+        "auditSha256": "ec60dbda339c1cd31de9b1000e227551944f766f205e5508a05b0ebc9443c9eb",
+        "browser": "HeadlessChrome 150",
+        "excludedCycles": 2,
+        "retainedCycles": 6,
+        "samplesPerArm": 12,
+        "hrrrF003": {
+          "mvh3StoredBytes": 41461711,
+          "mvh4StoredBytes": 37993758,
+          "storedDeltaBytes": -3467953,
+          "storedDeltaPct": -8.364230313601873,
+          "fetchToRawDeltaPct": -3.6955,
+          "workerDecodeDeltaPct": 49.9301,
+          "adjustedFetchToReadyDeltaMs": 24,
+          "adjustedFetchToReadyDeltaPct": 6.18557,
+          "longTasksMvh3": 0,
+          "longTasksMvh4": 0,
+          "transferBreakEvenMBps": 97.1415,
+          "transferBreakEvenMbps": 777.132,
+          "comparedInt16": 112896000,
+          "mismatchedInt16": 0,
+          "mismatchedMetadata": 0
+        },
+        "postRepairBinding": {
+          "browserModules": 6,
+          "allSizesAndHashesUnchanged": true,
+          "aggregateSha256": "aa30af339f46dbc00bf4b5736e43ec656df35146c0119970b7e420559f7acc87",
+          "mvh4StoredSha256": "22b3101d29ac3b38717f801ecad7f3f274044170e1be4913e8503aab6f3a72ec",
+          "mvh4RawSha256": "3ccea4b768d9bf6eeb1d946287378b89dc3eae1c76b5828faade53897f38f992",
+          "semanticSha256": "cc535d17705b6fc2314ab4542fb1c59f5c91b15c99d08cdaf0d1fd14793c9116"
+        }
+      },
+      "allModelParity": {
+        "baseline": "/private/tmp/renderer-pass12.ER6kC2/parity-candidate-v4",
+        "candidate": "/private/tmp/renderer-pass12-fused.Z1fPLw/pass12-fused-parity-candidate",
+        "candidateSealedFiles": 5354,
+        "candidateWritableFiles": 0,
+        "candidateWritableDirectories": 0,
+        "comparatorSha256": "052f41793b93dae14fa459fce48118a88f32558055f8e2a6ea06f97e1aeb4a48",
+        "manifestsEqual": 4,
+        "completionMarkersEqual": 16,
+        "payloadsEqual": 1287,
+        "hoverPayloadsEqual": 28,
+        "storedBytesPerArm": 1392816996,
+        "canonicalBytesPerArm": 4179614708,
+        "inventorySha256": "91e65b67fbfda123016a68df878e2621544b486c1f3247388e72cd305be648cf",
+        "canonicalPayloadSha256": "a76833698b3707cbe65c46805e52049427caae883191fb08e3b3383d6b4e277e",
+        "containerChanges": 0,
+        "mismatches": 0,
+        "summaryFiles": [
+          {
+            "path": "output/noaa-benchmarks/renderer-30pass/pass12-fused-final-allmodel-gfs-gfs-20260716-06z-20260723T123151743Z/summary.json",
+            "sha256": "8d86a4a4b1fe736d70151972945bc5caee9209326a273dec0145968bd6f4299a"
+          },
+          {
+            "path": "output/noaa-benchmarks/renderer-30pass/pass12-fused-final-allmodel-nam-nam-20260716-12z-20260723T123208924Z/summary.json",
+            "sha256": "735389e0b8c630492ac97f9dc11453ca45c63f12d99b89d3fef2f90ce2e03b98"
+          },
+          {
+            "path": "output/noaa-benchmarks/renderer-30pass/pass12-fused-final-allmodel-nam3km-nam3km-20260716-12z-20260723T123225871Z/summary.json",
+            "sha256": "3826677c62147575c3d41ecdb0ea056f727620eeac9f9a9406d9d70595e600c7"
+          },
+          {
+            "path": "output/noaa-benchmarks/renderer-30pass/pass12-fused-final-allmodel-hrrr-hrrr-20260716-13z-20260723T123242354Z/summary.json",
+            "sha256": "dcb6d5c70307d93a6a7f432d33589b786214737f49cdf76868006f5c01bf4f2c"
+          }
+        ]
+      },
+      "review": {
+        "independentReviewers": 2,
+        "findingsFixed": [
+          "reverse in-place gradient originally walked forward and could consume already transformed predictors",
+          "schema identity and parser metadata gates were incomplete",
+          "supplemental schema inheritance confused explicit wildcard zero with absence",
+          "canonical empty payload behavior differed between MVH3 and MVH4",
+          "worker metadata and ownership validation were incomplete",
+          "an inherited predictorEncoded property could bypass the authoritative packer transform",
+          "the main/winter activation test inspected source text instead of exercising runtime behavior",
+          "the wall evidence assembler initially included the intentionally arm-specific cache root in a cross-arm pin hash"
+        ],
+        "remainingP0": 0,
+        "remainingP1": 0,
+        "remainingP2": 0,
+        "remainingP3": 0,
+        "finalVerdict": "clean"
+      },
+      "validation": {
+        "fullNodeTestsPassed": 1166,
+        "fusedGradientTestsPassed": 11,
+        "hoverTestsPassed": 97,
+        "independentSplitRowOracleCases": 500,
+        "browserSmokeTestsPassed": 164,
+        "typecheck": "passed",
+        "eslint": "passed with zero errors",
+        "prettier": "passed",
+        "productionBuild": "passed",
+        "deterministicWasmBuildsExact": 3,
+        "diffCheck": "passed"
+      },
+      "scientificImpact": "none; MVH4 is a lossless modular Int16 predictor over the exact existing quantized values. All 1,666,784,000 production samples per format, quantization metadata, finite/missing states, thresholds, classifications, pixels, manifests, completion markers, and final fused artifact containers are exact. No relaxed meteorological tolerance was used."
+    },
+    {
+      "pass": 13,
+      "name": "direct-final-mvh4-hover-arena",
+      "decision": "accepted-with-failed-rss-corroboration",
+      "commit": "890872b04e696cf58bc0590881b78f63b726ea9b",
+      "contextualCumulativeImprovementPct": 21.270699456492,
+      "cumulativeInterpretation": "The current 21.270699% value compares the campaign baseline median with the contextual Pass 13 candidate median and is not a fresh baseline/final interleave. The official value will be replaced by the final aggregate campaign.",
+      "queueRationale": "Initial queue item 15 was pulled ahead of the partial-cache and Mercator-CAS experiments because Pass 12 made the exact MVH4 path active and exposed a higher-yield redundant 430.7 MiB F003 ownership shape.",
+      "hypothesis": "quantize canonical MVH4 variables directly into one growable final shared arena after encode admission, serialize the exact bounded wire view in place, and avoid both per-variable Int16 owners and the later plane-to-container copy",
+      "architecture": {
+        "scope": "renderer-private canonical binary MVH4 producer with trusted shared compression, exact plan/artifact dimensions, supported direct transforms, and proven growable SharedArrayBuffer behavior",
+        "fallbacks": "MVH3, JSON, winter/supplemental, arbitrary compressors, noncanonical plans, unsupported transforms, and unsupported runtimes preserve the eager exact path before allocation",
+        "admission": "allocation, growth, quantization, finalization, and submission happen only inside both frame-local and global encode admission",
+        "arena": "one canonical immutable plan, shared maximum/final header serializer, at most one uncommitted speculative plane, omission-slot reuse without compaction, and abort rather than double materialization after allocation",
+        "protocol": "compression protocol v3 carries one SharedArrayBuffer owner plus validated nonzero inputByteOffset/inputByteLength; worker and inline fallback consume and echo exactly that bounded range",
+        "rollout": "MODELVIEW_NOAA_HOVER_ARENA=auto|off is explicitly benchmark-pinned and renderer-signature-neutral",
+        "telemetry": "variables, cells, plane bytes, header reserve, bounded view bytes, backing/max bytes, speculative tail, unique owners, zero-copy bytes, and fallback reason"
+      },
+      "source": {
+        "provenancePath": "/private/tmp/renderer-pass13.9nr4rm/candidate-provenance.json",
+        "provenanceSha256": "100e75014581201aa38a05d2dd759dcd4655cb588678338414a8cec258ae06b5",
+        "sealedRoot": "/private/tmp/renderer-pass13.9nr4rm/candidate-src-890872b",
+        "scopedSha256": "8f27c702cfb72da0dc0e5c0e895803aaff333240b55384e09deec0f425d5634c",
+        "scopedFiles": 119,
+        "scopedBytes": 101430403,
+        "archiveSha256": "3b5b8b8bb7e13e82db938d92c29444142ef6b947e14c9b3843bff8fd1dbafb82",
+        "writableFilesOrDirectories": 0
+      },
+      "deterministicOwnerAccounting": {
+        "fixture": "HRRR F003, 980x1600, 72 retained variables",
+        "legacyVariablePlaneBytes": 225792000,
+        "legacyPackedOwnerBytes": 225799068,
+        "legacyUniqueOwnerBytes": 451591068,
+        "predeclaredIdealDirectOwnerBytes": 225799168,
+        "predeclaredIdealSavedBytes": 225791900,
+        "actualDirectWireViewBytes": 225799068,
+        "actualDirectBackingBytes": 228935168,
+        "actualSpeculativeTailBytes": 3136000,
+        "actualSavedBytes": 222655900,
+        "actualSavedMiB": 212.341213,
+        "actualSavedPct": 49.304761714,
+        "accountingCorrection": "The adversarial plan assumed no committed omitted-plane tail. Production telemetry proved one of 73 candidates is omitted only after materialization, leaving one allowed 3,136,000-byte speculative tail behind 72 retained planes. The original gate remains frozen."
+      },
+      "wallBenchmark": {
+        "evidencePath": "/private/tmp/pass13-arena-wall-evidence.json",
+        "evidenceSha256": "78f7b6d6849b091c5bb9ff7334f1dd64ebbf020aa137965c7f42e84a9a450f6a",
+        "runnerSha256": "011928a42ab479ec853123d8da0122bc49c1466635819f2d24972f38fab7a05e",
+        "design": "two independent campaigns; four excluded warm-up cycles plus eight retained alternating ABBA/BAAB cycles per campaign; n=16 per arm per campaign; fresh process per observation",
+        "causal": {
+          "arms": "same frozen Pass 13 source, arena off versus auto",
+          "baselineMedianMs": 7111.001667,
+          "candidateMedianMs": 6887.6948125,
+          "baselineMadMs": 15.461229,
+          "candidateMadMs": 22.440542,
+          "medianDeltaMs": -223.3068545,
+          "medianImprovementPct": 3.140300972,
+          "meanImprovementPct": 3.328906055,
+          "p90ImprovementPct": 3.343456955,
+          "hoverBaselineMedianMs": 768.35,
+          "hoverCandidateMedianMs": 549.35,
+          "hoverMedianImprovementPct": 28.502635518,
+          "hoverMeanImprovementPct": 28.374776532,
+          "hoverP90ImprovementPct": 28.049567575
+        },
+        "contextual": {
+          "arms": "frozen Pass 12 source versus frozen Pass 13 auto",
+          "baselineMedianMs": 7106.998583,
+          "candidateMedianMs": 6870.1688955,
+          "medianDeltaMs": -236.8296875,
+          "medianImprovementPct": 3.332344656,
+          "meanImprovementPct": 3.282119701,
+          "p90ImprovementPct": 3.195626595,
+          "hoverMedianImprovementPct": 28.923593185
+        },
+        "wallGatePassed": true,
+        "invocations": 96,
+        "failures": 0,
+        "cacheAndWorkPinsExact": true,
+        "autoMainFramesUsingOneOwnerZeroCopies": 192,
+        "offMainFramesReportingDisabled": 96
+      },
+      "peakRssBenchmark": {
+        "evidencePath": "/private/tmp/pass13-arena-rss-evidence.json",
+        "evidenceSha256": "8f4a1ed2745860b6d7959266938dc06c1507cad4659f448a65b76f8a5f3a3164",
+        "runnerSha256": "ec9544e8d69493d22bcbec4cb51fb7b8feec75fcfa25e034b52783f629caed39",
+        "method": "/usr/bin/time -l around the direct production builder; four excluded warm-up cycles plus eight retained alternating ABBA/BAAB cycles; n=16 per arm",
+        "baselineMedianBytes": 2765193216,
+        "candidateMedianBytes": 2641485824,
+        "medianSavedBytes": 123707392,
+        "medianSavedMiB": 117.976563,
+        "medianImprovementPct": 4.473734106,
+        "meanSavedBytes": 125150208,
+        "p90SavedBytes": 93298688,
+        "peakMemoryFootprintMedianSavedBytes": 121208988,
+        "pairedCycleMedianSavedBytes": 127905792,
+        "pairedCyclesCandidateLower": 8,
+        "pairedCyclesMeetingTarget": 0,
+        "strictSampleSeparation": true,
+        "candidateMaxBelowBaselineMinBytes": 76775424,
+        "predeclaredTargetBytes": 158054330,
+        "targetDeficitBytes": 34346938,
+        "gatePassed": false,
+        "performanceDecision": "rss-gate-failed"
+      },
+      "rssDisposition": {
+        "status": "FAILED \u2014 accepted by explicit exception under the previously declared primary deterministic-owner hierarchy",
+        "targetFrozen": true,
+        "targetLoweredOrRecalculated": false,
+        "reviewers": 3,
+        "reviewConclusion": "no arena, source-plan, coordinator, pool, worker, or transport leak; the local hover owner reduction moves the whole-process high-water to later raster/compression/persistence work",
+        "support": [
+          "all 8/8 paired cycles favor auto with strict sample separation",
+          "independent peak-memory-footprint saving agrees with RSS",
+          "off RSS MAD is 0.94 MB while auto RSS MAD is 12.29 MB, consistent with a high-water phase switch",
+          "source WeakRef is dead while codec remains pending and after settlement",
+          "local production-shaped allocation probe exposes approximately the complete deterministic owner saving"
+        ],
+        "boundedInefficiency": "one 3,136,000-byte speculative tail is real but cannot close the 34,346,938-byte fixed-target deficit",
+        "futureDiagnostic": "phase checkpoints and a stage-annotated RSS/external/arrayBuffers timeline; change code only if it identifies an auto-only retained owner large enough to explain the fixed deficit"
+      },
+      "parity": {
+        "evidencePath": "/private/tmp/pass13-four-model-parity-evidence.json",
+        "evidenceSha256": "294dd57d40d24888f1d2969459c63ba83310af519f241fcf733589176f83ffb6",
+        "runnerSha256": "1692fec8edf84487c79f41bf0e9d427412cae3a77021fe196594f1cfe1f2449a",
+        "offlineFixtureWrapperSha256": "a10eb1fc3e4deca9efd859617835c0d150940ab1c3c35ba185dc7bb4e4af2198",
+        "cloneSeedContentSha256": "5c0401e7df1d3a52425fd3289371330df308db17af0fbe5f2f9d3d2e30290d32",
+        "cloneLogicalBytesEach": 88622146368,
+        "candidateOffVsAutoExact": true,
+        "pass12VsAutoExact": true,
+        "manifestsEqual": 4,
+        "completionMarkersEqual": 16,
+        "payloadsEqual": 1287,
+        "hoverPayloadsEqual": 28,
+        "inventorySha256": "91e65b67fbfda123016a68df878e2621544b486c1f3247388e72cd305be648cf",
+        "canonicalPayloadSha256": "a76833698b3707cbe65c46805e52049427caae883191fb08e3b3383d6b4e277e",
+        "physicalPayloadFiles": 1348,
+        "physicalPayloadBytes": 1393201591,
+        "physicalPayloadSha256": "52300b411b4e31e94e8951757df7267f93742abcc79ca3b1d6aaff42d7b0fcba",
+        "strictDecodedHoverContainers": 28,
+        "strictDecodedVariables": 1063,
+        "strictDecodedInt16Samples": 1666784000,
+        "strictDecodedSha256": "49bdcb671aaf2ef27682cf41bb77410fa79336c5bb8db72e394c135d30e6b116",
+        "meteorologicalChanges": 0
+      },
+      "review": {
+        "adversarialPlanPath": "/private/tmp/pass13-arena-adversarial-audit-plan.md",
+        "adversarialPlanSha256": "69bd729020c85ca9f7c018e203aef5dd3d1db38325d91e2b7dbf1532c844109e",
+        "architectureFocusedTestsPassed": 70,
+        "finalDiffFocusedTestsPassed": 102,
+        "reviewedManifestSha256": "b621583d0032dae234ef4a73d9a6e56608d5d360bc5543775f4454c225e8fe66",
+        "rssDispositionReviewers": 3,
+        "remainingP0": 0,
+        "remainingP1": 0,
+        "remainingP2": 0,
+        "remainingP3": 0,
+        "finalVerdict": "source clean; RSS corroboration gate failed and preserved"
+      },
+      "validation": {
+        "fullNodeTestsPassed": 1198,
+        "browserSmokeTestsPassed": 164,
+        "focusedCurrentRuntimePassed": 123,
+        "exactNode20190TestsPassed": 102,
+        "node20190EvidenceSha256": "599f51b8f975c41bb86fe77912c12b090773171659b57a797d4efd772830ed87",
+        "typecheck": "passed",
+        "eslint": "passed with zero errors",
+        "prettier": "passed",
+        "productionBuild": "passed",
+        "deterministicWasmBuildsExact": 3,
+        "wasmSha256": "a9837c69f74d3823744c7279d927896a875468c73975f3e023139a4abac71429",
+        "diffCheck": "passed"
+      },
+      "excludedValidationAttempts": [
+        "ordinary harness run attempted the builder's mandatory remote parameter-index probe and failed before rendering; retained only as an environmental diagnostic",
+        "first offline wrapper loaded rather than executed the builder and produced zero frames; no result accepted",
+        "decoded-int16 comparator diagnostic correctly rejected a signature-neutral comparison because that mode requires a renderer-signature transition; final exact-container parity plus an independent strict production decoder was used instead"
+      ],
+      "scientificImpact": "none; the final container, compressed bytes, renderer signature, decoded quantization metadata, and every one of 1,666,784,000 production Int16 samples are exact. No relaxed meteorological tolerance was used."
+    },
+    {
+      "pass": 14,
+      "name": "transactional-warm-pack-hash-bypass",
+      "decision": "accepted",
+      "commit": "3299df954b4f848291ffdd8c570f5f923448ffc6",
+      "contextualCumulativeImprovementPct": 25.808535846423,
+      "cumulativeInterpretation": "The current 25.808536% value compares the campaign baseline median with the contextual Pass 14 candidate median and is not a fresh baseline/final interleave. The official value will be replaced by the final aggregate campaign.",
+      "queueRationale": "Initial queue item 16 followed the direct-final hover arena because the warm selected-GRIB materialization and verification hash remained the largest isolated pre-decode cost with a validated exact Mercator pack already present.",
+      "hypothesis": "use the selected-GRIB cache descriptor plus stable body and ready-sidecar filesystem identities and exact pack metadata to provisionally decode the validated Mercator pack before hashing the selected GRIB body, committing provenance only after strict success and otherwise rolling back to the authoritative materialize-and-verify path",
+      "architecture": {
+        "rollout": "MODELVIEW_NOAA_FAST_PACK=auto|off defaults to auto and is renderer-signature-neutral",
+        "descriptor": "the selected-GRIB cache descriptor plus stable body and ready-sidecar filesystem identities are captured without reading or hashing the body and are never promoted as authoritative by the provisional attempt",
+        "token": "opaque WeakMap identity binds GRIB path, tool, mapping, dimensions, regrid arguments, payload identity, and exact pack plus metadata generations",
+        "strictDecode": "required-pack mode checks pre-open, opened-descriptor, and post-read identity plus CRC for every consumed field and does not silently fall back",
+        "commit": "only complete strict decode commits selected provenance and promotes decoded grids",
+        "rollback": "any miss, corruption, identity race, token mismatch, or decode error disposes provisional strong maps and speculative derived grids before a cold authoritative retry",
+        "sharedCacheSafety": "required-path corruption blacklists the pack for the transaction but does not delete shared files",
+        "telemetry": [
+          "selectedGribFastPackProbes",
+          "selectedGribFastPackMetadataHits",
+          "selectedGribHashBypasses",
+          "selectedGribHashBypassBytes",
+          "selectedGribFastPackFallbacks",
+          "selectedGribVerifyHashes",
+          "selectedGribVerifyHashBytes",
+          "selectedGribPackProbeMs"
+        ]
+      },
+      "source": {
+        "sealedRoot": "/private/tmp/renderer-pass14.8vu9ZV/candidate-src-3299df9",
+        "scopedSha256": "8a53591c5a44d39470705f2aa2f3762a602ab039efcf5e7edfd52e4b58d5dc90",
+        "scopedFiles": 119,
+        "scopedBytes": 101455393,
+        "baselineRoot": "/private/tmp/renderer-pass13.9nr4rm/candidate-src-890872b",
+        "baselineSha256": "8f27c702cfb72da0dc0e5c0e895803aaff333240b55384e09deec0f425d5634c",
+        "baselineCommit": "890872b04e696cf58bc0590881b78f63b726ea9b"
+      },
+      "wallBenchmark": {
+        "evidencePath": "/private/tmp/pass14-fast-pack-wall-evidence.json",
+        "evidenceSha256": "7b0cd8f771a370fb0025619950fad2062472e538ac9dae1579f1878fb63a49b5",
+        "runnerPath": "/private/tmp/pass14-fast-pack-wall-runner.js",
+        "runnerSha256": "f61a8a10f5afa73af6bb66f7ec17ba2b08c2e86b7112520d73578ed084c96a28",
+        "progressPath": "/private/tmp/renderer-pass14.8vu9ZV/wall-progress-v3.ndjson",
+        "progressLines": 96,
+        "progressSha256": "35def27da1ca0297cb02a1de9b773c07f2ffcb99793c9fc9e29d53ed19680643",
+        "design": "two independent campaigns; each used four excluded warm-up cycles plus eight retained alternating ABBA/BAAB cycles, n=16 per arm, one fresh process per observation, one distinct APFS COW clone per arm, complete pre-timing seed fingerprints, sealed source trees, and an exact-index-only offline wrapper",
+        "fixture": "HRRR 20260716 13Z F000,F001,F002,F003",
+        "causal": {
+          "arms": "same frozen Pass 14 source, fast pack off versus auto",
+          "baselineMedianMs": 6689.957104,
+          "candidateMedianMs": 6460.4197915,
+          "baselineMadMs": 7.671875,
+          "candidateMadMs": 8.68325,
+          "medianSavingsMs": 229.5373125,
+          "medianImprovementPct": 3.431073008865135,
+          "meanImprovementPct": 3.4716218735721456,
+          "p90ImprovementPct": 3.433156957523941,
+          "pairedMedianImprovementPct": 3.474290548915776,
+          "positivePairedCycles": 8,
+          "retainedPairedCycles": 8
+        },
+        "treatment": {
+          "baselineMaterializeMedianMs": 243.5,
+          "candidateProbeMedianMs": 23.5,
+          "medianSavingsMs": 220,
+          "medianImprovementPct": 90.34907597535934,
+          "meanImprovementPct": 90.33163396673362,
+          "p90ImprovementPct": 90.32520325203251
+        },
+        "contextual": {
+          "arms": "frozen Pass 13 versus frozen Pass 14 auto",
+          "baselineMedianMs": 6708.5809585,
+          "candidateMedianMs": 6474.182875,
+          "medianSavingsMs": 234.3980835,
+          "medianImprovementPct": 3.494003947332692,
+          "meanImprovementPct": 3.5093475273147683,
+          "p90ImprovementPct": 3.55701941415132,
+          "pairedMedianImprovementPct": 3.530310640762706,
+          "positivePairedCycles": 8,
+          "retainedPairedCycles": 8
+        },
+        "exactHashDifferential": {
+          "offVerifyHashesPerFrame": 1,
+          "autoVerifyHashesPerFrame": 0,
+          "f000Bytes": 105874115,
+          "f001Bytes": 106332959,
+          "f002Bytes": 105908609,
+          "f003Bytes": 106580024,
+          "totalBytes": 424695707
+        },
+        "integrity": {
+          "processesSucceeded": 96,
+          "rawLogs": 192,
+          "mainProfiles": 384,
+          "allMainRawCacheHits": true,
+          "allMainRegridPackHits": true,
+          "emittedCacheRatios": 3648,
+          "allEmittedCacheRatiosHit": true,
+          "unexpectedNetworkRequests": 0,
+          "fallbacks": 0,
+          "retries": 0,
+          "corruptions": 0,
+          "allPredeclaredGatesPassed": true
+        },
+        "sealedSeed": {
+          "root": "/private/tmp/renderer-pass13-parity-final.SuFqst/candidate-auto",
+          "sha256": "16fb4474ecca9a579d89e568a3f890678782db546aaea7cc318c1200a6ed5adf",
+          "files": 5354,
+          "directories": 170,
+          "logicalBytes": 88622150453,
+          "unchangedAtFinish": true
+        }
+      },
+      "parityAndFaultEvidence": {
+        "evidencePath": "/private/tmp/pass14-four-model-parity-fault-evidence-v3.json",
+        "evidenceSha256": "c9b4e92c6fff97a6a2965530f7b25a2279927874055579aa5a44b1d34b1ea061",
+        "evidenceBytes": 1261497,
+        "evidenceMode": "0444",
+        "runnerPath": "/private/tmp/pass14-four-model-parity-fault-runner-v3.js",
+        "runnerSha256": "c9b36c03aab4d19e85bbe28a582b381112744c72b4436e0c9caece71118e29f1",
+        "workerDenyPreloadSha256": "bb1bd0c3d4731f117b8e051e6d99be05719ffbd6c6b6e9fef1e251d22b032993",
+        "workerDenySelftestSha256": "1cbcdce31b7fe9575607b9428e6702c58fdfbf5e2cbfcdcc78db931387e01669",
+        "root": "/private/tmp/renderer-pass14-parity-v3.lJnjqb",
+        "candidateOffVsAuto": {
+          "exact": true,
+          "manifestsEqual": 4,
+          "completionMarkersEqual": 16,
+          "payloadsEqual": 1287,
+          "hoverPayloadsEqual": 28,
+          "containerChanges": 0,
+          "reportSha256": "c8a94c6341f95df374c75e4b8b2ce64a4cfeafd370c98ae99e558219490a988c"
+        },
+        "pass13SeedVsCandidateAuto": {
+          "exact": true,
+          "manifestsEqual": 4,
+          "completionMarkersEqual": 16,
+          "payloadsEqual": 1287,
+          "hoverPayloadsEqual": 28,
+          "containerChanges": 0,
+          "reportSha256": "34c914e4dd11d4b72f59733fe51979494bf192bbf6a0d5691248492895d06746"
+        },
+        "physicalPayload": {
+          "rootsChecked": 6,
+          "filesEach": 1348,
+          "bytesEach": 1393201591,
+          "sha256": "52300b411b4e31e94e8951757df7267f93742abcc79ca3b1d6aaff42d7b0fcba"
+        },
+        "strictDecodedHover": {
+          "rootsChecked": 3,
+          "filesEach": 28,
+          "variablesEach": 1063,
+          "samplesEach": 1666784000,
+          "storedBytesEach": 546874878,
+          "rawBytesEach": 3333672590,
+          "sha256": "49bdcb671aaf2ef27682cf41bb77410fa79336c5bb8db72e394c135d30e6b116"
+        },
+        "autoTelemetry": "all 16 main frames reported exactly one probe, metadata hit, hash bypass, zero fallback, zero corruption, zero verification hashes, and regrid 1/1; off reported exactly one verification hash per corresponding frame"
+      },
+      "faults": {
+        "lateConsumedCrc": {
+          "mutation": "one consumed F003 pack entry at byte offset 784000000",
+          "corruptions": 1,
+          "selectedVerifyHashes": 1,
+          "selectedVerifyHashBytes": 106580024,
+          "regridPackHits": 0,
+          "regridPackTotal": 1,
+          "result": "provisional transaction rejected, authoritative body verified, exact pack and metadata rebuilt, exact artifacts published"
+        },
+        "sameSizeSelectedBodyWithValidPack": {
+          "selectedBodyMutationPersisted": true,
+          "selectedIdentityStable": true,
+          "packAndSidecarsStable": true,
+          "selectedVerifyHashes": 0,
+          "selectedVerifyHashBytes": 0,
+          "result": "valid exact pack remained authoritative and all artifacts were exact"
+        },
+        "invalidSelectedAndPackFailClosed": {
+          "processExitCode": 0,
+          "rendererErrors": 1,
+          "failedHour": 3,
+          "workerReceiptCount": 1,
+          "workerRequestMethod": "GET",
+          "workerRequestRange": "bytes=41945699-42655144",
+          "workerResponseStatus": 403,
+          "workerReceiptSha256": "be80ffc76d1fdd234b84e1b0cf0cf96b609fb7e0b86e8c19d70bf01d17cda5d7",
+          "f000ThroughF002Complete": true,
+          "f003CompletedScienceProfileAbsent": true,
+          "f003ArtifactsAndCompletionMarkerUnchanged": true,
+          "manifestF003Status": "error",
+          "latestPointerStable": true,
+          "result": "failed closed before F003 science publication"
+        }
+      },
+      "review": {
+        "independentEvidenceAudit": {
+          "replayedChecks": 234,
+          "physicalInventoryRootsRehashed": 6,
+          "decodedInventoryRootsRehashed": 3,
+          "rendererOrRunnerInvoked": false,
+          "writesPerformed": false,
+          "remainingP0": 0,
+          "remainingP1": 0,
+          "remainingP2": 0,
+          "remainingP3": 0,
+          "verdict": "clean"
+        },
+        "findingsFixed": [
+          "provisional token could be forged against the current generation",
+          "a rejected provisional promise/session could remain retained during cold retry",
+          "speculative derived-grid state could survive rollback into the authoritative retry",
+          "renderer-level transactional state-machine coverage was missing",
+          "rollback control documentation was missing from .env.example",
+          "the fail-closed evidence could falsely pass on an unrelated early error",
+          "publication sidecars, completion marker, manifest, and latest pointer were incompletely sealed",
+          "the first fault oracle contained a mistyped ready-sidecar hash",
+          "the second runner attributed a frame-worker fetch to the main-thread wrapper",
+          "the worker denial needed finite non-retryable status, exact metadata-bound range, in-band environment naming, and normal child completion"
+        ],
+        "remainingP0": 0,
+        "remainingP1": 0,
+        "remainingP2": 0,
+        "remainingP3": [
+          "selectedGribFastPackFallbacks aggregates reasons, while CRC corruption remains separately attributable",
+          "the pre-existing ordinary corrupt-cache stat/unlink sequence can race with a republisher; the required transaction path never removes shared files and protects correctness through blacklist plus fallback",
+          "the worker receipt is append-only rather than O_EXCL, but uses a private absent root, preflight, exact-one parsing, and complete end seals",
+          "APFS shared extents are inferred from the clone method and complete fingerprints rather than cryptographically demonstrated"
+        ],
+        "finalVerdict": "source, benchmark, exactness, and fault semantics clean; no P0-P2 finding"
+      },
+      "validation": {
+        "fullNodeTestsPassed": 1205,
+        "browserSmokeTestsPassed": 164,
+        "focusedCurrentRuntimePassed": 44,
+        "exactNode20190TestsPassed": 44,
+        "typecheck": "passed",
+        "eslint": "passed with zero errors",
+        "prettier": "passed",
+        "productionBuild": "passed",
+        "diffCheck": "passed"
+      },
+      "excludedEvidence": {
+        "wallPreflights": [
+          {
+            "reason": "sandbox denied os.uptime before cache fingerprinting, timing, or any child render",
+            "observations": 0,
+            "emptyProgressSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "reason": "first clone rejected an obsolete pre-render Pass 13 seed digest before timing; independent complete hashing established the post-render seed digest",
+            "observations": 0,
+            "emptyProgressSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "parityFaultAttempts": [
+          {
+            "id": "v1-sidecar-hash-preflight",
+            "runnerSha256": "b1f29e2a0ed6036178094117ffb254788879dfa7dc831f40782702044a57564d",
+            "reason": "stopped before mutation because the hard-coded ready-sidecar oracle omitted one repeated hexadecimal digit",
+            "finalEvidenceProduced": false,
+            "rootsReused": false
+          },
+          {
+            "id": "v2-worker-receipt-oracle",
+            "runnerSha256": "6413a0330590cb70821eb8e8702115ae5edb4ebb4e3ef4d5583b789eb4751dee",
+            "reason": "renderer failed closed correctly, but the runner incorrectly expected the main-thread receipt to count a body fetch issued inside the frame worker",
+            "finalEvidenceProduced": false,
+            "rootsReused": false
+          }
+        ]
+      },
+      "scientificImpact": "none; this signature-neutral transaction changes only when the exact warm pack can commit. Candidate off, candidate auto, and the Pass 13 seed match all containers, canonical payloads, physical payload bytes, decoded hover samples, finite/missing states, thresholds, classifications, pixels, and meteorological values exactly. No relaxed tolerance was used."
+    },
+    {
+      "pass": 15,
+      "name": "precompiled-static-catalog-color-lookups",
+      "decision": "accepted",
+      "commit": "6e4d05984c54160c9ac1f43c11b2cf8f8be4678f",
+      "queueRationale": "Promoted ahead of lower-confidence architectural candidates after profiling showed that identical static color interpolation was paid in every fresh builder and frame-worker process. The treatment had a direct receipt-bound metric, a low-risk exact rollback, and an expected approximately 180 ms production wall ceiling.",
+      "hypothesis": "Compile the immutable continuous catalog-color roster once, validate it by complete content identity at startup, and preserve the dynamic compiler for custom recipes and rollback. This should remove repeated process-start interpolation without changing any lookup byte or rendered artifact.",
+      "architecture": {
+        "defaultMode": "auto",
+        "strictMode": "precompiled",
+        "rollbackMode": "dynamic",
+        "autoFailureBehavior": "warn and rebuild the complete roster dynamically",
+        "strictFailureBehavior": "fail closed without fallback",
+        "dynamicScopePreserved": "public runtime and custom lookup recipes",
+        "startupReceipts": "private framed descriptor; exact builder-main and frame-worker role, PID, mode, identities, timing, and fallback state",
+        "generatedAssetTrackedAsBinary": true
+      },
+      "source": {
+        "sealedRoot": "/private/tmp/pass15-sealed.TBZYW5/source",
+        "scopedTreeSha256": "76c361d1cf04438d237a75f55fc2ffd6cf9348e2b592452f6fa7407a465a20e9",
+        "scopedFileCount": 126,
+        "scopedTotalBytes": 102414981,
+        "scopedSymlinkCount": 0,
+        "commit": "6e4d05984c54160c9ac1f43c11b2cf8f8be4678f",
+        "scopedTrackedClean": true,
+        "repositoryWideClean": false,
+        "fullStatus": "?? node_modules",
+        "untrackedNodeModulesSymlink": {
+          "path": "/private/tmp/pass15-sealed.TBZYW5/source/node_modules",
+          "target": "<development-checkout>/node_modules",
+          "disclosure": "Excluded from the scoped source fingerprint and sealed separately by dependency trees and loaded-tool hashes."
+        }
+      },
+      "assetIdentity": {
+        "compilerId": "modelview-continuous-color-lookup-v1",
+        "compilerClosureSha256": "9ad53c9938c168d26e2c79b44e4a558353c88ba9bdc3bd7264714f0f8db6ea22",
+        "inputSha256": "6cda10556dabd3a8c71b0079c34dac389182406e50392e90dc9939bc820d03cb",
+        "assignmentMappingSha256": "f61591e37552df5ffe3e94cad5951ef544e8ac5658def8e892bfb31683387422",
+        "binarySha256": "d29d3860eca1f55039638d5e49d30d795618974890d4d0866b3dc3297833fd07",
+        "binaryBytes": 868352,
+        "manifestSha256": "b4260cacd32f292f0f9d2ed7dc46542d9575c27cd9fe09ffe0f072664510fe4b",
+        "assignmentCount": 73,
+        "uniquePaletteCount": 38,
+        "logicalColorBytes": 2670592
+      },
+      "initBenchmark": {
+        "evidence": "/private/tmp/pass15-color-lookup-init-evidence.json",
+        "evidenceSha256": "114b7d1775db1fca459bf81d6a739ea61ae69c21b585be3286730bfb82ba1ae3",
+        "totalRetainedSamples": 124,
+        "samplesPerModePerRuntime": 31,
+        "node22": {
+          "version": "v22.23.1",
+          "dynamicMedianMs": 93.999292,
+          "precompiledMedianMs": 4.498709,
+          "improvementPct": 95.214103
+        },
+        "node20": {
+          "version": "v20.19.0",
+          "dynamicMedianMs": 93.543417,
+          "precompiledMedianMs": 4.3955,
+          "improvementPct": 95.30111242354981
+        },
+        "identityExact": true
+      },
+      "wallBenchmark": {
+        "evidence": "/private/tmp/pass15-color-lookup-wall-evidence-v1.json",
+        "evidenceSha256": "547ff2a6f4e485813d2b76e42247aba2cc9c3ef6d5f9bee1407fafb6f86f2001",
+        "runner": "/private/tmp/pass15-color-lookup-wall-runner-v2.js",
+        "runnerSha256": "d568d8c031c8b0265e4369da8cb01e898d87aeba8d61397b4e5cb38332ebae10",
+        "acceptanceAmendmentSha256": "9caa172c1e13fd52bff69b80c382e21b6c330ed89bd4a0ff4ecaaa4e86ddc521",
+        "progressLines": 96,
+        "progressSha256": "7db336118d97631d6f4485567664f0c343ad3372ef82b70e465f0db15491f920",
+        "rawLogFiles": 288,
+        "rawLogTreeSha256": "6daa181f21ebed78e2b031f249b44d13ba9057d761e899c951d6782bf9354b5d",
+        "causal": {
+          "question": "same sealed Pass 15 source, dynamic versus strict precompiled lookup initialization",
+          "warmupCyclesExcluded": 4,
+          "retainedCycles": 8,
+          "schedule": "alternating ABBA/BAAB",
+          "retainedPerArm": 16,
+          "freshProcessPerObservation": true,
+          "dynamicWallMs": {
+            "median": 6497.7704795,
+            "mean": 6498.828724,
+            "p90": 6513.827916
+          },
+          "precompiledWallMs": {
+            "median": 6317.9492295,
+            "mean": 6317.82635425,
+            "p90": 6334.084917
+          },
+          "wallImprovementPct": {
+            "median": 2.76743000645103,
+            "mean": 2.785153716723789,
+            "p90": 2.75940662415252
+          },
+          "wallSavingsMs": {
+            "median": 179.82124999999996,
+            "mean": 181.00236974999916,
+            "p90": 179.74299900000005
+          },
+          "pairedCycleImprovementPct": [
+            2.8576198585438606, 2.6672505171994256, 2.465081826191421, 3.1536200639347345, 2.682942962722965,
+            3.080932079574331, 2.8538694158724636, 2.5171483783316297
+          ],
+          "pairedMedianImprovementPct": 2.768406189297714,
+          "positiveCycles": "8/8",
+          "dynamicReceiptMedianMs": 190.3160835,
+          "precompiledReceiptMedianMs": 9.1811875,
+          "receiptMedianSavingsMs": 181.134896,
+          "receiptMedianImprovementPct": 95.17582154321707,
+          "catalogPngMedianMs": {
+            "dynamic": 1042.65,
+            "precompiled": 1040.15,
+            "candidateMinusBaseline": -2.5,
+            "allowedRegression": 9.75,
+            "interpretation": "guardrail only; no causal stage claim"
+          },
+          "gates": {
+            "wallMedianAtLeast1Point25Pct": true,
+            "wallMeanAtLeast1Point25Pct": true,
+            "pairedMedianAtLeast1Pct": true,
+            "atLeastSixOfEightPositive": true,
+            "p90NoWorseThanHalfPctRegression": true,
+            "receiptMedianSavingsAtLeast150Ms": true,
+            "catalogPngWithinPooledNoise": true
+          },
+          "passed": true
+        },
+        "contextual": {
+          "acceptanceUse": "none; descriptive only",
+          "pass14MedianMs": 6803.316979,
+          "pass15MedianMs": 6529.6966455,
+          "pooledMedianImprovementPct": 4.021866603372914,
+          "pairedMedianImprovementPct": 2.6672481886429478,
+          "positiveCycles": "7/8",
+          "finalCycleImprovementPct": -3.4742594295456724,
+          "pass14MadMs": 324.504375,
+          "pass15MadMs": 224.0746865,
+          "hostLoadAtStart": 1.70068359375,
+          "hostLoadAtFinish": 5.685546875,
+          "interpretation": "load-contaminated and source/schema-spanning; not an acceptance or cumulative inference"
+        },
+        "allSevenFrozenCausalGatesPassed": true,
+        "exactWorkCounters": true,
+        "rawCacheIdentityStable": true,
+        "offlineFixtureOnly": true
+      },
+      "contextualCumulativeImprovementPct": 25.172370944,
+      "cumulativeInterpretation": "This value compares the campaign baseline median with the load-contaminated contextual Pass 15 median. It is traceability context only, not a fresh cumulative claim, and will be replaced by the final baseline/final interleave.",
+      "parity": {
+        "evidence": "/private/tmp/renderer-pass15-parity-final.v1/pass15-four-model-color-parity-evidence-v1.json",
+        "evidenceSha256": "28eae35bd225a59569be0af21dba7471dbe24daa490351fde6e62d07897ebb50",
+        "runner": "/private/tmp/pass15-four-model-color-parity-runner.js",
+        "runnerSha256": "aa5d69e4acf22de86a609941cd4e6a191ba2b442abe59eea84016faafdf88778",
+        "attempt": 2,
+        "models": 4,
+        "framesPerRoot": 16,
+        "runs": 8,
+        "receipts": 16,
+        "comparisons": ["candidate-dynamic-vs-precompiled", "accepted-pass14-oracle-vs-precompiled"],
+        "normalizedManifestsEqual": "4/4 each",
+        "completionMarkersEqual": "16/16 each",
+        "referencedPayloadsEqual": "1287/1287 each",
+        "hoverContainersEqual": "28/28 each",
+        "canonicalBytes": 4179614708,
+        "canonicalPayloadSha256": "a76833698b3707cbe65c46805e52049427caae883191fb08e3b3383d6b4e277e",
+        "physicalInventory": {
+          "roots": 3,
+          "filesPerRoot": 1348,
+          "bytesPerRoot": 1393201591,
+          "sha256": "52300b411b4e31e94e8951757df7267f93742abcc79ca3b1d6aaff42d7b0fcba"
+        },
+        "strictHoverDecode": {
+          "roots": 3,
+          "containersPerRoot": 28,
+          "variablesPerRoot": 1063,
+          "int16SamplesPerRoot": 1666784000,
+          "storedBytesPerRoot": 546874878,
+          "rawBytesPerRoot": 3333672590,
+          "sha256": "49bdcb671aaf2ef27682cf41bb77410fa79336c5bb8db72e394c135d30e6b116"
+        },
+        "cloneIsolation": {
+          "regularPaths": 5354,
+          "sameDevice": true,
+          "distinctInodes": true,
+          "linkCountOne": true,
+          "allowedVolatileMarkerSizeDifferences": 16,
+          "unexpectedSizeDifferences": 0
+        },
+        "logFiles": 28,
+        "logTreeSha256": "68185291607e3907c7b1b607d0b06c092ca2f485769ecf656ef7d4eaf8794193",
+        "exact": true
+      },
+      "excludedEvidence": {
+        "parityAttempt1": {
+          "status": "excluded-before-evidence-publication",
+          "runnerSha256": "7a55bf419a435318bf5c64223fb8be5f019699358be99360c945f08eb51691d6",
+          "reason": "post-render isolation seal incorrectly required byte-size equality for the 16 volatile completion markers after both exact artifact comparators passed",
+          "repair": "exact 16-path volatile-marker allowlist; all pre-render sizes and every nonvolatile post-render size remain strict",
+          "oracleVsPrecompiledReportSha256": "8505f35b0722fc4d72fd4544fb44d7137afd78aab4dc2b39b4a7c7b842ad0d06",
+          "dynamicVsPrecompiledReportSha256": "a12506cc9f74b8acef159ccbfd47a401fa9a5a0188a485f07a2a96d68fbd43d5",
+          "rootsReused": false
+        }
+      },
+      "review": {
+        "benchmarkVerdict": "GO; no P0-P2 issue; one archival-only P3 recorded by that review",
+        "parityEvidenceVerdict": "GO; no P0-P3 finding",
+        "scienceVerdict": "GO; no P0-P2 finding",
+        "scienceReviewP3": [
+          "Attempt 1's deleted 5,354-file forensic roster is represented by retained compact comparator logs rather than the full failed cache.",
+          "Identical pre-existing GFS ambiguous-selector warnings occurred in both arms and are not a Pass 15 regression."
+        ]
+      },
+      "validation": {
+        "fullNodeTestsPassed": 1266,
+        "browserSmokeTestsPassed": 164,
+        "focusedTestsPassed": 87,
+        "node22RendererTestsPassed": 256,
+        "exactNode20AssetHarnessTestsPassed": 79,
+        "typecheck": "passed",
+        "eslint": "passed with zero errors",
+        "prettier": "passed",
+        "productionBuild": "passed",
+        "deterministicGeneration": "passed",
+        "diffCheck": "passed"
+      },
+      "scientificImpact": "none; dynamic, strict precompiled, and the accepted Pass 14 oracle match all normalized control-plane files, referenced payloads, physical payload bytes, stored hover containers, decoded hover samples, finite/missing states, thresholds, classifications, pixels, and meteorological values exactly. No relaxed tolerance was used."
+    },
+    {
+      "pass": 16,
+      "name": "content-addressed-snow-rf-typed-asset",
+      "decision": "accepted",
+      "commit": "2e1d5f016b083011f18f2217cbbf6704011015e8",
+      "queueRationale": "Queue candidate 23, promoted as the final performed pass at the user's direction: every process that renders a snowfall product paid a ~420-430 ms strict parse of the 26 MB Snow-RF CONUS JSON, the treatment had a direct receipt-bound metric, and the Pass 15 asset pattern gave a low-risk exact rollback.",
+      "hypothesis": "Compile the Snow-RF CONUS random forest once into a content-addressed aligned Int32/Float64 binary asset with prediction-oracle parity, streaming identity captures, an exact JSON fallback, and a fail-closed required mode, removing identical parse work from the builder main process and every frame worker without moving any prediction bit.",
+      "source": {
+        "path": "tools/noaa-beta/snow-rf/conus-rf.json",
+        "sha256": "b3bc9395135c6ef79d103e82516b70cdca6c28571807b362d4080de512f6c731",
+        "trees": 100,
+        "nodes": 666406
+      },
+      "assetIdentity": {
+        "binaryPath": "scripts/lib/noaa-beta/generated/snow-rf-conus-v1.bin",
+        "binarySha256": "b60056d477f13f68f590babad587badb607c174cb51b073c677294f920e27376",
+        "manifestSha256": "a311de290979fb3d80261db4409c78eb4da48fa26df36d279638363af830a37b",
+        "binaryBytes": 18660568,
+        "regions": 500
+      },
+      "receiptGate": {
+        "summary": "output/noaa-benchmarks/renderer-30pass/pass16-receipt-gate-20260724T010031487Z/summary.json",
+        "passed": true,
+        "runs": 272,
+        "runtimes": {
+          "node20": "20.20.2",
+          "node22": "22.23.1"
+        },
+        "cells": {
+          "node20/builder-main": {
+            "bLowerPairs": 31,
+            "signTail": {
+              "successes": 31,
+              "trials": 31,
+              "numerator": "1",
+              "denominator": "2147483648"
+            },
+            "roleReadyMedianNs": {
+              "A": "454952708",
+              "B": "48742958"
+            },
+            "loaderB": {
+              "count": 31,
+              "medianNs": "40897125",
+              "p95Ns": "43214166",
+              "maximumNs": "43243917"
+            },
+            "passed": true
+          },
+          "node20/frame-worker": {
+            "bLowerPairs": 31,
+            "signTail": {
+              "successes": 31,
+              "trials": 31,
+              "numerator": "1",
+              "denominator": "2147483648"
+            },
+            "roleReadyMedianNs": {
+              "A": "454878167",
+              "B": "48892083"
+            },
+            "loaderB": {
+              "count": 31,
+              "medianNs": "40977459",
+              "p95Ns": "41383500",
+              "maximumNs": "42502292"
+            },
+            "passed": true
+          },
+          "node22/builder-main": {
+            "bLowerPairs": 31,
+            "signTail": {
+              "successes": 31,
+              "trials": 31,
+              "numerator": "1",
+              "denominator": "2147483648"
+            },
+            "roleReadyMedianNs": {
+              "A": "447046791",
+              "B": "47715083"
+            },
+            "loaderB": {
+              "count": 31,
+              "medianNs": "40606125",
+              "p95Ns": "41281292",
+              "maximumNs": "41663125"
+            },
+            "passed": true
+          },
+          "node22/frame-worker": {
+            "bLowerPairs": 31,
+            "signTail": {
+              "successes": 31,
+              "trials": 31,
+              "numerator": "1",
+              "denominator": "2147483648"
+            },
+            "roleReadyMedianNs": {
+              "A": "446520083",
+              "B": "47483166"
+            },
+            "loaderB": {
+              "count": 31,
+              "medianNs": "40378416",
+              "p95Ns": "41123333",
+              "maximumNs": "41301959"
+            },
+            "passed": true
+          }
+        }
+      },
+      "fullGate": {
+        "summary": "output/noaa-benchmarks/renderer-30pass/pass16-full-gate-summary.json",
+        "passed": true,
+        "bLowerBlocks": 16,
+        "signTail": {
+          "successes": 16,
+          "trials": 16,
+          "numerator": "1",
+          "denominator": "65536"
+        },
+        "statistics": {
+          "A": {
+            "count": 32,
+            "medianNs": "7164153250",
+            "p95Ns": "7277557541",
+            "maximumNs": "7541871083"
+          },
+          "B": {
+            "count": 32,
+            "medianNs": "6331705209",
+            "p95Ns": "6369031125",
+            "maximumNs": "6390699833"
+          }
+        },
+        "interpretation": "Observed-mode corroboration only: startup receipts force one eager Snow-RF load in builder-main plus one in the frame worker in both arms, so the -11.620% wall delta is consistent with exactly two receipt-forced loads at ~0.41 s saved each and is not a production wall claim."
+      },
+      "contextualBenchmark": {
+        "summary": "output/noaa-benchmarks/renderer-30pass/pass16-contextual-summary.json",
+        "arms": {
+          "A": "pass15-unobserved (6787627)",
+          "B": "pass16-unobserved (candidate)"
+        },
+        "medianMsA": 6402.9172085,
+        "medianMsB": 6241.9928955,
+        "medianDeltaPct": -2.5132967951915766,
+        "bLowerCycles": "8/8",
+        "interpretation": "Production-shaped (no receipts, lazy loads): the candidate returns ~161 ms of warm four-frame HRRR wall per run; overlapped compute hides the remainder of the ~374 ms per-load delta."
+      },
+      "parity": {
+        "baselineVsCandidateFourModel": {
+          "report": "output/noaa-benchmarks/renderer-30pass/pass16-parity-comparison.json",
+          "exact": true,
+          "payloadsCompared": 1287,
+          "payloadsMismatched": 0,
+          "comparedCanonicalBytes": 4179614708
+        },
+        "offVsRequiredHrrr": {
+          "report": "output/noaa-benchmarks/renderer-30pass/pass16-offvsrequired-hrrr-comparison.json",
+          "exact": true,
+          "payloadsCompared": 350,
+          "payloadsMismatched": 0,
+          "comparedCanonicalBytes": 1118309044
+        }
+      },
+      "review": {
+        "implementation": "no P0-P2; six P3 notes (two fixed, four recorded as deliberate designs)",
+        "science": "exactness independently verified: lenient-HEAD/strict-JSON/typed models bit-identical across 3,332,030 array elements with 20,000 randomized predictions Object.is-identical, including threshold tie-break, NaN, +/-Infinity, and -0 probes",
+        "benchmarkMethod": "statistics re-derived and confirmed exact; receipt-gate evidence replayed and certified internally consistent; wall-claim wording follows its recommendation"
+      },
+      "validation": "full npm test (Node suites, typecheck, ESLint, Prettier, browser smoke) on the final tree",
+      "scientificImpact": "none; JSON and typed paths produce bit-identical models and predictions, and both parity comparisons are exact, so no meteorological value, classification, pixel, or hover sample moves",
+      "cumulativeInterpretation": "The fresh final-aggregate interleave below replaces all contextual cumulative estimates."
+    }
+  ],
+  "storageHygiene": {
+    "userAuthorized": true,
+    "notAnOptimizationPass": true,
+    "initialFreeGiBApprox": 208,
+    "finalFreeTiBApprox": 1,
+    "physicalSpaceRecoveredGiBApprox": 800,
+    "removed": [
+      "obsolete campaign cache clones",
+      "failed scratch roots after compact evidence retention",
+      "measurements no longer required after independent audit",
+      "ignored and regenerable output/noaa-beta-cache (approximately 670 GiB)"
+    ],
+    "retained": [
+      "source and committed evidence",
+      "required renderer tool binaries",
+      "compact sealed logs and comparator proofs",
+      "one immutable approximately 84 GiB four-model seed for Passes 16-20"
+    ],
+    "evidencePolicy": "No accepted evidence path was deleted before audit and compact-proof extraction; no timing inference uses a deleted root."
+  },
+  "finalAggregate": {
+    "method": "Fresh campaign-baseline (0fefbc6) versus final candidate interleave per model: dedicated CoW clones of the immutable seed, one warmup cycle then 2 ABBA/BAAB cycles (8 retained runs per arm per model), unobserved (no benchmark receipts), sealed pinned builder flags and environment.",
+    "perModel": {
+      "gfs": {
+        "summary": "output/noaa-benchmarks/renderer-30pass/pass16-aggregate-gfs-summary.json",
+        "baselineMedianMs": 8227.3449165,
+        "finalMedianMs": 5994.6802915,
+        "deltaPct": -27.137121971419663,
+        "bLowerCycles": "2/2"
+      },
+      "nam": {
+        "summary": "output/noaa-benchmarks/renderer-30pass/pass16-aggregate-nam-summary.json",
+        "baselineMedianMs": 7385.8158125,
+        "finalMedianMs": 5407.925708500001,
+        "deltaPct": -26.77957525900595,
+        "bLowerCycles": "2/2"
+      },
+      "nam3km": {
+        "summary": "output/noaa-benchmarks/renderer-30pass/pass16-aggregate-nam3km-summary.json",
+        "baselineMedianMs": 9262.5570625,
+        "finalMedianMs": 6596.245000000001,
+        "deltaPct": -28.78591780335388,
+        "bLowerCycles": "2/2"
+      },
+      "hrrr": {
+        "summary": "output/noaa-benchmarks/renderer-30pass/pass16-aggregate-hrrr-summary.json",
+        "baselineMedianMs": 8675.7645415,
+        "finalMedianMs": 6225.6079165,
+        "deltaPct": -28.24139144486717,
+        "bLowerCycles": "2/2"
+      }
+    },
+    "fourModelMedianSum": {
+      "baselineMs": 33551.482333,
+      "finalMs": 24224.458916500003,
+      "deltaPct": -27.79913961454478
+    },
+    "hrrrVsCommittedCampaignBaseline": {
+      "committedBaselineMedianMs": 8726.317709,
+      "freshInterleavedBaselineMedianMs": 8675.7645415,
+      "finalMedianMs": 6225.6079165,
+      "freshCumulativeImprovementPct": 28.657102295517628
+    }
+  }
+}

@@ -65,6 +65,27 @@ async function decodeBinaryGridFileSlice({
   return decoded;
 }
 
+async function readPackedFloat32GridFileSlice({ fileHandle, byteOffset, fieldBytes }) {
+  const resolvedFieldBytes = Math.round(Number(fieldBytes));
+  if (!fileHandle || !Number.isFinite(resolvedFieldBytes) || resolvedFieldBytes <= 0 || resolvedFieldBytes % 4 !== 0) {
+    throw new Error(`Packed NOAA grid has invalid field byte length ${fieldBytes}.`);
+  }
+  const values = new Float32Array(resolvedFieldBytes / Float32Array.BYTES_PER_ELEMENT);
+  const body = Buffer.from(values.buffer, values.byteOffset, values.byteLength);
+  let bytesRead = 0;
+  while (bytesRead < resolvedFieldBytes) {
+    const read = await fileHandle.read(body, bytesRead, resolvedFieldBytes - bytesRead, Number(byteOffset) + bytesRead);
+    if (!read || read.bytesRead <= 0) {
+      break;
+    }
+    bytesRead += read.bytesRead;
+  }
+  if (bytesRead !== resolvedFieldBytes) {
+    throw new Error(`Packed NOAA grid slice read ${bytesRead} bytes; expected ${resolvedFieldBytes}.`);
+  }
+  return values;
+}
+
 function decodeBinaryGridBuffer({ body, byteOffset, bounds, width, height, rowInterpolation = "bilinear" }) {
   const expectedBytes = width * height * 4;
   if (byteOffset < 0 || byteOffset + expectedBytes > body.length) {
@@ -171,8 +192,11 @@ function remapSouthNorthLinearLatGridToMercatorRows(
       // Inlined normalizeGribFloat with identical finite/sentinel semantics.
       const lowerRaw = values[base0 + x];
       const upperRaw = values[base1 + x];
-      const lowerUsable = Number.isFinite(lowerRaw) && Math.abs(lowerRaw) < 1e19;
-      const upperUsable = Number.isFinite(upperRaw) && Math.abs(upperRaw) < 1e19;
+      // A bounded comparison rejects NaN and both infinities while retaining
+      // the exact strict ±1e19 sentinel boundary, avoiding Number.isFinite +
+      // Math.abs in this per-cell hot path.
+      const lowerUsable = lowerRaw > -1e19 && lowerRaw < 1e19;
+      const upperUsable = upperRaw > -1e19 && upperRaw < 1e19;
       if (lowerUsable && upperUsable) {
         out[outBase + x] = lowerRaw * tyComplement + upperRaw * ty;
       } else if (lowerUsable) {
@@ -202,7 +226,7 @@ function remapSouthNorthLinearLatGridToMercatorRowsNearest(values, width, height
     for (let x = 0; x < width; x += 1) {
       // Inlined normalizeGribFloat with identical finite/sentinel semantics.
       const raw = values[base + x];
-      out[outBase + x] = Number.isFinite(raw) && Math.abs(raw) < 1e19 ? raw : Number.NaN;
+      out[outBase + x] = raw > -1e19 && raw < 1e19 ? raw : Number.NaN;
     }
   }
   return out;
@@ -600,6 +624,7 @@ module.exports = {
   buildGridDistributionStats,
   decodeBinaryGridBuffer,
   decodeBinaryGridFileSlice,
+  readPackedFloat32GridFileSlice,
   decodeSouthNorthBinaryGridBuffer,
   decodeSouthNorthBinaryGridBufferUnaligned,
   float32ArrayViewFromBuffer,

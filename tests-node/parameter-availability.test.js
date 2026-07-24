@@ -85,7 +85,7 @@ test("compound availability requires colocated finite support", () => {
   );
 });
 
-test("renderer marks missing derived fields and disjoint compound inputs unavailable", () => {
+test("renderer marks missing derived fields and disjoint compound inputs unavailable", async () => {
   const wanted = new Set([
     "lapseRate700to500",
     "freezingRainLiquidTotal",
@@ -96,7 +96,7 @@ test("renderer marks missing derived fields and disjoint compound inputs unavail
   ]);
   const catalog = NOAA_NAM_PARAMETER_CATALOG.filter((entry) => wanted.has(entry.key));
   const at = (finiteIndex) => Float32Array.from({ length: 5 }, (_, index) => (index === finiteIndex ? 0 : Number.NaN));
-  const rendered = buildRenderedArtifacts({
+  const rendered = await buildRenderedArtifacts({
     decoded: {
       reflectivity1km: at(0),
       precipTypeRain: at(1),
@@ -125,7 +125,7 @@ test("renderer marks missing derived fields and disjoint compound inputs unavail
   }
 });
 
-test("renderer uses realized accumulation windows and never relabels raw 3-hour APCP as 1-hour", () => {
+test("renderer uses realized accumulation windows and never relabels raw 3-hour APCP as 1-hour", async () => {
   const wanted = new Set(["temperature", "wind", "precip", "precip3h"]);
   const catalog = NOAA_NAM_PARAMETER_CATALOG.filter((entry) => wanted.has(entry.key));
   const zero = new Float32Array([0, 0, 0, 0]);
@@ -139,7 +139,7 @@ test("renderer uses realized accumulation windows and never relabels raw 3-hour 
   };
   applyRealizedPrecipAccumulationGrids(decoded, { precip3h: zero });
 
-  const rendered = buildRenderedArtifacts({
+  const rendered = await buildRenderedArtifacts({
     decoded,
     selection: { catalog, availableParameters: [...wanted], records: {} },
     framePlan: { hour: 123, validTime: "2026-07-16T03:00:00Z" },
@@ -158,7 +158,7 @@ test("renderer uses realized accumulation windows and never relabels raw 3-hour 
   assert.equal(rendered.parameterAvailability.precip3h, "available");
 });
 
-test("renderer marks all-NaN accumulations, height contours, and compound inputs unavailable", () => {
+test("renderer marks all-NaN accumulations, height contours, and compound inputs unavailable", async () => {
   const wanted = new Set(["precip6h", "height500", "reflectivity1kmPrecipType"]);
   const catalog = NOAA_NAM_PARAMETER_CATALOG.filter((entry) => wanted.has(entry.key));
   const missing = new Float32Array([Number.NaN, Number.NaN, Number.NaN, Number.NaN]);
@@ -173,7 +173,7 @@ test("renderer marks all-NaN accumulations, height contours, and compound inputs
     precipTypeIcePellets: zero,
   };
   applyRealizedPrecipAccumulationGrids(decoded, { precip6h: missing });
-  const rendered = buildRenderedArtifacts({
+  const rendered = await buildRenderedArtifacts({
     decoded,
     selection: { catalog, availableParameters: [...wanted], records: {} },
     framePlan: { hour: 6, validTime: "2026-07-11T06:00:00Z" },
@@ -194,7 +194,7 @@ test("renderer marks all-NaN accumulations, height contours, and compound inputs
     reflectivity1km: zero,
   };
   applyRealizedPrecipAccumulationGrids(finiteZeroDecoded, { precip6h: zero });
-  const finiteZero = buildRenderedArtifacts({
+  const finiteZero = await buildRenderedArtifacts({
     decoded: finiteZeroDecoded,
     selection: { catalog, availableParameters: [...wanted], records: {} },
     framePlan: { hour: 6, validTime: "2026-07-11T06:00:00Z" },
@@ -210,10 +210,10 @@ test("renderer marks all-NaN accumulations, height contours, and compound inputs
   assert.equal(finiteZero.parameterAvailability.reflectivity1kmPrecipType, "available");
 });
 
-test("synoptic availability distinguishes pressure guidance from thickness", () => {
+test("synoptic availability distinguishes pressure guidance from thickness", async () => {
   const zero = new Float32Array([0, 0, 0, 0]);
   const missing = new Float32Array([Number.NaN, Number.NaN, Number.NaN, Number.NaN]);
-  const rendered = buildRenderedArtifacts({
+  const rendered = await buildRenderedArtifacts({
     decoded: { pressureMsl: missing, height1000: zero, height500: new Float32Array([5400, 5400, 5400, 5400]) },
     selection: { catalog: [], availableParameters: [], records: {} },
     framePlan: { hour: 6, validTime: "2026-07-11T06:00:00Z" },
@@ -229,7 +229,7 @@ test("synoptic availability distinguishes pressure guidance from thickness", () 
   assert.equal(rendered.parameterAvailability.synopticIsobars, "unavailable");
   assert.equal(rendered.parameterAvailability.synopticThickness, "available");
 
-  const pressureOnly = buildRenderedArtifacts({
+  const pressureOnly = await buildRenderedArtifacts({
     decoded: {
       pressureMsl: new Float32Array([101300, 101300, 101300, 101300]),
       height1000: missing,
@@ -250,7 +250,7 @@ test("synoptic availability distinguishes pressure guidance from thickness", () 
   assert.equal(pressureOnly.parameterAvailability.synopticThickness, "unavailable");
 });
 
-test("all-sentinel cloud ceiling is available only with conclusive all-clear cloud-cover evidence", () => {
+test("all-sentinel cloud ceiling is available only with conclusive all-clear cloud-cover evidence", async () => {
   assert.equal(hasConclusiveNoCloudCeilingEvidence(new Float32Array([0, 10, 20, 49]), 2, 2), true);
   assert.equal(
     hasConclusiveNoCloudCeilingEvidence(new Float32Array([Number.NaN, Number.NaN, Number.NaN, Number.NaN]), 2, 2),
@@ -272,8 +272,8 @@ test("all-sentinel cloud ceiling is available only with conclusive all-clear clo
       pngCompressionLevel: 1,
       pngFilterType: 0,
     });
-  assert.equal(render(new Float32Array([0, 10, 20, 49])).parameterAvailability.cloudCeiling, "available");
-  assert.equal(render(missing).parameterAvailability.cloudCeiling, "unavailable");
+  assert.equal((await render(new Float32Array([0, 10, 20, 49]))).parameterAvailability.cloudCeiling, "available");
+  assert.equal((await render(missing)).parameterAvailability.cloudCeiling, "unavailable");
 });
 
 test("dry snowfall remains available even when presentation intentionally omits its transparent layer", () => {

@@ -49,21 +49,35 @@ const {
 
 const PROFILE_GRID_PROMISE_CACHE = new Map();
 
-const PROFILE_GRID_CACHE_VERSION = "derived-profile-grid-v2-frame-local-provenance";
+const PROFILE_GRID_CACHE_VERSION = "derived-profile-grid-v3-sha256-complete";
+
+const PREVIOUS_PROFILE_GRID_CACHE_VERSION = "derived-profile-grid-v2-frame-local-provenance";
 
 async function writeFloatGridEntriesBinary(filePath, entries) {
   const handle = await fs.promises.open(filePath, "w");
+  const hash = crypto.createHash("sha256");
+  let bytes = 0;
   try {
     for (const [, values] of entries) {
       if (!(values instanceof Float32Array)) {
         continue;
       }
       const body = Buffer.from(values.buffer, values.byteOffset, values.byteLength);
-      await handle.write(body, 0, body.byteLength);
+      let written = 0;
+      while (written < body.byteLength) {
+        const result = await handle.write(body, written, body.byteLength - written);
+        if (!result || result.bytesWritten <= 0) {
+          throw new Error(`Profile grid cache write stopped after ${written}/${body.byteLength} bytes`);
+        }
+        written += result.bytesWritten;
+      }
+      hash.update(body);
+      bytes += body.byteLength;
     }
   } finally {
     await handle.close().catch(() => {});
   }
+  return { bytes, sha256: hash.digest("hex") };
 }
 
 async function decodeLazySnowfallProfileGrids({
@@ -480,6 +494,35 @@ function profileGridCachePath(payload, context) {
   );
 }
 
+function previousProfileGridCachePath(cachePath, payload, context) {
+  if (!cachePath || payload?.version !== PROFILE_GRID_CACHE_VERSION) {
+    return null;
+  }
+  const expectedCurrentPath = profileGridCachePath(payload, context);
+  if (!expectedCurrentPath || expectedCurrentPath !== cachePath) {
+    return null;
+  }
+  return profileGridCachePath(
+    {
+      ...payload,
+      version: PREVIOUS_PROFILE_GRID_CACHE_VERSION,
+    },
+    context,
+  );
+}
+
+async function removePreviousProfileGridCache(cachePath, payload, context) {
+  const previousCachePath = previousProfileGridCachePath(cachePath, payload, context);
+  if (!previousCachePath || previousCachePath === cachePath) {
+    return;
+  }
+  await Promise.allSettled(
+    [`${previousCachePath}.bin`, `${previousCachePath}.json`].map(async (stalePath) =>
+      fs.promises.rm(stalePath, { force: true }),
+    ),
+  );
+}
+
 async function readOrDecodeCachedProfileGrids(payload, context, decode) {
   const cachePath = profileGridCachePath(payload, context);
   const cacheKey = cachePath || null;
@@ -567,10 +610,14 @@ async function readCachedProfileGrids(cachePath, expectedPayload, context = null
       return null;
     }
     const body = await fs.promises.readFile(`${cachePath}.bin`);
+    const metadataGrids = validatedProfileGridCacheLayout(metadata, expectedPayload, body);
+    if (!metadataGrids) {
+      return null;
+    }
     const out = {};
     const expectedGridBytes = Math.round(Number(expectedPayload?.width) * Number(expectedPayload?.height) * 4);
     let expectedByteOffset = 0;
-    for (const grid of metadata.grids || []) {
+    for (const grid of metadataGrids) {
       const byteOffset = Number(grid.byteOffset);
       const byteLength = Number(grid.byteLength);
       const key = grid.key;
@@ -603,12 +650,50 @@ async function readCachedProfileGrids(cachePath, expectedPayload, context = null
   }
 }
 
+function validatedProfileGridCacheLayout(metadata, expectedPayload, body) {
+  const expectedGridKeys = Object.keys(expectedPayload?.records || {}).sort();
+  const metadataGrids = Array.isArray(metadata?.grids) ? metadata.grids : null;
+  const expectedGridBytes = Math.round(Number(expectedPayload?.width) * Number(expectedPayload?.height) * 4);
+  const expectedBodyBytes = expectedGridKeys.length * expectedGridBytes;
+  const expectedBodySha256 = String(metadata?.binSha256 || "");
+  if (
+    expectedGridKeys.length === 0 ||
+    !metadataGrids ||
+    metadataGrids.length !== expectedGridKeys.length ||
+    metadataGrids.some((grid, index) => String(grid?.key || "") !== expectedGridKeys[index]) ||
+    !Number.isSafeInteger(expectedGridBytes) ||
+    expectedGridBytes <= 0 ||
+    Number(metadata?.binBytes) !== expectedBodyBytes ||
+    body.byteLength !== expectedBodyBytes ||
+    !/^[a-f0-9]{64}$/.test(expectedBodySha256) ||
+    crypto.createHash("sha256").update(body).digest("hex") !== expectedBodySha256
+  ) {
+    return null;
+  }
+  return metadataGrids;
+}
+
 async function writeCachedProfileGrids(cachePath, payload, decoded, context = null) {
   if (!cachePath || !decoded || typeof decoded !== "object") {
     return false;
   }
-  const entries = Object.entries(decoded).filter(([, values]) => values instanceof Float32Array);
-  if (entries.length === 0) {
+  const expectedGridKeys = Object.keys(payload?.records || {}).sort();
+  const entries = Object.entries(decoded)
+    .filter(([, values]) => values instanceof Float32Array)
+    .sort(([left], [right]) => left.localeCompare(right));
+  if (
+    expectedGridKeys.length === 0 ||
+    entries.length !== expectedGridKeys.length ||
+    entries.some(([key], index) => key !== expectedGridKeys[index])
+  ) {
+    return false;
+  }
+  const expectedGridBytes = Math.round(Number(payload?.width) * Number(payload?.height) * 4);
+  if (
+    !Number.isSafeInteger(expectedGridBytes) ||
+    expectedGridBytes <= 0 ||
+    entries.some(([, values]) => values.byteLength !== expectedGridBytes)
+  ) {
     return false;
   }
   const grids = [];
@@ -624,12 +709,14 @@ async function writeCachedProfileGrids(cachePath, payload, decoded, context = nu
   // (mirrors writeCachedFloatGrid).
   try {
     await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
-    await writeFloatGridEntriesBinary(`${tmp}.bin`, entries);
+    const body = await writeFloatGridEntriesBinary(`${tmp}.bin`, entries);
     await fs.promises.writeFile(
       `${tmp}.json`,
       JSON.stringify(
         cacheMetadataWithPayload(payload, {
           grids,
+          binBytes: body.bytes,
+          binSha256: body.sha256,
           provenanceSnapshot: buildFrameProvenanceCacheSnapshot(context?.decodeSession, {
             terms: profileCacheProvenanceTerms(payload),
             includeDerivations: false,
@@ -639,6 +726,11 @@ async function writeCachedProfileGrids(cachePath, payload, decoded, context = nu
     );
     await fs.promises.rename(`${tmp}.bin`, `${cachePath}.bin`);
     await fs.promises.rename(`${tmp}.json`, `${cachePath}.json`);
+    // The prior cache family is content-addressed by the same payload with
+    // only its version changed. Remove only that exact v2 sibling, and only
+    // after the complete v3 body+metadata publication is visible. Cleanup is
+    // best-effort so a denied unlink cannot fail an otherwise valid frame.
+    await removePreviousProfileGridCache(cachePath, payload, context).catch(() => {});
     return true;
   } catch (error) {
     await fs.promises.rm(`${tmp}.bin`, { force: true }).catch(() => {});
@@ -769,6 +861,7 @@ function expectedSnowfallProfileRecordKeys(entry) {
 }
 
 module.exports = {
+  PREVIOUS_PROFILE_GRID_CACHE_VERSION,
   PROFILE_GRID_CACHE_VERSION,
   PROFILE_GRID_PROMISE_CACHE,
   addPressureProfileRecordsForEntry,
@@ -790,6 +883,7 @@ module.exports = {
   profileGridCachePath,
   profileGridCachePayload,
   profileSelectedGribCacheDir,
+  previousProfileGridCachePath,
   readCachedProfileGrids,
   readOrDecodeCachedProfileGrids,
   registerSnowfallProfileProvenance,

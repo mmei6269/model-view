@@ -73,9 +73,13 @@ Typical local keys are:
 - `MODELVIEW_REFLECTIVITY_GATES`
 - `WGRIB2` (absolute path to wgrib2 when it is not on `PATH`)
 - `MODELVIEW_PNG_DEFLATE_BACKEND` (`libdeflate` default; set `zlib` to force the node zlib path)
+- `MODELVIEW_NOAA_HOVER_COMPRESSION` (`brotli` default; set `gzip` only for legacy-compatible output)
+- `MODELVIEW_NOAA_HOVER_BROTLI_QUALITY` (default `0`; `0..11`)
+- `MODELVIEW_NOAA_HOVER_GZIP_LEVEL` (default `1`; used only with the gzip backend)
 - `MODELVIEW_NOAA_BETA_CACHE_ROOT` (deprecated alias of `MODELVIEW_CACHE_ROOT`; logs a warning)
 
 `MODELVIEW_CACHE_ROOT` defaults to `output/noaa-beta-cache`. See `.env.example` for the full annotated key list, including the `MODELVIEW_NOAA_*` build knobs.
+During a hover-codec change, `.br` and `.gz` counterparts may coexist in retained runs so independent builders cannot delete one another's just-published body. Leave them in place while builds are active; normal run-retention pruning removes old runs, or `npm run cache:clear` removes the cache explicitly before a clean rebuild.
 
 ## 4. Build And Run
 

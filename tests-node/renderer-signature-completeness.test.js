@@ -11,11 +11,14 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { getNoaaGribRendererSignature } = require("../scripts/lib/noaa-beta-renderer");
 const { buildNoaaModelMetadata } = require("../scripts/lib/noaa-build/run-resolution");
 const { SCALES } = require("../scripts/lib/noaa-nam-parameter-catalog");
 
 const BASE_SIGNATURE = getNoaaGribRendererSignature();
+const ROOT_DIR = path.resolve(__dirname, "..");
 
 // Mutates one scale field for the probe and restores it in finally so the
 // shared module registry returns to its true values for the next test.
@@ -93,4 +96,107 @@ test("legend-only prose on a scale does not move the signature", () => {
   // text the paint path never reads must not invalidate every cached frame.
   const moved = withScaleField("capeJkg", "legendFootnote", "unrelated prose", () => getNoaaGribRendererSignature());
   assert.equal(moved, BASE_SIGNATURE);
+});
+
+test("MVH4 default and MVH3 rollback freeze distinct descriptors, containers, and renderer signatures", () => {
+  const probe = (encoding) => {
+    const env = { ...process.env, MODELVIEW_NOAA_HOVER_ENCODING: encoding };
+    const script = [
+      'const descriptor = require("./scripts/lib/hover-grid-encoding").HOVER_GRID_ENCODING;',
+      'const binary = require("./scripts/lib/hover-grid-binary");',
+      'const renderer = require("./scripts/lib/noaa-beta-renderer");',
+      "const raw = binary.buildHoverGridBinaryRaw({",
+      "  schemaVersion: descriptor.schemaVersion, encoding: descriptor, rows: 1, cols: 1,",
+      "  variables: { probe: { scale: 1, offset: 0, missing: -32768, values: new Int16Array([7]) } },",
+      "});",
+      "const layout = binary.parseHoverGridBinaryRaw(raw);",
+      "process.stdout.write(JSON.stringify({",
+      "  id: descriptor.id, schemaVersion: descriptor.schemaVersion,",
+      "  preDeltaEncode: descriptor.preDeltaEncode, magic: layout.magic,",
+      "  predictor: layout.header.predictor ?? null,",
+      "  signature: renderer.getNoaaGribRendererSignature(),",
+      "}));",
+    ].join("\n");
+    const result = spawnSync(process.execPath, ["-e", script], {
+      cwd: ROOT_DIR,
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+
+  const mvh4 = probe("mvh4");
+  const mvh3 = probe("mvh3");
+  assert.deepEqual(
+    {
+      id: mvh4.id,
+      schemaVersion: mvh4.schemaVersion,
+      preDeltaEncode: mvh4.preDeltaEncode,
+      magic: mvh4.magic,
+      predictor: mvh4.predictor,
+    },
+    { id: "mvh4", schemaVersion: 4, preDeltaEncode: false, magic: "MVH4", predictor: "gradient2d" },
+  );
+  assert.deepEqual(
+    {
+      id: mvh3.id,
+      schemaVersion: mvh3.schemaVersion,
+      preDeltaEncode: mvh3.preDeltaEncode,
+      magic: mvh3.magic,
+      predictor: mvh3.predictor,
+    },
+    { id: "mvh3", schemaVersion: 3, preDeltaEncode: true, magic: "MVH3", predictor: null },
+  );
+  assert.notEqual(mvh4.signature, mvh3.signature);
+});
+
+test("hover arena auto/off rollback is renderer-signature neutral", () => {
+  const probe = (mode) => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        [
+          'const arena = require("./scripts/lib/noaa-beta/hover-arena");',
+          'const renderer = require("./scripts/lib/noaa-beta-renderer");',
+          "process.stdout.write(JSON.stringify({",
+          "  mode: arena.HOVER_ARENA_MODE,",
+          "  signature: renderer.getNoaaGribRendererSignature(),",
+          "}));",
+        ].join("\n"),
+      ],
+      {
+        cwd: ROOT_DIR,
+        env: { ...process.env, MODELVIEW_NOAA_HOVER_ARENA: mode },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+
+  const auto = probe("auto");
+  const off = probe("off");
+  assert.equal(auto.mode, "auto");
+  assert.equal(off.mode, "off");
+  assert.equal(auto.signature, off.signature);
+});
+
+test("selected-GRIB warm-pack auto/off rollback is renderer-signature neutral", () => {
+  const probe = (mode) => {
+    const result = spawnSync(
+      process.execPath,
+      ["-e", 'process.stdout.write(require("./scripts/lib/noaa-beta-renderer").getNoaaGribRendererSignature())'],
+      {
+        cwd: ROOT_DIR,
+        env: { ...process.env, MODELVIEW_NOAA_FAST_PACK: mode },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+
+  assert.equal(probe("auto"), probe("off"));
 });

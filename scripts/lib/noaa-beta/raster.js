@@ -1,20 +1,43 @@
 "use strict";
 
 const { NOAA_NAM_PARAMETER_CATALOG } = require("../noaa-nam-parameter-catalog");
-const { MPS_TO_KT, MPS_TO_MPH, clamp01, clampInt, lerp } = require("./util");
+const { MPS_TO_KT, MPS_TO_MPH, clamp01, clampInt } = require("./util");
 const { kelvinToCelsius, kelvinToFahrenheit, pascalToHpa } = require("./thermo");
 const { smoothFiniteNonnegativeGrid } = require("./grid-ops");
-const { encodeRgbaPng, encodeRgbaPngFilter0ViaPool } = require("./png-encode");
+const parcelKernel = require("./parcel-kernel");
+const {
+  interpolateRgbaColors,
+  interpolateStops,
+  lerpPremultipliedChannel,
+  normalizeColorStops,
+} = require("./color-lookup-compiler");
+const { loadCatalogColorLookupRoster } = require("./catalog-color-lookup-asset");
+const {
+  COLOR_LOOKUP_SIZE,
+  buildStaticContinuousColorLookupAssignments,
+  resolveCatalogScale,
+} = require("./catalog-color-lookup-recipes");
+const {
+  _encodeTrustedIndexedPngFilter0,
+  _encodeTrustedIndexedPngFilter0ViaPool,
+  _encodeTrustedRgbaPngFilter0ViaPool,
+  encodeIndexedPngFilter0,
+  encodeIndexedPngFilter0ViaPool,
+  encodeRgbaPng,
+  encodeRgbaPngFilter0ViaPool,
+} = require("./png-encode");
 const REFLECTIVITY_PRECIP_TYPE_COLORS = require("../../../shared/reflectivity-precip-type-colors.json");
 const PLANNED_COLOR_MAPS = require("../../../shared/noaa-beta-planned-color-maps.json");
 const { loadColorMaps } = require("../color-maps");
-const { SCALES: NOAA_RENDER_SCALES } = require("../noaa-nam-parameter-catalog");
 
 const PRATE_KG_M2_S_TO_IN_HR = 3600 / 25.4;
 
 const PRECIP_RATE_TYPE_LOOKUPS = buildPrecipRateTypeLookups(PLANNED_COLOR_MAPS?.maps?.precipRateByTypeInHr);
 
 const FRONTOGENESIS_PRESENTATION_SMOOTHING_PASSES = 4;
+const INDEXED_PIXEL_FORMAT = "indexed8";
+const SINGLE_LOOKUP_INDEXED_PALETTES = new WeakMap();
+const INTERNALLY_OWNED_INDEXED_LAYERS = new WeakMap();
 
 function renderScalarGrid({
   values,
@@ -33,6 +56,7 @@ function renderScalarGrid({
   transformScale = null,
   transformOffset = 0,
   transformMin = null,
+  outputFormat = "rgba8",
 }) {
   if (
     colorLookup?.kind === "continuous" &&
@@ -66,6 +90,7 @@ function renderScalarGrid({
       transformScale,
       transformOffset,
       transformMin,
+      outputFormat,
     });
   }
 
@@ -136,6 +161,19 @@ function renderScalarGridContinuous({
   const rgba = Buffer.alloc(Math.max(0, cellCount * 4));
   const transform = typeof transformValue === "function" ? transformValue : null;
   const affineTransform = buildAffineTransformState(transformScale, transformOffset, transformMin);
+  if (!transform) {
+    const kernelResult = renderScalarGridContinuousKernel({
+      rgba,
+      values,
+      cellCount,
+      colorLookup,
+      visible: resolveVisibleBounds(minVisible, maxVisible, visibleRange),
+      affineTransform,
+    });
+    if (kernelResult) {
+      return kernelResult;
+    }
+  }
   if (transform) {
     return renderScalarGridContinuousFunction({
       rgba,
@@ -165,9 +203,146 @@ function renderScalarGridContinuous({
   });
 }
 
+const FAILED_CONTINUOUS_COLORIZERS = new WeakSet();
+const MAX_CONTINUOUS_COLOR_CHUNK = 65536;
+const MAX_CONTINUOUS_COLOR_PALETTE = 65536;
+
+function renderScalarGridContinuousKernel({ rgba, values, cellCount, colorLookup, visible, affineTransform }) {
+  if (
+    !(values instanceof Float32Array) ||
+    !(rgba instanceof Uint8Array) ||
+    !Number.isSafeInteger(cellCount) ||
+    cellCount <= 0 ||
+    values.length < cellCount ||
+    cellCount > Math.floor(rgba.length / 4) ||
+    colorLookup?.log ||
+    !(colorLookup?.colors instanceof Uint8Array) ||
+    !Number.isInteger(colorLookup.size) ||
+    colorLookup.size <= 0 ||
+    colorLookup.colors.length !== colorLookup.size * 4 ||
+    !Number.isFinite(colorLookup.min) ||
+    !Number.isFinite(colorLookup.scale) ||
+    colorLookup.scale <= 0
+  ) {
+    return null;
+  }
+  let colorizer;
+  try {
+    colorizer = parcelKernel.getParcelKernel()?.colorize || null;
+  } catch {
+    return null;
+  }
+  if (!isUsableContinuousColorizer(colorizer, colorLookup.size)) {
+    return null;
+  }
+  const affineScale = affineTransform ? affineTransform.scale : 1;
+  const affineOffset = affineTransform ? affineTransform.offset : 0;
+  const affineHasMin = Boolean(affineTransform?.hasMin);
+  const affineMin = affineHasMin ? affineTransform.min : 0;
+  if (
+    !Number.isFinite(affineScale) ||
+    !Number.isFinite(affineOffset) ||
+    (affineHasMin && !Number.isFinite(affineMin))
+  ) {
+    return null;
+  }
+  const hasVisibleMin = Number.isFinite(visible?.min);
+  const hasVisibleMax = Number.isFinite(visible?.max);
+  try {
+    colorizer.palette.set(colorLookup.colors, 0);
+    let visibleCount = 0;
+    let validCount = 0;
+    for (let start = 0; start < cellCount; start += colorizer.chunk) {
+      const count = Math.min(colorizer.chunk, cellCount - start);
+      colorizer.input.set(values.subarray(start, start + count), 0);
+      colorizer.stats.fill(-1);
+      colorizer.run(
+        count,
+        colorLookup.size,
+        colorLookup.min,
+        colorLookup.scale,
+        hasVisibleMin ? 1 : 0,
+        hasVisibleMin ? visible.min : 0,
+        hasVisibleMax ? 1 : 0,
+        hasVisibleMax ? visible.max : 0,
+        affineScale,
+        affineOffset,
+        affineHasMin ? 1 : 0,
+        affineMin,
+      );
+      const chunkVisibleCount = colorizer.stats[0];
+      const chunkValidCount = colorizer.stats[1];
+      if (
+        !Number.isInteger(chunkVisibleCount) ||
+        !Number.isInteger(chunkValidCount) ||
+        chunkVisibleCount < 0 ||
+        chunkValidCount < chunkVisibleCount ||
+        chunkValidCount > count
+      ) {
+        throw new Error("continuous colorizer returned invalid counters");
+      }
+      rgba.set(colorizer.output.subarray(0, count * 4), start * 4);
+      visibleCount += chunkVisibleCount;
+      validCount += chunkValidCount;
+    }
+    return { rgba, visibleCount, validCount };
+  } catch {
+    FAILED_CONTINUOUS_COLORIZERS.add(colorizer);
+    // A failed chunk may have populated only a prefix. Restore the fresh
+    // zero-buffer invariant before the authoritative JS loop reruns.
+    rgba.fill(0);
+    return null;
+  }
+}
+
+function isUsableContinuousColorizer(colorizer, paletteSize) {
+  if (
+    !colorizer ||
+    (typeof colorizer !== "object" && typeof colorizer !== "function") ||
+    FAILED_CONTINUOUS_COLORIZERS.has(colorizer) ||
+    colorizer.abiVersion !== parcelKernel.CONTINUOUS_COLORIZER_ABI_VERSION ||
+    !Number.isSafeInteger(colorizer.chunk) ||
+    colorizer.chunk <= 0 ||
+    colorizer.chunk > MAX_CONTINUOUS_COLOR_CHUNK ||
+    !Number.isSafeInteger(colorizer.paletteCap) ||
+    colorizer.paletteCap < paletteSize ||
+    colorizer.paletteCap > MAX_CONTINUOUS_COLOR_PALETTE ||
+    typeof colorizer.run !== "function" ||
+    !(colorizer.input instanceof Float32Array) ||
+    colorizer.input.length < colorizer.chunk ||
+    !(colorizer.output instanceof Uint8Array) ||
+    colorizer.output.length < colorizer.chunk * 4 ||
+    !(colorizer.palette instanceof Uint8Array) ||
+    colorizer.palette.length < colorizer.paletteCap * 4 ||
+    !(colorizer.stats instanceof Int32Array) ||
+    colorizer.stats.length < 2 ||
+    !colorizer.memory?.buffer
+  ) {
+    return false;
+  }
+  const buffer = colorizer.memory.buffer;
+  return (
+    colorizer.input.buffer === buffer &&
+    colorizer.output.buffer === buffer &&
+    colorizer.palette.buffer === buffer &&
+    colorizer.stats.buffer === buffer
+  );
+}
+
 function renderScalarGridContinuousRaw({ rgba, values, cellCount, colorLookup, visible }) {
   const colors = colorLookup.colors;
+  const colorWords = nativeUint32View(colors);
+  const rgbaWords = nativeUint32View(rgba);
   const lastBucket = Math.max(0, (colorLookup.size || 1) - 1);
+  const visibleMin = visible.min;
+  const visibleMax = visible.max;
+  const hasVisibleMin = Number.isFinite(visibleMin);
+  const hasVisibleMax = Number.isFinite(visibleMax);
+  const useLogScale = Boolean(colorLookup.log);
+  const lookupMin = colorLookup.min;
+  const lookupScale = colorLookup.scale;
+  const logMin = colorLookup.logMin;
+  const logScale = colorLookup.logScale;
   let visibleCount = 0;
   let validCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
@@ -176,27 +351,29 @@ function renderScalarGridContinuousRaw({ rgba, values, cellCount, colorLookup, v
       continue;
     }
     validCount += 1;
-    if (Number.isFinite(visible.min) && value < visible.min) {
+    if (hasVisibleMin && value < visibleMin) {
       continue;
     }
-    if (Number.isFinite(visible.max) && value > visible.max) {
+    if (hasVisibleMax && value > visibleMax) {
       continue;
     }
     const position =
-      colorLookup.log && value > 0
-        ? (Math.log(value) - colorLookup.logMin) * colorLookup.logScale
-        : (value - colorLookup.min) * colorLookup.scale;
+      useLogScale && value > 0 ? (Math.log(value) - logMin) * logScale : (value - lookupMin) * lookupScale;
     const bucket = position <= 0 ? 0 : position >= 1 ? lastBucket : Math.floor(position * lastBucket);
     const colorOffset = bucket * 4;
     const alphaByte = colors[colorOffset + 3];
     if (alphaByte <= 0) {
       continue;
     }
-    const offset = index * 4;
-    rgba[offset] = colors[colorOffset];
-    rgba[offset + 1] = colors[colorOffset + 1];
-    rgba[offset + 2] = colors[colorOffset + 2];
-    rgba[offset + 3] = alphaByte;
+    if (rgbaWords && colorWords) {
+      rgbaWords[index] = colorWords[bucket];
+    } else {
+      const offset = index * 4;
+      rgba[offset] = colors[colorOffset];
+      rgba[offset + 1] = colors[colorOffset + 1];
+      rgba[offset + 2] = colors[colorOffset + 2];
+      rgba[offset + 3] = alphaByte;
+    }
     visibleCount += 1;
   }
   return { rgba, visibleCount, validCount };
@@ -209,7 +386,18 @@ function renderScalarGridContinuousAffine({ rgba, values, cellCount, colorLookup
   const affineHasMin = hasAffineTransform && affineTransform.hasMin;
   const affineMin = affineHasMin ? affineTransform.min : 0;
   const colors = colorLookup.colors;
+  const colorWords = nativeUint32View(colors);
+  const rgbaWords = nativeUint32View(rgba);
   const lastBucket = Math.max(0, (colorLookup.size || 1) - 1);
+  const visibleMin = visible.min;
+  const visibleMax = visible.max;
+  const hasVisibleMin = Number.isFinite(visibleMin);
+  const hasVisibleMax = Number.isFinite(visibleMax);
+  const useLogScale = Boolean(colorLookup.log);
+  const lookupMin = colorLookup.min;
+  const lookupScale = colorLookup.scale;
+  const logMin = colorLookup.logMin;
+  const logScale = colorLookup.logScale;
   let visibleCount = 0;
   let validCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
@@ -222,27 +410,29 @@ function renderScalarGridContinuousAffine({ rgba, values, cellCount, colorLookup
       continue;
     }
     validCount += 1;
-    if (Number.isFinite(visible.min) && value < visible.min) {
+    if (hasVisibleMin && value < visibleMin) {
       continue;
     }
-    if (Number.isFinite(visible.max) && value > visible.max) {
+    if (hasVisibleMax && value > visibleMax) {
       continue;
     }
     const position =
-      colorLookup.log && value > 0
-        ? (Math.log(value) - colorLookup.logMin) * colorLookup.logScale
-        : (value - colorLookup.min) * colorLookup.scale;
+      useLogScale && value > 0 ? (Math.log(value) - logMin) * logScale : (value - lookupMin) * lookupScale;
     const bucket = position <= 0 ? 0 : position >= 1 ? lastBucket : Math.floor(position * lastBucket);
     const colorOffset = bucket * 4;
     const alphaByte = colors[colorOffset + 3];
     if (alphaByte <= 0) {
       continue;
     }
-    const offset = index * 4;
-    rgba[offset] = colors[colorOffset];
-    rgba[offset + 1] = colors[colorOffset + 1];
-    rgba[offset + 2] = colors[colorOffset + 2];
-    rgba[offset + 3] = alphaByte;
+    if (rgbaWords && colorWords) {
+      rgbaWords[index] = colorWords[bucket];
+    } else {
+      const offset = index * 4;
+      rgba[offset] = colors[colorOffset];
+      rgba[offset + 1] = colors[colorOffset + 1];
+      rgba[offset + 2] = colors[colorOffset + 2];
+      rgba[offset + 3] = alphaByte;
+    }
     visibleCount += 1;
   }
   return { rgba, visibleCount, validCount };
@@ -250,7 +440,18 @@ function renderScalarGridContinuousAffine({ rgba, values, cellCount, colorLookup
 
 function renderScalarGridContinuousFunction({ rgba, values, cellCount, colorLookup, visible, transform }) {
   const colors = colorLookup.colors;
+  const colorWords = nativeUint32View(colors);
+  const rgbaWords = nativeUint32View(rgba);
   const lastBucket = Math.max(0, (colorLookup.size || 1) - 1);
+  const visibleMin = visible.min;
+  const visibleMax = visible.max;
+  const hasVisibleMin = Number.isFinite(visibleMin);
+  const hasVisibleMax = Number.isFinite(visibleMax);
+  const useLogScale = Boolean(colorLookup.log);
+  const lookupMin = colorLookup.min;
+  const lookupScale = colorLookup.scale;
+  const logMin = colorLookup.logMin;
+  const logScale = colorLookup.logScale;
   let visibleCount = 0;
   let validCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
@@ -259,27 +460,29 @@ function renderScalarGridContinuousFunction({ rgba, values, cellCount, colorLook
       continue;
     }
     validCount += 1;
-    if (Number.isFinite(visible.min) && value < visible.min) {
+    if (hasVisibleMin && value < visibleMin) {
       continue;
     }
-    if (Number.isFinite(visible.max) && value > visible.max) {
+    if (hasVisibleMax && value > visibleMax) {
       continue;
     }
     const position =
-      colorLookup.log && value > 0
-        ? (Math.log(value) - colorLookup.logMin) * colorLookup.logScale
-        : (value - colorLookup.min) * colorLookup.scale;
+      useLogScale && value > 0 ? (Math.log(value) - logMin) * logScale : (value - lookupMin) * lookupScale;
     const bucket = position <= 0 ? 0 : position >= 1 ? lastBucket : Math.floor(position * lastBucket);
     const colorOffset = bucket * 4;
     const alphaByte = colors[colorOffset + 3];
     if (alphaByte <= 0) {
       continue;
     }
-    const offset = index * 4;
-    rgba[offset] = colors[colorOffset];
-    rgba[offset + 1] = colors[colorOffset + 1];
-    rgba[offset + 2] = colors[colorOffset + 2];
-    rgba[offset + 3] = alphaByte;
+    if (rgbaWords && colorWords) {
+      rgbaWords[index] = colorWords[bucket];
+    } else {
+      const offset = index * 4;
+      rgba[offset] = colors[colorOffset];
+      rgba[offset + 1] = colors[colorOffset + 1];
+      rgba[offset + 2] = colors[colorOffset + 2];
+      rgba[offset + 3] = alphaByte;
+    }
     visibleCount += 1;
   }
   return { rgba, visibleCount, validCount };
@@ -297,14 +500,23 @@ function renderScalarGridStep({
   transformScale = null,
   transformOffset = 0,
   transformMin = null,
+  outputFormat = "rgba8",
 }) {
   const cellCount = width * height;
   if (!values || values.length !== cellCount || !colorLookup?.colors || !colorLookup?.thresholds) {
     return emptyScalarLayerResult();
   }
-  const rgba = Buffer.alloc(Math.max(0, cellCount * 4));
   const transform = typeof transformValue === "function" ? transformValue : null;
   const affineTransform = buildAffineTransformState(transformScale, transformOffset, transformMin);
+  if (outputFormat === INDEXED_PIXEL_FORMAT && !transform && !affineTransform) {
+    return renderScalarGridStepIndexedRaw({
+      values,
+      cellCount,
+      colorLookup,
+      visible: resolveVisibleBounds(minVisible, maxVisible, visibleRange),
+    });
+  }
+  const rgba = Buffer.alloc(Math.max(0, cellCount * 4));
   if (transform) {
     return renderScalarGridStepFunction({
       rgba,
@@ -334,6 +546,67 @@ function renderScalarGridStep({
   });
 }
 
+function renderScalarGridStepIndexedRaw({ values, cellCount, colorLookup, visible }) {
+  const thresholds = colorLookup.thresholds;
+  const colors = colorLookup.colors;
+  const thresholdCount = thresholds.length;
+  const indexedPalette = indexedPaletteForLookup(colorLookup);
+  const paletteIndices = indexedPalette.indicesByLookup.get(colorLookup);
+  const indices = Buffer.alloc(Math.max(0, cellCount));
+  if (thresholdCount <= 0) {
+    return indexedLayerResult(indices, indexedPalette.rgba, 0, 0);
+  }
+  const uniformScale = Number(colorLookup.uniformScale) || 0;
+  const uniformStart = Number(colorLookup.uniformStart) || 0;
+  const visibleMin = visible.min;
+  const visibleMax = visible.max;
+  const hasVisibleMin = Number.isFinite(visibleMin);
+  const hasVisibleMax = Number.isFinite(visibleMax);
+  let visibleCount = 0;
+  let validCount = 0;
+  for (let index = 0; index < cellCount; index += 1) {
+    const value = values[index];
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+    validCount += 1;
+    if (hasVisibleMin && value < visibleMin) {
+      continue;
+    }
+    if (hasVisibleMax && value > visibleMax) {
+      continue;
+    }
+    let selected;
+    if (uniformScale > 0) {
+      selected = Math.floor((value - uniformStart) * uniformScale);
+      if (selected < 0) {
+        selected = 0;
+      } else if (selected >= thresholdCount) {
+        selected = thresholdCount - 1;
+      }
+    } else {
+      selected = 0;
+      let low = 1;
+      let high = thresholdCount - 1;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (value < thresholds[mid]) {
+          high = mid - 1;
+        } else {
+          selected = mid;
+          low = mid + 1;
+        }
+      }
+    }
+    if (colors[selected * 4 + 3] <= 0) {
+      continue;
+    }
+    indices[index] = paletteIndices[selected];
+    visibleCount += 1;
+  }
+  return indexedLayerResult(indices, indexedPalette.rgba, visibleCount, validCount);
+}
+
 // Step-bucket selection clamps below-range values into bucket 0: the binary
 // search defaults selected=0 and the uniform fast path floors negatives to 0
 // (same in the affine/function/wind-step variants). Safe only while every
@@ -343,12 +616,18 @@ function renderScalarGridStep({
 function renderScalarGridStepRaw({ rgba, values, cellCount, colorLookup, visible }) {
   const thresholds = colorLookup.thresholds;
   const colors = colorLookup.colors;
+  const colorWords = nativeUint32View(colors);
+  const rgbaWords = nativeUint32View(rgba);
   const thresholdCount = thresholds.length;
   if (thresholdCount <= 0) {
     return { rgba, visibleCount: 0, validCount: 0 };
   }
   const uniformScale = Number(colorLookup.uniformScale) || 0;
   const uniformStart = Number(colorLookup.uniformStart) || 0;
+  const visibleMin = visible.min;
+  const visibleMax = visible.max;
+  const hasVisibleMin = Number.isFinite(visibleMin);
+  const hasVisibleMax = Number.isFinite(visibleMax);
   let visibleCount = 0;
   let validCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
@@ -357,10 +636,10 @@ function renderScalarGridStepRaw({ rgba, values, cellCount, colorLookup, visible
       continue;
     }
     validCount += 1;
-    if (Number.isFinite(visible.min) && value < visible.min) {
+    if (hasVisibleMin && value < visibleMin) {
       continue;
     }
-    if (Number.isFinite(visible.max) && value > visible.max) {
+    if (hasVisibleMax && value > visibleMax) {
       continue;
     }
     let selected;
@@ -390,11 +669,15 @@ function renderScalarGridStepRaw({ rgba, values, cellCount, colorLookup, visible
     if (alphaByte <= 0) {
       continue;
     }
-    const offset = index * 4;
-    rgba[offset] = colors[colorOffset];
-    rgba[offset + 1] = colors[colorOffset + 1];
-    rgba[offset + 2] = colors[colorOffset + 2];
-    rgba[offset + 3] = alphaByte;
+    if (rgbaWords && colorWords) {
+      rgbaWords[index] = colorWords[selected];
+    } else {
+      const offset = index * 4;
+      rgba[offset] = colors[colorOffset];
+      rgba[offset + 1] = colors[colorOffset + 1];
+      rgba[offset + 2] = colors[colorOffset + 2];
+      rgba[offset + 3] = alphaByte;
+    }
     visibleCount += 1;
   }
   return { rgba, visibleCount, validCount };
@@ -408,12 +691,18 @@ function renderScalarGridStepAffine({ rgba, values, cellCount, colorLookup, visi
   const affineMin = affineHasMin ? affineTransform.min : 0;
   const thresholds = colorLookup.thresholds;
   const colors = colorLookup.colors;
+  const colorWords = nativeUint32View(colors);
+  const rgbaWords = nativeUint32View(rgba);
   const thresholdCount = thresholds.length;
   if (thresholdCount <= 0) {
     return { rgba, visibleCount: 0, validCount: 0 };
   }
   const uniformScale = Number(colorLookup.uniformScale) || 0;
   const uniformStart = Number(colorLookup.uniformStart) || 0;
+  const visibleMin = visible.min;
+  const visibleMax = visible.max;
+  const hasVisibleMin = Number.isFinite(visibleMin);
+  const hasVisibleMax = Number.isFinite(visibleMax);
   let visibleCount = 0;
   let validCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
@@ -426,10 +715,10 @@ function renderScalarGridStepAffine({ rgba, values, cellCount, colorLookup, visi
       continue;
     }
     validCount += 1;
-    if (Number.isFinite(visible.min) && value < visible.min) {
+    if (hasVisibleMin && value < visibleMin) {
       continue;
     }
-    if (Number.isFinite(visible.max) && value > visible.max) {
+    if (hasVisibleMax && value > visibleMax) {
       continue;
     }
     let selected;
@@ -459,11 +748,15 @@ function renderScalarGridStepAffine({ rgba, values, cellCount, colorLookup, visi
     if (alphaByte <= 0) {
       continue;
     }
-    const offset = index * 4;
-    rgba[offset] = colors[colorOffset];
-    rgba[offset + 1] = colors[colorOffset + 1];
-    rgba[offset + 2] = colors[colorOffset + 2];
-    rgba[offset + 3] = alphaByte;
+    if (rgbaWords && colorWords) {
+      rgbaWords[index] = colorWords[selected];
+    } else {
+      const offset = index * 4;
+      rgba[offset] = colors[colorOffset];
+      rgba[offset + 1] = colors[colorOffset + 1];
+      rgba[offset + 2] = colors[colorOffset + 2];
+      rgba[offset + 3] = alphaByte;
+    }
     visibleCount += 1;
   }
   return { rgba, visibleCount, validCount };
@@ -472,12 +765,18 @@ function renderScalarGridStepAffine({ rgba, values, cellCount, colorLookup, visi
 function renderScalarGridStepFunction({ rgba, values, cellCount, colorLookup, visible, transform }) {
   const thresholds = colorLookup.thresholds;
   const colors = colorLookup.colors;
+  const colorWords = nativeUint32View(colors);
+  const rgbaWords = nativeUint32View(rgba);
   const thresholdCount = thresholds.length;
   if (thresholdCount <= 0) {
     return { rgba, visibleCount: 0, validCount: 0 };
   }
   const uniformScale = Number(colorLookup.uniformScale) || 0;
   const uniformStart = Number(colorLookup.uniformStart) || 0;
+  const visibleMin = visible.min;
+  const visibleMax = visible.max;
+  const hasVisibleMin = Number.isFinite(visibleMin);
+  const hasVisibleMax = Number.isFinite(visibleMax);
   let visibleCount = 0;
   let validCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
@@ -486,10 +785,10 @@ function renderScalarGridStepFunction({ rgba, values, cellCount, colorLookup, vi
       continue;
     }
     validCount += 1;
-    if (Number.isFinite(visible.min) && value < visible.min) {
+    if (hasVisibleMin && value < visibleMin) {
       continue;
     }
-    if (Number.isFinite(visible.max) && value > visible.max) {
+    if (hasVisibleMax && value > visibleMax) {
       continue;
     }
     let selected;
@@ -519,11 +818,15 @@ function renderScalarGridStepFunction({ rgba, values, cellCount, colorLookup, vi
     if (alphaByte <= 0) {
       continue;
     }
-    const offset = index * 4;
-    rgba[offset] = colors[colorOffset];
-    rgba[offset + 1] = colors[colorOffset + 1];
-    rgba[offset + 2] = colors[colorOffset + 2];
-    rgba[offset + 3] = alphaByte;
+    if (rgbaWords && colorWords) {
+      rgbaWords[index] = colorWords[selected];
+    } else {
+      const offset = index * 4;
+      rgba[offset] = colors[colorOffset];
+      rgba[offset + 1] = colors[colorOffset + 1];
+      rgba[offset + 2] = colors[colorOffset + 2];
+      rgba[offset + 3] = alphaByte;
+    }
     visibleCount += 1;
   }
   return { rgba, visibleCount, validCount };
@@ -577,8 +880,239 @@ function resolveVisibleBounds(minVisible, maxVisible, visibleRange) {
   };
 }
 
+// Reading and writing the same native Uint32 word preserves the underlying
+// RGBA byte order on both little- and big-endian hosts. Production palettes
+// and Buffer.alloc outputs are naturally aligned; unusual external views
+// retain the byte-store fallback in the render loops.
+function nativeUint32View(bytes) {
+  if (
+    !bytes?.buffer ||
+    !Number.isInteger(bytes.byteOffset) ||
+    !Number.isInteger(bytes.byteLength) ||
+    bytes.byteOffset % Uint32Array.BYTES_PER_ELEMENT !== 0 ||
+    bytes.byteLength % Uint32Array.BYTES_PER_ELEMENT !== 0
+  ) {
+    return null;
+  }
+  return new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / Uint32Array.BYTES_PER_ELEMENT);
+}
+
+function captureIndexedPaletteLookups(lookups) {
+  return (Array.isArray(lookups) ? lookups : [])
+    .filter((lookup) => lookup?.colors)
+    .map((lookup) => ({
+      lookup,
+      colors: Buffer.from(lookup.colors),
+    }));
+}
+
+function buildIndexedPaletteFromCapturedLookups(capturedLookups) {
+  const colors = [[0, 0, 0, 0]];
+  const colorIndices = new Map([["0,0,0,0", 0]]);
+  const indicesByLookup = new Map();
+  for (const { lookup, colors: source } of capturedLookups) {
+    const entryCount = Math.floor(source.length / 4);
+    const lookupIndices = new Uint8Array(entryCount);
+    for (let index = 0; index < entryCount; index += 1) {
+      const offset = index * 4;
+      const alpha = source[offset + 3];
+      if (alpha <= 0) {
+        lookupIndices[index] = 0;
+        continue;
+      }
+      const key = `${source[offset]},${source[offset + 1]},${source[offset + 2]},${alpha}`;
+      let paletteIndex = colorIndices.get(key);
+      if (paletteIndex === undefined) {
+        paletteIndex = colors.length;
+        if (paletteIndex >= 256) {
+          throw new RangeError(`Indexed PNG palette exceeds 256 entries (${paletteIndex + 1}).`);
+        }
+        colorIndices.set(key, paletteIndex);
+        colors.push([source[offset], source[offset + 1], source[offset + 2], alpha]);
+      }
+      lookupIndices[index] = paletteIndex;
+    }
+    indicesByLookup.set(lookup, lookupIndices);
+  }
+  const rgba = Buffer.allocUnsafe(colors.length * 4);
+  for (let index = 0; index < colors.length; index += 1) {
+    const offset = index * 4;
+    const color = colors[index];
+    rgba[offset] = color[0];
+    rgba[offset + 1] = color[1];
+    rgba[offset + 2] = color[2];
+    rgba[offset + 3] = color[3];
+  }
+  return Object.freeze({
+    rgba,
+    entries: colors.length,
+    indicesByLookup,
+  });
+}
+
+function buildIndexedPalette(lookups) {
+  return buildIndexedPaletteFromCapturedLookups(captureIndexedPaletteLookups(lookups));
+}
+
+function indexedPaletteCacheMatches(record, lookups) {
+  if (!record || record.lookups.length !== lookups.length) {
+    return false;
+  }
+  for (let index = 0; index < lookups.length; index += 1) {
+    const lookup = lookups[index];
+    const snapshot = record.lookups[index];
+    const colors = lookup?.colors;
+    if (
+      lookup !== snapshot.lookup ||
+      !(colors instanceof Uint8Array) ||
+      colors.length !== snapshot.colors.length ||
+      !Buffer.from(colors).equals(snapshot.colors)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function refreshIndexedPaletteCache(cache, lookups) {
+  if (!indexedPaletteCacheMatches(cache.record, lookups)) {
+    const captured = captureIndexedPaletteLookups(lookups);
+    cache.record = {
+      lookups: captured,
+      palette: buildIndexedPaletteFromCapturedLookups(captured),
+    };
+  }
+  return cache.record.palette;
+}
+
+function indexedPaletteForLookup(lookup) {
+  let cache = SINGLE_LOOKUP_INDEXED_PALETTES.get(lookup);
+  if (!cache) {
+    cache = { record: null };
+    SINGLE_LOOKUP_INDEXED_PALETTES.set(lookup, cache);
+  }
+  return refreshIndexedPaletteCache(cache, [lookup]);
+}
+
+function indexedLayerResult(indices, paletteRgba, visibleCount, validCount = undefined) {
+  const owner = {
+    indices,
+    // Palettes are small and shared between renderer calls. Take a private
+    // copy so neither a previously returned layer nor an exported lookup can
+    // mutate bytes that a queued encode still owns.
+    paletteRgba: Buffer.from(paletteRgba),
+    internallyOwned: true,
+  };
+  const layer = {
+    pixelFormat: INDEXED_PIXEL_FORMAT,
+    paletteEntries: owner.paletteRgba.length / 4,
+    visibleCount,
+    ...(validCount === undefined ? {} : { validCount }),
+  };
+  // Indexed bytes stay privately owned by the renderer. The frozen public
+  // layer carries metadata only, so callers cannot capture or mutate bytes
+  // used by either an immediate encode or coordinator-queued work.
+  INTERNALLY_OWNED_INDEXED_LAYERS.set(layer, owner);
+  return Object.freeze(layer);
+}
+
+function indexedLayerOwner(layer) {
+  const internal = INTERNALLY_OWNED_INDEXED_LAYERS.get(layer);
+  if (internal) {
+    return internal;
+  }
+  return {
+    indices: layer?.indices,
+    paletteRgba: layer?.paletteRgba,
+    internallyOwned: false,
+  };
+}
+
+function resolveIndexedLayerOwner(layer, width, height) {
+  if (!layer || layer.pixelFormat !== INDEXED_PIXEL_FORMAT) {
+    return null;
+  }
+  const cellCount = Math.max(0, Math.round(Number(width) || 0) * Math.round(Number(height) || 0));
+  const owner = indexedLayerOwner(layer);
+  const indices = owner.indices;
+  const palette = owner.paletteRgba;
+  if (
+    indices instanceof Uint8Array &&
+    indices.length >= cellCount &&
+    palette instanceof Uint8Array &&
+    palette.length >= 4 &&
+    palette.length <= 256 * 4 &&
+    palette.length % 4 === 0
+  ) {
+    return owner;
+  }
+  return null;
+}
+
+function isIndexedLayer(layer, width, height) {
+  return Boolean(resolveIndexedLayerOwner(layer, width, height));
+}
+
+function expandIndexedLayerToRgba(layer, width, height) {
+  const owner = resolveIndexedLayerOwner(layer, width, height);
+  if (!owner) {
+    return null;
+  }
+  const cellCount = Math.max(0, Math.round(Number(width) || 0) * Math.round(Number(height) || 0));
+  const indices = owner.indices;
+  const palette = owner.paletteRgba;
+  const paletteEntries = palette.length / 4;
+  const rgba = Buffer.allocUnsafe(cellCount * 4);
+  for (let index = 0; index < cellCount; index += 1) {
+    const paletteIndex = indices[index];
+    if (paletteIndex >= paletteEntries) {
+      return null;
+    }
+    const sourceOffset = paletteIndex * 4;
+    const targetOffset = index * 4;
+    rgba[targetOffset] = palette[sourceOffset];
+    rgba[targetOffset + 1] = palette[sourceOffset + 1];
+    rgba[targetOffset + 2] = palette[sourceOffset + 2];
+    rgba[targetOffset + 3] = palette[sourceOffset + 3];
+  }
+  return rgba;
+}
+
+function indexedLayerOwnerIndicesAreValid(owner, width, height) {
+  if (owner.internallyOwned) {
+    return true;
+  }
+  const cellCount = Math.max(0, Math.round(Number(width) || 0) * Math.round(Number(height) || 0));
+  const paletteEntries = owner.paletteRgba.length / 4;
+  for (let index = 0; index < cellCount; index += 1) {
+    if (owner.indices[index] >= paletteEntries) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function encodeLayerOrEmpty(layer, emptyPng, width, height, compressionLevel, filterType) {
   if (!layer || layer.visibleCount <= 0) {
+    return encodeRawPng(emptyPng);
+  }
+  const indexedOwner = resolveIndexedLayerOwner(layer, width, height);
+  if (indexedOwner) {
+    if (!indexedLayerOwnerIndicesAreValid(indexedOwner, width, height)) {
+      return encodeRawPng(emptyPng);
+    }
+    if (Number(filterType) === 0) {
+      const encodeIndexed = indexedOwner.internallyOwned ? _encodeTrustedIndexedPngFilter0 : encodeIndexedPngFilter0;
+      return encodeRawPng(
+        encodeIndexed(indexedOwner.indices, indexedOwner.paletteRgba, width, height, compressionLevel),
+      );
+    }
+    const rgba = expandIndexedLayerToRgba(layer, width, height);
+    return rgba
+      ? encodeRawPng(encodeRgbaPng(rgba, width, height, compressionLevel, filterType))
+      : encodeRawPng(emptyPng);
+  }
+  if (!(layer.rgba instanceof Uint8Array)) {
     return encodeRawPng(emptyPng);
   }
   return encodeRawPng(encodeRgbaPng(layer.rgba, width, height, compressionLevel, filterType));
@@ -589,14 +1123,56 @@ function encodeLayerOrEmpty(layer, emptyPng, width, height, compressionLevel, fi
 // while non-empty filter-0 bodies fill in when the pooled deflate completes.
 // Callers collect `pending` promises and await them once before the
 // descriptors are consumed. Non-filter-0 encodes stay inline (pngjs path).
-// `encodeContext` is null when compression offload is disabled, otherwise
-// `{ pool, counters }`: the pool submits the scanline scratch built in
-// png-encode (released for reuse right after the synchronous submit clone),
-// and counters feed the render profile's compressPoolJobs/Fallbacks. Each
-// rendered layer exclusively owns its RGBA and is never written after this
-// call, so it can remain the immutable failure-fallback source without an
-// otherwise-required defensive copy.
+// The public entry point always retains generic snapshot + structured-clone
+// semantics, regardless of options/context properties a caller supplies.
 function encodeLayerOrEmptyDeferred(layer, emptyPng, width, height, compressionLevel, filterType, encodeContext) {
+  return encodeLayerOrEmptyDeferredInternal(
+    layer,
+    emptyPng,
+    width,
+    height,
+    compressionLevel,
+    filterType,
+    encodeContext,
+    false,
+  );
+}
+
+// Renderer-private entry point: buildRenderedArtifacts creates every layer
+// owner locally and never publishes it before pending encodes settle. Keeping
+// this separate from the generic function is the unforgeable-by-options gate
+// to transferred scanline ownership.
+function _encodeRendererOwnedLayerOrEmptyDeferred(
+  layer,
+  emptyPng,
+  width,
+  height,
+  compressionLevel,
+  filterType,
+  encodeContext,
+) {
+  return encodeLayerOrEmptyDeferredInternal(
+    layer,
+    emptyPng,
+    width,
+    height,
+    compressionLevel,
+    filterType,
+    encodeContext,
+    true,
+  );
+}
+
+function encodeLayerOrEmptyDeferredInternal(
+  layer,
+  emptyPng,
+  width,
+  height,
+  compressionLevel,
+  filterType,
+  encodeContext,
+  rendererOwnedContext,
+) {
   if (!encodeContext || Number(filterType) !== 0) {
     return {
       descriptor: encodeLayerOrEmpty(layer, emptyPng, width, height, compressionLevel, filterType),
@@ -607,18 +1183,73 @@ function encodeLayerOrEmptyDeferred(layer, emptyPng, width, height, compressionL
     return { descriptor: encodeRawPng(emptyPng), pending: null };
   }
   const descriptor = { body: null, bytes: 0, contentType: "image/png" };
-  const pending = encodeRgbaPngFilter0ViaPool(
-    layer.rgba,
-    width,
-    height,
-    compressionLevel,
-    encodeContext.pool,
-    encodeContext.counters,
-    { rgbaIsImmutableUntilSettled: true },
-  ).then((body) => {
-    descriptor.body = body;
-    descriptor.bytes = body.length;
-  });
+  const owner = resolveIndexedLayerOwner(layer, width, height);
+  const indexed = Boolean(owner);
+  if (!indexed && !(layer.rgba instanceof Uint8Array)) {
+    return { descriptor: encodeRawPng(emptyPng), pending: null };
+  }
+  if (indexed && !indexedLayerOwnerIndicesAreValid(owner, width, height)) {
+    return { descriptor: encodeRawPng(emptyPng), pending: null };
+  }
+  const internallyOwned = Boolean(owner?.internallyOwned);
+  // A generic indexed layer is caller-owned and may be mutated as soon as
+  // this function returns, including while a coordinator keeps `encode`
+  // queued. Snapshot before queue admission. Renderer layers retain private
+  // immutable owners and remain allocation-free here.
+  const indexedOwner =
+    indexed && !internallyOwned
+      ? {
+          indices: Buffer.from(
+            owner.indices.subarray(0, Math.max(0, Math.round(Number(width) || 0) * Math.round(Number(height) || 0))),
+          ),
+          paletteRgba: Buffer.from(owner.paletteRgba),
+        }
+      : owner;
+  const rgbaOwner =
+    !indexed && !rendererOwnedContext
+      ? Buffer.from(
+          layer.rgba.subarray(0, Math.max(0, Math.round(Number(width) || 0) * Math.round(Number(height) || 0) * 4)),
+        )
+      : layer.rgba;
+  const encode = () => {
+    const encodeIndexed =
+      internallyOwned && rendererOwnedContext ? _encodeTrustedIndexedPngFilter0ViaPool : encodeIndexedPngFilter0ViaPool;
+    const pending = indexed
+      ? encodeIndexed(
+          indexedOwner.indices,
+          indexedOwner.paletteRgba,
+          width,
+          height,
+          compressionLevel,
+          encodeContext.pool,
+          encodeContext.counters,
+        )
+      : rendererOwnedContext
+        ? _encodeTrustedRgbaPngFilter0ViaPool(
+            rgbaOwner,
+            width,
+            height,
+            compressionLevel,
+            encodeContext.pool,
+            encodeContext.counters,
+          )
+        : encodeRgbaPngFilter0ViaPool(
+            rgbaOwner,
+            width,
+            height,
+            compressionLevel,
+            encodeContext.pool,
+            encodeContext.counters,
+          );
+    return pending.then((body) => {
+      descriptor.body = body;
+      descriptor.bytes = body.length;
+    });
+  };
+  const pending =
+    encodeContext.coordinator && typeof encodeContext.coordinator.schedule === "function"
+      ? encodeContext.coordinator.schedule(encode, "png-idat")
+      : encode();
   return { descriptor, pending };
 }
 
@@ -645,7 +1276,7 @@ function encodeRawPng(body) {
 // pass writes each gate's buffer wherever the gate's minVisible predicate
 // holds. Produces byte-identical layers to running renderScalarGridStepRaw
 // once per gate with minVisible set to that gate.
-function renderReflectivityGateLayers({ values, width, height, colorLookup, gates }) {
+function renderReflectivityGateLayers({ values, width, height, colorLookup, gates, outputFormat = "rgba8" }) {
   const cellCount = width * height;
   if (gates.length <= 0) {
     return [];
@@ -653,10 +1284,15 @@ function renderReflectivityGateLayers({ values, width, height, colorLookup, gate
   if (!values || values.length !== cellCount || !colorLookup?.colors || !colorLookup?.thresholds) {
     return gates.map(() => emptyScalarLayerResult());
   }
+  if (outputFormat === INDEXED_PIXEL_FORMAT) {
+    return renderReflectivityGateIndexedLayers({ values, cellCount, colorLookup, gates });
+  }
   const rgbaByGate = gates.map(() => Buffer.alloc(Math.max(0, cellCount * 4)));
+  const rgbaWordsByGate = rgbaByGate.map(nativeUint32View);
   const visibleCountByGate = gates.map(() => 0);
   const thresholds = colorLookup.thresholds;
   const colors = colorLookup.colors;
+  const colorWords = nativeUint32View(colors);
   const thresholdCount = thresholds.length;
   if (thresholdCount <= 0) {
     return gates.map((_, gateIndex) => ({ rgba: rgbaByGate[gateIndex], visibleCount: 0, validCount: 0 }));
@@ -715,10 +1351,15 @@ function renderReflectivityGateLayers({ values, width, height, colorLookup, gate
         continue;
       }
       const rgba = rgbaByGate[gateIndex];
-      rgba[offset] = colors[colorOffset];
-      rgba[offset + 1] = colors[colorOffset + 1];
-      rgba[offset + 2] = colors[colorOffset + 2];
-      rgba[offset + 3] = alphaByte;
+      const rgbaWords = rgbaWordsByGate[gateIndex];
+      if (rgbaWords && colorWords) {
+        rgbaWords[index] = colorWords[selected];
+      } else {
+        rgba[offset] = colors[colorOffset];
+        rgba[offset + 1] = colors[colorOffset + 1];
+        rgba[offset + 2] = colors[colorOffset + 2];
+        rgba[offset + 3] = alphaByte;
+      }
       visibleCountByGate[gateIndex] += 1;
     }
   }
@@ -727,6 +1368,74 @@ function renderReflectivityGateLayers({ values, width, height, colorLookup, gate
     visibleCount: visibleCountByGate[gateIndex],
     validCount,
   }));
+}
+
+function renderReflectivityGateIndexedLayers({ values, cellCount, colorLookup, gates }) {
+  const indexedPalette = indexedPaletteForLookup(colorLookup);
+  const paletteIndices = indexedPalette.indicesByLookup.get(colorLookup);
+  const indicesByGate = gates.map(() => Buffer.alloc(Math.max(0, cellCount)));
+  const visibleCountByGate = gates.map(() => 0);
+  const thresholds = colorLookup.thresholds;
+  const colors = colorLookup.colors;
+  const thresholdCount = thresholds.length;
+  if (thresholdCount <= 0) {
+    return gates.map((_, gateIndex) => indexedLayerResult(indicesByGate[gateIndex], indexedPalette.rgba, 0, 0));
+  }
+  const uniformScale = Number(colorLookup.uniformScale) || 0;
+  const uniformStart = Number(colorLookup.uniformStart) || 0;
+  let minGate = Infinity;
+  for (const gate of gates) {
+    if (gate < minGate) {
+      minGate = gate;
+    }
+  }
+  let validCount = 0;
+  for (let index = 0; index < cellCount; index += 1) {
+    const value = values[index];
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+    validCount += 1;
+    if (value < minGate) {
+      continue;
+    }
+    let selected;
+    if (uniformScale > 0) {
+      selected = Math.floor((value - uniformStart) * uniformScale);
+      if (selected < 0) {
+        selected = 0;
+      } else if (selected >= thresholdCount) {
+        selected = thresholdCount - 1;
+      }
+    } else {
+      selected = 0;
+      let low = 1;
+      let high = thresholdCount - 1;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (value < thresholds[mid]) {
+          high = mid - 1;
+        } else {
+          selected = mid;
+          low = mid + 1;
+        }
+      }
+    }
+    if (colors[selected * 4 + 3] <= 0) {
+      continue;
+    }
+    const paletteIndex = paletteIndices[selected];
+    for (let gateIndex = 0; gateIndex < gates.length; gateIndex += 1) {
+      if (value < gates[gateIndex]) {
+        continue;
+      }
+      indicesByGate[gateIndex][index] = paletteIndex;
+      visibleCountByGate[gateIndex] += 1;
+    }
+  }
+  return gates.map((_, gateIndex) =>
+    indexedLayerResult(indicesByGate[gateIndex], indexedPalette.rgba, visibleCountByGate[gateIndex], validCount),
+  );
 }
 
 function renderReflectivityVariants({
@@ -738,23 +1447,16 @@ function renderReflectivityVariants({
   pngCompressionLevel,
   pngFilterType,
   encodeLayer = null,
+  outputFormat = "rgba8",
 }) {
   const encode =
     encodeLayer || ((layer) => encodeLayerOrEmpty(layer, emptyPng, width, height, pngCompressionLevel, pngFilterType));
-  const gates = [];
-  for (const gate of reflectivityGates) {
-    const gateDbz = Math.round(Number(gate));
-    if (!Number.isFinite(gateDbz)) {
-      continue;
-    }
-    gates.push(gateDbz);
-  }
-  const layers = renderReflectivityGateLayers({
+  const { gates, layers } = prepareReflectivityVariantLayers({
     values,
     width,
     height,
-    colorLookup: CORE_LAYER_RENDER_OPTIONS.reflectivity.colorLookup,
-    gates,
+    reflectivityGates,
+    outputFormat,
   });
   const variants = {};
   for (let index = 0; index < gates.length; index += 1) {
@@ -763,9 +1465,87 @@ function renderReflectivityVariants({
   return variants;
 }
 
-function renderReflectivityPrecipTypeGrid({ reflectivityDbz, rain, snow, freezingRain, sleet, width, height }) {
+async function renderReflectivityVariantsCooperative({
+  values,
+  width,
+  height,
+  reflectivityGates,
+  emptyPng,
+  pngCompressionLevel,
+  pngFilterType,
+  encodeLayer = null,
+  waitForEncodeCapacity = null,
+  waitForEncodeIdle = null,
+  maxBatchSize = 1,
+  outputFormat = "rgba8",
+}) {
+  const encode =
+    encodeLayer || ((layer) => encodeLayerOrEmpty(layer, emptyPng, width, height, pngCompressionLevel, pngFilterType));
+  const gates = normalizeReflectivityGates(reflectivityGates);
+  const batchSize = Math.max(1, Math.min(gates.length || 1, Math.floor(Number(maxBatchSize) || 1)));
+  const variants = {};
+  for (let batchStart = 0; batchStart < gates.length; batchStart += batchSize) {
+    const batchGates = gates.slice(batchStart, batchStart + batchSize);
+    const batchLayers = renderReflectivityGateLayers({
+      values,
+      width,
+      height,
+      colorLookup: CORE_LAYER_RENDER_OPTIONS.reflectivity.colorLookup,
+      gates: batchGates,
+      outputFormat,
+    });
+    for (let batchIndex = 0; batchIndex < batchGates.length; batchIndex += 1) {
+      if (typeof waitForEncodeCapacity === "function") {
+        await waitForEncodeCapacity();
+      }
+      variants[`dbz${batchGates[batchIndex]}`] = encode(batchLayers[batchIndex]);
+    }
+    // Drop the complete batch before allocating the next one. The next batch
+    // cannot overlap retained RGBA/indexed pixel planes from this batch, so
+    // arbitrary gate rosters remain bounded by maxBatchSize rather than roster
+    // length.
+    if (batchStart + batchSize < gates.length && typeof waitForEncodeIdle === "function") {
+      await waitForEncodeIdle();
+    }
+  }
+  return variants;
+}
+
+function prepareReflectivityVariantLayers({ values, width, height, reflectivityGates, outputFormat = "rgba8" }) {
+  const gates = normalizeReflectivityGates(reflectivityGates);
+  const layers = renderReflectivityGateLayers({
+    values,
+    width,
+    height,
+    colorLookup: CORE_LAYER_RENDER_OPTIONS.reflectivity.colorLookup,
+    gates,
+    outputFormat,
+  });
+  return { gates, layers };
+}
+
+function normalizeReflectivityGates(reflectivityGates) {
+  const gates = [];
+  for (const gate of reflectivityGates) {
+    const gateDbz = Math.round(Number(gate));
+    if (Number.isFinite(gateDbz)) {
+      gates.push(gateDbz);
+    }
+  }
+  return gates;
+}
+
+function renderReflectivityPrecipTypeGrid({
+  reflectivityDbz,
+  rain,
+  snow,
+  freezingRain,
+  sleet,
+  width,
+  height,
+  outputFormat = "rgba8",
+}) {
   const cellCount = width * height;
-  const rgba = Buffer.alloc(Math.max(0, cellCount * 4));
   if (
     !reflectivityDbz ||
     reflectivityDbz.length !== cellCount ||
@@ -778,8 +1558,19 @@ function renderReflectivityPrecipTypeGrid({ reflectivityDbz, rain, snow, freezin
     !sleet ||
     sleet.length !== cellCount
   ) {
-    return { rgba, visibleCount: 0 };
+    return { rgba: Buffer.alloc(Math.max(0, cellCount * 4)), visibleCount: 0 };
   }
+  if (outputFormat === INDEXED_PIXEL_FORMAT) {
+    return renderReflectivityPrecipTypeIndexedGrid({
+      reflectivityDbz,
+      rain,
+      snow,
+      freezingRain,
+      sleet,
+      cellCount,
+    });
+  }
+  const rgba = Buffer.alloc(Math.max(0, cellCount * 4));
   const freezingRainLookup = REFLECTIVITY_PRECIP_TYPE_LOOKUPS.freezing_rain;
   const sleetLookup = REFLECTIVITY_PRECIP_TYPE_LOOKUPS.sleet;
   const snowLookup = REFLECTIVITY_PRECIP_TYPE_LOOKUPS.snow;
@@ -818,9 +1609,58 @@ function renderReflectivityPrecipTypeGrid({ reflectivityDbz, rain, snow, freezin
   return { rgba, visibleCount };
 }
 
-function renderPrecipRateTypeGrid({ precipRate, rain, snow, freezingRain, sleet, width, height }) {
+function renderReflectivityPrecipTypeIndexedGrid({ reflectivityDbz, rain, snow, freezingRain, sleet, cellCount }) {
+  const indices = Buffer.alloc(Math.max(0, cellCount));
+  const indexedPalette = refreshIndexedPaletteCache(
+    REFLECTIVITY_PRECIP_TYPE_INDEXED_PALETTE_CACHE,
+    REFLECTIVITY_PRECIP_TYPE_INDEXED_LOOKUPS,
+  );
+  const freezingRainLookup = REFLECTIVITY_PRECIP_TYPE_LOOKUPS.freezing_rain;
+  const sleetLookup = REFLECTIVITY_PRECIP_TYPE_LOOKUPS.sleet;
+  const snowLookup = REFLECTIVITY_PRECIP_TYPE_LOOKUPS.snow;
+  const rainLookup = REFLECTIVITY_PRECIP_TYPE_LOOKUPS.rain;
+  let visibleCount = 0;
+  for (let index = 0; index < cellCount; index += 1) {
+    const dbz = reflectivityDbz[index];
+    if (!Number.isFinite(dbz)) {
+      continue;
+    }
+    let lookup = null;
+    if (freezingRain[index] >= 0.5) {
+      lookup = freezingRainLookup;
+    } else if (sleet[index] >= 0.5) {
+      lookup = sleetLookup;
+    } else if (snow[index] >= 0.5) {
+      lookup = snowLookup;
+    } else if (rain[index] >= 0.5) {
+      lookup = rainLookup;
+    }
+    if (!lookup) {
+      continue;
+    }
+    const colorOffset = findReflectivityPrecipTypeColorOffset(lookup, dbz);
+    const colors = lookup.colors;
+    if (colorOffset < 0 || !colors || colors[colorOffset + 3] <= 0) {
+      continue;
+    }
+    const lookupIndices = indexedPalette.indicesByLookup.get(lookup);
+    indices[index] = lookupIndices[colorOffset >> 2];
+    visibleCount += 1;
+  }
+  return indexedLayerResult(indices, indexedPalette.rgba, visibleCount);
+}
+
+function renderPrecipRateTypeGrid({
+  precipRate,
+  rain,
+  snow,
+  freezingRain,
+  sleet,
+  width,
+  height,
+  outputFormat = "rgba8",
+}) {
   const cellCount = width * height;
-  const rgba = Buffer.alloc(Math.max(0, cellCount * 4));
   if (
     !precipRate ||
     precipRate.length !== cellCount ||
@@ -833,8 +1673,19 @@ function renderPrecipRateTypeGrid({ precipRate, rain, snow, freezingRain, sleet,
     !sleet ||
     sleet.length !== cellCount
   ) {
-    return { rgba, visibleCount: 0 };
+    return { rgba: Buffer.alloc(Math.max(0, cellCount * 4)), visibleCount: 0 };
   }
+  if (outputFormat === INDEXED_PIXEL_FORMAT) {
+    return renderPrecipRateTypeIndexedGrid({
+      precipRate,
+      rain,
+      snow,
+      freezingRain,
+      sleet,
+      cellCount,
+    });
+  }
+  const rgba = Buffer.alloc(Math.max(0, cellCount * 4));
   const freezingRainLookup = PRECIP_RATE_TYPE_LOOKUPS.freezing_rain;
   const sleetLookup = PRECIP_RATE_TYPE_LOOKUPS.sleet;
   const snowLookup = PRECIP_RATE_TYPE_LOOKUPS.snow;
@@ -871,6 +1722,47 @@ function renderPrecipRateTypeGrid({ precipRate, rain, snow, freezingRain, sleet,
     visibleCount += 1;
   }
   return { rgba, visibleCount };
+}
+
+function renderPrecipRateTypeIndexedGrid({ precipRate, rain, snow, freezingRain, sleet, cellCount }) {
+  const indices = Buffer.alloc(Math.max(0, cellCount));
+  const indexedPalette = refreshIndexedPaletteCache(
+    PRECIP_RATE_TYPE_INDEXED_PALETTE_CACHE,
+    PRECIP_RATE_TYPE_INDEXED_LOOKUPS,
+  );
+  const freezingRainLookup = PRECIP_RATE_TYPE_LOOKUPS.freezing_rain;
+  const sleetLookup = PRECIP_RATE_TYPE_LOOKUPS.sleet;
+  const snowLookup = PRECIP_RATE_TYPE_LOOKUPS.snow;
+  const rainLookup = PRECIP_RATE_TYPE_LOOKUPS.rain;
+  let visibleCount = 0;
+  for (let index = 0; index < cellCount; index += 1) {
+    const rateInHr = precipRate[index] * PRATE_KG_M2_S_TO_IN_HR;
+    if (!(rateInHr >= 0.01)) {
+      continue;
+    }
+    let lookup = null;
+    if (freezingRain[index] >= 0.5) {
+      lookup = freezingRainLookup;
+    } else if (sleet[index] >= 0.5) {
+      lookup = sleetLookup;
+    } else if (snow[index] >= 0.5) {
+      lookup = snowLookup;
+    } else if (rain[index] >= 0.5) {
+      lookup = rainLookup;
+    }
+    if (!lookup) {
+      continue;
+    }
+    const colorOffset = findStepColorOffset(lookup, rateInHr);
+    const colors = lookup.colors;
+    if (colorOffset < 0 || !colors || colors[colorOffset + 3] <= 0) {
+      continue;
+    }
+    const lookupIndices = indexedPalette.indicesByLookup.get(lookup);
+    indices[index] = lookupIndices[colorOffset >> 2];
+    visibleCount += 1;
+  }
+  return indexedLayerResult(indices, indexedPalette.rgba, visibleCount);
 }
 
 function findReflectivityPrecipTypeColorOffset(lookup, dbz) {
@@ -984,8 +1876,19 @@ function renderWindSpeedContinuousLayer({
     return { rgba, visibleCount: 0 };
   }
   const colors = colorLookup.colors;
+  const colorWords = nativeUint32View(colors);
+  const rgbaWords = nativeUint32View(rgba);
   const lastBucket = Math.max(0, (colorLookup.size || 1) - 1);
   const visible = resolveVisibleBounds(minVisible, maxVisible, visibleRange);
+  const visibleMin = visible.min;
+  const visibleMax = visible.max;
+  const hasVisibleMin = Number.isFinite(visibleMin);
+  const hasVisibleMax = Number.isFinite(visibleMax);
+  const useLogScale = Boolean(colorLookup.log);
+  const lookupMin = colorLookup.min;
+  const lookupScale = colorLookup.scale;
+  const logMin = colorLookup.logMin;
+  const logScale = colorLookup.logScale;
   let visibleCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
     const u = uValues[index];
@@ -994,27 +1897,29 @@ function renderWindSpeedContinuousLayer({
       continue;
     }
     const value = Math.sqrt(u * u + v * v) * multiplier;
-    if (Number.isFinite(visible.min) && value < visible.min) {
+    if (hasVisibleMin && value < visibleMin) {
       continue;
     }
-    if (Number.isFinite(visible.max) && value > visible.max) {
+    if (hasVisibleMax && value > visibleMax) {
       continue;
     }
     const position =
-      colorLookup.log && value > 0
-        ? (Math.log(value) - colorLookup.logMin) * colorLookup.logScale
-        : (value - colorLookup.min) * colorLookup.scale;
+      useLogScale && value > 0 ? (Math.log(value) - logMin) * logScale : (value - lookupMin) * lookupScale;
     const bucket = position <= 0 ? 0 : position >= 1 ? lastBucket : Math.floor(position * lastBucket);
     const colorOffset = bucket * 4;
     const alphaByte = colors[colorOffset + 3];
     if (alphaByte <= 0) {
       continue;
     }
-    const offset = index * 4;
-    rgba[offset] = colors[colorOffset];
-    rgba[offset + 1] = colors[colorOffset + 1];
-    rgba[offset + 2] = colors[colorOffset + 2];
-    rgba[offset + 3] = alphaByte;
+    if (rgbaWords && colorWords) {
+      rgbaWords[index] = colorWords[bucket];
+    } else {
+      const offset = index * 4;
+      rgba[offset] = colors[colorOffset];
+      rgba[offset + 1] = colors[colorOffset + 1];
+      rgba[offset + 2] = colors[colorOffset + 2];
+      rgba[offset + 3] = alphaByte;
+    }
     visibleCount += 1;
   }
   return { rgba, visibleCount };
@@ -1038,6 +1943,8 @@ function renderWindSpeedStepLayer({
   }
   const thresholds = colorLookup.thresholds;
   const colors = colorLookup.colors;
+  const colorWords = nativeUint32View(colors);
+  const rgbaWords = nativeUint32View(rgba);
   const thresholdCount = thresholds.length;
   if (thresholdCount <= 0) {
     return { rgba, visibleCount: 0 };
@@ -1045,6 +1952,10 @@ function renderWindSpeedStepLayer({
   const uniformScale = Number(colorLookup.uniformScale) || 0;
   const uniformStart = Number(colorLookup.uniformStart) || 0;
   const visible = resolveVisibleBounds(minVisible, maxVisible, visibleRange);
+  const visibleMin = visible.min;
+  const visibleMax = visible.max;
+  const hasVisibleMin = Number.isFinite(visibleMin);
+  const hasVisibleMax = Number.isFinite(visibleMax);
   let visibleCount = 0;
   for (let index = 0; index < cellCount; index += 1) {
     const u = uValues[index];
@@ -1053,10 +1964,10 @@ function renderWindSpeedStepLayer({
       continue;
     }
     const value = Math.sqrt(u * u + v * v) * multiplier;
-    if (Number.isFinite(visible.min) && value < visible.min) {
+    if (hasVisibleMin && value < visibleMin) {
       continue;
     }
-    if (Number.isFinite(visible.max) && value > visible.max) {
+    if (hasVisibleMax && value > visibleMax) {
       continue;
     }
     let selected;
@@ -1086,11 +1997,15 @@ function renderWindSpeedStepLayer({
     if (alphaByte <= 0) {
       continue;
     }
-    const offset = index * 4;
-    rgba[offset] = colors[colorOffset];
-    rgba[offset + 1] = colors[colorOffset + 1];
-    rgba[offset + 2] = colors[colorOffset + 2];
-    rgba[offset + 3] = alphaByte;
+    if (rgbaWords && colorWords) {
+      rgbaWords[index] = colorWords[selected];
+    } else {
+      const offset = index * 4;
+      rgba[offset] = colors[colorOffset];
+      rgba[offset + 1] = colors[colorOffset + 1];
+      rgba[offset + 2] = colors[colorOffset + 2];
+      rgba[offset + 3] = alphaByte;
+    }
     visibleCount += 1;
   }
   return { rgba, visibleCount };
@@ -1455,31 +2370,22 @@ function resolveCatalogAffineTransform(transform) {
   return null;
 }
 
-function resolveCatalogScale(entry) {
-  return (
-    NOAA_RENDER_SCALES[entry?.scale] || {
-      min: 0,
-      max: 1,
-      alpha: 0.82,
-      legendStops: [
-        [0, [40, 90, 140]],
-        [1, [220, 80, 80]],
-      ],
-    }
-  );
-}
-
 function getCatalogRenderOptions(entry) {
   return CATALOG_RENDER_OPTIONS.get(entry?.key) || buildCatalogRenderOptions(entry);
 }
 
 function buildCatalogRenderOptions(entry) {
+  return buildCatalogRenderOptionsWithStaticLookup(entry, null);
+}
+
+function buildCatalogRenderOptionsWithStaticLookup(entry, staticColorLookup) {
   const scale = resolveCatalogScale(entry);
   const alpha = Number.isFinite(scale.alpha) ? Number(scale.alpha) : 0.82;
   const colorLookup =
     scale?.lookup === "step" && Array.isArray(scale.valueStops)
       ? createStepColorLookup(scale.valueStops, alpha)
-      : createContinuousColorLookup({
+      : staticColorLookup ||
+        createContinuousColorLookup({
           stops: normalizeColorStops(resolveCatalogStops(entry, scale), REFLECTIVITY_STOPS),
           min: scale?.min ?? 0,
           max: scale?.max ?? 1,
@@ -1497,69 +2403,6 @@ function buildCatalogRenderOptions(entry) {
 
 function resolveCatalogStops(entry, scale) {
   return scale.legendStops || [];
-}
-
-function interpolateStops(stops, position) {
-  if (!Array.isArray(stops) || stops.length === 0) {
-    return null;
-  }
-  const t = clamp01(position);
-  const samePositionEpsilon = 1e-12;
-  if (t <= stops[0][0]) {
-    let lastAtStart = 0;
-    while (
-      lastAtStart + 1 < stops.length &&
-      Math.abs(Number(stops[lastAtStart + 1][0]) - Number(stops[0][0])) <= samePositionEpsilon
-    ) {
-      lastAtStart += 1;
-    }
-    if (lastAtStart > 0) {
-      return stops[lastAtStart][1];
-    }
-    return stops[0][1];
-  }
-  for (let index = 1; index < stops.length; index += 1) {
-    const [rightPosition, rightColor] = stops[index];
-    const [leftPosition, leftColor] = stops[index - 1];
-    if (t <= rightPosition) {
-      if (Math.abs(t - rightPosition) <= samePositionEpsilon) {
-        let lastAtPosition = index;
-        while (
-          lastAtPosition + 1 < stops.length &&
-          Math.abs(Number(stops[lastAtPosition + 1][0]) - Number(rightPosition)) <= samePositionEpsilon
-        ) {
-          lastAtPosition += 1;
-        }
-        return stops[lastAtPosition][1];
-      }
-      const span = Math.max(1e-9, rightPosition - leftPosition);
-      const local = (t - leftPosition) / span;
-      return interpolateRgbaColors(leftColor, rightColor, local);
-    }
-  }
-  return stops[stops.length - 1][1];
-}
-
-function interpolateRgbaColors(leftColor, rightColor, local) {
-  const leftAlpha = Number.isFinite(leftColor?.[3]) ? clamp01(leftColor[3]) : 1;
-  const rightAlpha = Number.isFinite(rightColor?.[3]) ? clamp01(rightColor[3]) : 1;
-  const alpha = lerp(leftAlpha, rightAlpha, local);
-  if (alpha <= 1e-9) {
-    const source = local < 0.5 ? leftColor : rightColor;
-    return [clampInt(source?.[0], 0, 255, 0), clampInt(source?.[1], 0, 255, 0), clampInt(source?.[2], 0, 255, 0), 0];
-  }
-  return [
-    clampInt(lerpPremultipliedChannel(leftColor, leftAlpha, rightColor, rightAlpha, local, 0, alpha), 0, 255, 0),
-    clampInt(lerpPremultipliedChannel(leftColor, leftAlpha, rightColor, rightAlpha, local, 1, alpha), 0, 255, 0),
-    clampInt(lerpPremultipliedChannel(leftColor, leftAlpha, rightColor, rightAlpha, local, 2, alpha), 0, 255, 0),
-    alpha,
-  ];
-}
-
-function lerpPremultipliedChannel(leftColor, leftAlpha, rightColor, rightAlpha, local, channel, alpha) {
-  const left = clampInt(leftColor?.[channel], 0, 255, 0) * leftAlpha;
-  const right = clampInt(rightColor?.[channel], 0, 255, 0) * rightAlpha;
-  return lerp(left, right, local) / alpha;
 }
 
 function createContinuousColorLookup({ stops, min = 0, max = 1, log = false, alpha = 1, size = COLOR_LOOKUP_SIZE }) {
@@ -1644,19 +2487,6 @@ function detectUniformStepThresholds(thresholds) {
     }
   }
   return { start, scale: 1 / step };
-}
-
-function normalizeColorStops(stops, fallback) {
-  const source = Array.isArray(stops) && stops.length >= 2 ? stops : fallback;
-  return source.map(([position, rgb]) => [
-    clamp01(position),
-    [
-      clampInt(rgb?.[0], 0, 255, 0),
-      clampInt(rgb?.[1], 0, 255, 0),
-      clampInt(rgb?.[2], 0, 255, 0),
-      Number.isFinite(Number(rgb?.[3])) ? clamp01(Number(rgb[3])) : 1,
-    ],
-  ]);
 }
 
 function buildReflectivityPrecipTypeLookups(source) {
@@ -1758,8 +2588,6 @@ function normalizeRgbaBytes(rgb, alpha) {
   ]);
 }
 
-const COLOR_LOOKUP_SIZE = 4096;
-
 const COLOR_MAPS = loadColorMaps();
 
 const TEMPERATURE_STOPS = COLOR_MAPS.temperatureF.normalizedStops;
@@ -1786,25 +2614,32 @@ const REFLECTIVITY_STOPS = COLOR_MAPS.reflectivityDbz.normalizedRgbaStops || COL
 
 const REFLECTIVITY_PRECIP_TYPE_LOOKUPS = buildReflectivityPrecipTypeLookups(REFLECTIVITY_PRECIP_TYPE_COLORS);
 
+const PRECIP_TYPE_LOOKUP_PRIORITY = Object.freeze(["freezing_rain", "sleet", "snow", "rain"]);
+
+const PRECIP_RATE_TYPE_INDEXED_LOOKUPS = Object.freeze(
+  PRECIP_TYPE_LOOKUP_PRIORITY.map((key) => PRECIP_RATE_TYPE_LOOKUPS[key]),
+);
+const REFLECTIVITY_PRECIP_TYPE_INDEXED_LOOKUPS = Object.freeze(
+  PRECIP_TYPE_LOOKUP_PRIORITY.map((key) => REFLECTIVITY_PRECIP_TYPE_LOOKUPS[key]),
+);
+const PRECIP_RATE_TYPE_INDEXED_PALETTE_CACHE = { record: null };
+const REFLECTIVITY_PRECIP_TYPE_INDEXED_PALETTE_CACHE = { record: null };
+
+const STATIC_CONTINUOUS_COLOR_LOOKUP_ASSIGNMENTS = buildStaticContinuousColorLookupAssignments();
+
+const STATIC_CONTINUOUS_COLOR_LOOKUP_STATE = loadCatalogColorLookupRoster({
+  assignments: STATIC_CONTINUOUS_COLOR_LOOKUP_ASSIGNMENTS,
+});
+
 const CORE_LAYER_RENDER_OPTIONS = Object.freeze({
   temperature: Object.freeze({
-    colorLookup: createContinuousColorLookup({
-      stops: TEMPERATURE_STOPS,
-      min: COLOR_MAPS.temperatureF.min,
-      max: COLOR_MAPS.temperatureF.max,
-      alpha: 0.95,
-    }),
+    colorLookup: STATIC_CONTINUOUS_COLOR_LOOKUP_STATE.lookups.get("core:temperature"),
     minVisible: null,
     maxVisible: null,
     visibleRange: null,
   }),
   wind: Object.freeze({
-    colorLookup: createContinuousColorLookup({
-      stops: WIND_STOPS,
-      min: COLOR_MAPS.windMph.min,
-      max: COLOR_MAPS.windMph.max,
-      alpha: 0.9,
-    }),
+    colorLookup: STATIC_CONTINUOUS_COLOR_LOOKUP_STATE.lookups.get("core:wind"),
     minVisible: COLOR_MAPS.windMph.min,
     maxVisible: null,
     visibleRange: null,
@@ -1823,7 +2658,13 @@ const CORE_LAYER_RENDER_OPTIONS = Object.freeze({
 });
 
 const CATALOG_RENDER_OPTIONS = new Map(
-  NOAA_NAM_PARAMETER_CATALOG.map((entry) => [entry.key, buildCatalogRenderOptions(entry)]),
+  NOAA_NAM_PARAMETER_CATALOG.map((entry) => [
+    entry.key,
+    buildCatalogRenderOptionsWithStaticLookup(
+      entry,
+      STATIC_CONTINUOUS_COLOR_LOOKUP_STATE.lookups.get(`catalog:${entry.key}`) || null,
+    ),
+  ]),
 );
 
 module.exports = {
@@ -1833,12 +2674,14 @@ module.exports = {
   CORE_LAYER_RENDER_OPTIONS,
   EMPTY_SCALAR_LAYER_RGBA,
   FRONTOGENESIS_PRESENTATION_SMOOTHING_PASSES,
+  INDEXED_PIXEL_FORMAT,
   PRATE_KG_M2_S_TO_IN_HR,
   PRECIP_RATE_TYPE_LOOKUPS,
   PRECIP_VALUE_STOPS,
   REFLECTIVITY_PRECIP_TYPE_LOOKUPS,
   REFLECTIVITY_STOPS,
   REFLECTIVITY_VALUE_STOPS,
+  STATIC_CONTINUOUS_COLOR_LOOKUP_STATE,
   TEMPERATURE_STOPS,
   WIND_STOPS,
   applyCatalogTransform,
@@ -1846,15 +2689,18 @@ module.exports = {
   buildAglHeightMetersGrid,
   buildCatalogRenderOptions,
   buildFrontogenesisPresentationGrid,
+  buildIndexedPalette,
   buildPrecipRateTypeLookups,
   buildReflectivityPrecipTypeLookups,
   createContinuousColorLookup,
   createStepColorLookup,
   detectUniformStepThresholds,
   emptyScalarLayerResult,
+  _encodeRendererOwnedLayerOrEmptyDeferred,
   encodeLayerOrEmpty,
   encodeLayerOrEmptyDeferred,
   encodeRawPng,
+  expandIndexedLayerToRgba,
   findReflectivityPrecipTypeColorOffset,
   findStepColorOffset,
   getCatalogRenderOptions,
@@ -1862,6 +2708,7 @@ module.exports = {
   interpolateRgbaColors,
   interpolateStops,
   isValueInVisibleRange,
+  isIndexedLayer,
   lerpPremultipliedChannel,
   normalizeColorStops,
   normalizeRgbaBytes,
@@ -1869,8 +2716,10 @@ module.exports = {
   renderCatalogParameterLayer,
   renderPrecipRateTypeGrid,
   renderReflectivityGateLayers,
+  renderReflectivityGateIndexedLayers,
   renderReflectivityPrecipTypeGrid,
   renderReflectivityVariants,
+  renderReflectivityVariantsCooperative,
   renderScalarGrid,
   renderScalarGridContinuous,
   renderScalarGridContinuousAffine,

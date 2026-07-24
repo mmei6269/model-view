@@ -18,6 +18,8 @@ next/public/basemap/
 shared/noaa-beta-planned-color-maps.json
 tests-node/fixtures/
 tools/noaa-beta/
+scripts/lib/noaa-beta/generated/snow-rf-conus-v1.json
+scripts/lib/noaa-beta/generated/snow-rf-conus-v1.bin
 
 # Local/editor metadata
 .claude/
