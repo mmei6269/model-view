@@ -56,7 +56,11 @@ export function resolveHoverGridRequestUrls(frame: FrameRecord | null | undefine
     if (!key || Number(ref?.bytes) <= 0) {
       continue;
     }
-    urls.push(buildHoverGridRequestUrl(key, ref?.bytes, ref?.schemaVersion || frame.hoverGridSchemaVersion));
+    const schemaVersion =
+      ref?.schemaVersion === null || ref?.schemaVersion === undefined
+        ? frame.hoverGridSchemaVersion
+        : ref.schemaVersion;
+    urls.push(buildHoverGridRequestUrl(key, ref?.bytes, schemaVersion));
   }
   return urls;
 }
@@ -228,11 +232,27 @@ function buildHoverGridRequestUrl(
   schemaVersion: number | null | undefined,
 ): string {
   const url = buildArtifactUrl(key);
+  const resolvedSchemaVersion = resolveHoverGridSchemaIdentity(schemaVersion);
   return appendQueryParams(url, {
     b: String(Math.max(0, Number(bytes) || 0)),
-    h: String(Math.max(0, Number(schemaVersion) || 0)),
-    f: /\.bin\.gz(?:$|[?#])/i.test(key) ? "bin3" : "json2",
+    h: String(resolvedSchemaVersion),
+    f: /\.bin\.(?:gz|br)(?:$|[?#])/i.test(key) ? `bin${resolvedSchemaVersion}` : "json2",
   });
+}
+
+function resolveHoverGridSchemaIdentity(schemaVersion: number | null | undefined): number {
+  if (schemaVersion === null || schemaVersion === undefined) {
+    return 0;
+  }
+  if (
+    typeof schemaVersion !== "number" ||
+    !Number.isSafeInteger(schemaVersion) ||
+    schemaVersion < 0 ||
+    schemaVersion > 4
+  ) {
+    throw new Error(`Unsupported hover-grid schema identity: ${JSON.stringify(schemaVersion)}`);
+  }
+  return schemaVersion;
 }
 
 function isReflectivityLayer(layer: string): boolean {

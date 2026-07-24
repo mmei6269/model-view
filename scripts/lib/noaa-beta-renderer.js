@@ -18,10 +18,12 @@ const {
 const {
   DETAILED_SYNOPTIC_STYLE,
   DETAILED_SYNOPTIC_STYLE_VERSION,
+  HOVER_GRID_ENCODING,
   HOVER_GRID_SCHEMA_VERSION,
   SYNOPTIC_STYLE_VERSION,
   VIEW_CONFIG,
 } = require("./modelview-runtime");
+const { DEFAULT_HOVER_GRID_COMPRESSION } = require("./hover-grid-compression");
 const {
   CAM_DCAPE_21_LEVEL_PROTOTYPE_KEY,
   EFFECTIVE_STP_100MB_REDUCED_PROTOTYPE_KEY,
@@ -132,7 +134,9 @@ const {
   buildSelectedRecordPlan,
   bulkDecodedRecordOrdinal,
   clearNoaaIndexCachesForTest,
+  commitSelectedGribProvenance,
   decodeSelectedRecordsToGrids,
+  decodedGridOutcome,
   ensureWgrib2Available,
   getFrameSourceProvenanceSources,
   getFrameTemporalProvenanceDerivations,
@@ -140,16 +144,21 @@ const {
   materializeSelectedGrib,
   parseNoaaIdx,
   parseWgribSimpleInventory,
+  probeCachedSelectedGribCandidate,
+  probeMainDecodeWarmPack,
   readOrFetchNoaaContentLengthCached,
   readOrFetchNoaaIdxRecordsCached,
   resolveMainDecodeRegridPayloadHash,
   readOrFetchNoaaIdxTextCached,
   repairNoaaIdxFinalRecordRanges,
+  seedDecodedSelectionRecordCache,
+  selectedGribCacheDescriptor,
   selectedGribRecordsHash,
   takeBulkDecodedRecordBySelectedPlan,
   createNoaaRenderProfile,
   finalizeNoaaRenderProfile,
   createFrameDecodeSession,
+  disposeIsolatedFrameDecodeSession,
   attachRunLocalDecodeSession,
   buildNoaaIndexCacheContext,
 } = require("./noaa-beta/grib-source");
@@ -170,26 +179,27 @@ const {
   normalizeNoaaModelKey,
 } = require("./noaa-beta/model-config");
 const { padHour, recordProfileStage } = require("./noaa-beta/cache-io");
-const { buildHoverGridArtifact, buildHoverGridVariables, recordHoverValueCount } = require("./noaa-beta/hover");
+const { _buildHoverGridVariablePlan, buildHoverGridArtifact, recordHoverValueCount } = require("./noaa-beta/hover");
 const {
   CORE_LAYER_RENDER_OPTIONS,
+  INDEXED_PIXEL_FORMAT,
   buildFrontogenesisPresentationGrid,
   buildPrecipRateTypeLookups,
   buildReflectivityPrecipTypeLookups,
   createContinuousColorLookup,
-  encodeLayerOrEmpty,
-  encodeLayerOrEmptyDeferred,
+  _encodeRendererOwnedLayerOrEmptyDeferred,
   encodeRawPng,
   findReflectivityPrecipTypeColorOffset,
   findStepColorOffset,
   getCatalogRenderOptions,
   interpolateStops,
+  isIndexedLayer,
   maskPressureLevelGridBelowTerrain,
   releaseFrameLocalRasterCaches,
   renderCatalogParameterLayer,
   renderPrecipRateTypeGrid,
   renderReflectivityPrecipTypeGrid,
-  renderReflectivityVariants,
+  renderReflectivityVariantsCooperative,
   renderScalarGrid,
   resolveCatalogPressureLevelMb,
   resolveCatalogSourceGrid,
@@ -211,12 +221,18 @@ const {
 } = require("./noaa-beta/severe");
 const {
   buildDerivedGridCacheContext,
+  buildSupplementalDerivedGridCacheContext,
   readDerivedGridCache,
   scheduleDerivedGridCacheWrite,
 } = require("./noaa-beta/derived-grid-cache");
+const { buildDerivedDecodePlan, expectedProfileGridNamesForSelection } = require("./noaa-beta/derived-decode-plan");
 const { activeParcelKernelId } = require("./noaa-beta/parcel-kernel");
 const { buildProfileDerivedGridsParallel } = require("./noaa-beta/derived-parallel");
 const { createCompressor, getSharedCompressPool, resolveCompressThreads } = require("./noaa-beta/compress-pool");
+const {
+  ArtifactEncodeCoordinator,
+  getArtifactEncodeAdmissionGate,
+} = require("./noaa-beta/artifact-encode-coordinator");
 const { profileDecodeKey, standardProfileDecodeKey } = require("./noaa-beta/profile-access");
 const {
   logPressureInterpolationFraction,
@@ -240,6 +256,32 @@ const REFLECTIVITY_PRECIP_TYPE_LAYER_KEY = "reflectivity1kmPrecipType";
 const SYNOPTIC_DETAILED_MAX_COLS = 360;
 const SYNOPTIC_DETAILED_MAX_ROWS = 224;
 const REALIZED_PRECIP_ACCUMULATION_KEYS = Symbol("realizedPrecipAccumulationKeys");
+const SUPPLEMENTAL_DERIVED_AVAILABILITY_KEYS = Object.freeze([
+  "surfaceBasedLclHeight",
+  "surfaceThetaE",
+  "frontogenesis850",
+  "frontogenesis700",
+]);
+const SUPPLEMENTAL_DERIVED_METHODOLOGY_VERSION = buildSupplementalDerivedMethodologyVersion();
+
+function buildSupplementalDerivedMethodologyVersion(catalog = NOAA_NAM_PARAMETER_CATALOG) {
+  const methodVersions = new Map(
+    (Array.isArray(catalog) ? catalog : [])
+      .filter((entry) => entry?.key && entry?.methodVersion)
+      .map((entry) => [String(entry.key), String(entry.methodVersion)]),
+  );
+  const productMethods = SUPPLEMENTAL_DERIVED_AVAILABILITY_KEYS.map((key) => {
+    const methodVersion = methodVersions.get(key);
+    if (!methodVersion) {
+      throw new Error(`Missing supplemental derived methodVersion for '${key}'.`);
+    }
+    return `${key}:${methodVersion}`;
+  });
+  // The catalog's frontogenesis v4 token describes the scientific method;
+  // this implementation suffix separately pins the renderer's finite-value
+  // sqrt norm introduced in renderer v51.
+  return ["supplemental-derived-v1", ...productMethods, "frontogenesisGradientNorm:direct-sqrt-v1"].join("+");
+}
 
 function catalogCategorySet(catalog) {
   const set = new Set();
@@ -249,6 +291,35 @@ function catalogCategorySet(catalog) {
     }
   }
   return set;
+}
+
+function supplementalDerivedProductsForAvailability(available) {
+  const products = [];
+  for (const key of SUPPLEMENTAL_DERIVED_AVAILABILITY_KEYS) {
+    if (available.has(key) || (key === "surfaceBasedLclHeight" && available.has("significantTornadoParameter"))) {
+      products.push(key);
+    }
+  }
+  return products;
+}
+
+function shouldUseCompressionPool(renderMode, compressThreads) {
+  return (renderMode === "all" || renderMode === "base") && resolveCompressThreads(compressThreads) > 0;
+}
+
+const FAST_PACK_ENV = "MODELVIEW_NOAA_FAST_PACK";
+
+function resolveFastPackMode(value = process.env[FAST_PACK_ENV]) {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalized || normalized === "auto") {
+    return "auto";
+  }
+  if (normalized === "off") {
+    return "off";
+  }
+  throw new Error(`${FAST_PACK_ENV} must be 'auto' or 'off' when set; received ${JSON.stringify(value)}`);
 }
 
 async function renderNoaaGribFrame({
@@ -343,6 +414,9 @@ async function renderNoaaGribFrame({
   }
 
   recordProfileStage(renderProfile, "selectMs", stageStartedAt);
+  const availableForDerived = new Set(selection?.availableParameters || []);
+  const derivedProducts = PROFILE_DERIVED_AVAILABILITY_KEYS.filter((key) => availableForDerived.has(key));
+  const expectedProfileDerivedGridNames = expectedProfileGridNamesForSelection(selection);
   const tempDir = await fs.promises.mkdtemp(
     path.join(tempRoot, `noaa-${resolvedModelKey}-${date}-${cycle}-${padHour(hour)}-`),
   );
@@ -355,6 +429,8 @@ async function renderNoaaGribFrame({
     let decoded = {};
     let mainGribPath = null;
     let mainRegridBinPayloadHashes = null;
+    let derivedCacheContext = null;
+    let precomputedProfileDerived = null;
     if (!precomputeOnlyRender) {
       stageStartedAt = performance.now();
       await ensureSelectedRecordByteRangesForHour({
@@ -374,59 +450,244 @@ async function renderNoaaGribFrame({
       recordProfileStage(renderProfile, "headMs", stageStartedAt);
       const selectedPlan = getSelectedRecordPlan(Object.values(selection.records).filter(Boolean), decodeSession);
       renderProfile.selectedRecordGroups = selectedPlan.groups.length;
-      stageStartedAt = performance.now();
-      const gribPath = await materializeSelectedGrib({
+      const selectedGribDescriptor = selectedGribCacheDescriptor({
         modelKey: resolvedModelKey,
         productKey: modelConfig.productKey,
         gribUrl,
-        recordGroups: selectedPlan.groups,
+        groups: selectedPlan.groups,
         rawCacheDir,
         date,
         cycle,
         hour,
         cacheVersion: CATALOG_VERSION,
-        rangeFetchConcurrency,
-        rangeFetchLimiter,
-        profile: renderProfile,
-        decodeSession,
       });
-      recordProfileStage(renderProfile, "materializeMs", stageStartedAt);
-      // Collect the regrid-bin payload hashes of exactly the frame's main
-      // decode; they pin the decoded grids for the derived-grid cache key.
-      decodeSession.collectRegridBinPayloadHashes = [];
-      decoded = await decodeSelectedRecordsToGrids({
+      const materializeVerifiedSelectedGrib = async () => {
+        const materializeStartedAt = performance.now();
+        const verifiedPath = await materializeSelectedGrib({
+          modelKey: resolvedModelKey,
+          productKey: modelConfig.productKey,
+          gribUrl,
+          recordGroups: selectedPlan.groups,
+          rawCacheDir,
+          date,
+          cycle,
+          hour,
+          cacheVersion: CATALOG_VERSION,
+          rangeFetchConcurrency,
+          rangeFetchLimiter,
+          profile: renderProfile,
+          decodeSession,
+        });
+        recordProfileStage(renderProfile, "materializeMs", materializeStartedAt);
+        return verifiedPath;
+      };
+      const resolveMainDerivedState = async ({ gribPath, knownPayloadHash = undefined }) => {
+        const previousDerivedReadMs = Number(renderProfile.stages.derivedCacheReadMs) || 0;
+        const derivedCacheReadStartedAt = performance.now();
+        const payloadHash =
+          knownPayloadHash !== undefined
+            ? knownPayloadHash
+            : await resolveMainDecodeRegridPayloadHash({
+                gribPath,
+                wgrib2Path,
+                selection,
+                bounds: view.bounds,
+                width,
+                height,
+                decodeSession,
+              });
+        const payloadHashes = payloadHash ? [payloadHash] : null;
+        const cacheContext =
+          payloadHash && Array.isArray(expectedProfileDerivedGridNames) && expectedProfileDerivedGridNames.length > 0
+            ? buildDerivedGridCacheContext({
+                gribPath,
+                regridBinPayloadHashes: payloadHashes,
+                methodologyVersion: `${DERIVED_PROFILE_METHODOLOGY_VERSION}+parcel-${activeParcelKernelId()}`,
+                catalogVersion: CATALOG_VERSION,
+                products: derivedProducts,
+                expectedGridNames: expectedProfileDerivedGridNames,
+                cellCount: width * height,
+              })
+            : null;
+        const precomputed = cacheContext ? await readDerivedGridCache(cacheContext) : null;
+        const derivedDecodePlan = precomputed
+          ? buildDerivedDecodePlan({
+              selection,
+              restoredGrids: precomputed,
+              cellCount: width * height,
+            })
+          : null;
+        const sparseReadPlan =
+          derivedDecodePlan?.valid === true && derivedDecodePlan.omittedDecodeKeys.length > 0
+            ? {
+                ...derivedDecodePlan,
+                regridBinPayloadHash: payloadHash,
+              }
+            : null;
+        recordProfileStage(renderProfile, "derivedCacheReadMs", derivedCacheReadStartedAt);
+        if (previousDerivedReadMs > 0) {
+          renderProfile.stages.derivedCacheReadMs =
+            Math.round((previousDerivedReadMs + renderProfile.stages.derivedCacheReadMs) * 10) / 10;
+        }
+        return { payloadHash, payloadHashes, cacheContext, precomputed, sparseReadPlan };
+      };
+      let gribPath = null;
+      let requiredRegridPack = null;
+      let selectedGribCandidate = null;
+      if (resolveFastPackMode() !== "off" && selectedGribDescriptor.cachePath) {
+        incrementProfileCounter(renderProfile, "selectedGribFastPackProbes");
+        const packProbeStartedAt = performance.now();
+        selectedGribCandidate = await probeCachedSelectedGribCandidate(selectedGribDescriptor);
+        if (selectedGribCandidate) {
+          try {
+            requiredRegridPack = await probeMainDecodeWarmPack({
+              gribPath: selectedGribCandidate.gribPath,
+              selectedMetadata: selectedGribCandidate.metadata,
+              wgrib2Path,
+              selection,
+              bounds: view.bounds,
+              width,
+              height,
+            });
+          } catch {
+            incrementProfileCounter(renderProfile, "selectedGribFastPackFallbacks");
+            requiredRegridPack = null;
+          }
+        }
+        if (requiredRegridPack) {
+          incrementProfileCounter(renderProfile, "selectedGribFastPackMetadataHits");
+        }
+        recordProfileStage(renderProfile, "selectedGribPackProbeMs", packProbeStartedAt);
+      }
+      if (requiredRegridPack) {
+        gribPath = selectedGribCandidate.gribPath;
+      } else {
+        gribPath = await materializeVerifiedSelectedGrib();
+      }
+      let mainDerivedState = await resolveMainDerivedState({
         gribPath,
-        selectedPlan,
-        selection,
-        hour,
-        tempDir,
-        wgrib2Path,
-        bounds: view.bounds,
-        width,
-        height,
-        decodeConcurrency,
-        profile: renderProfile,
-        decodeSession,
+        knownPayloadHash: requiredRegridPack ? requiredRegridPack.payloadHash : undefined,
       });
-      mainGribPath = gribPath;
-      mainRegridBinPayloadHashes = decodeSession.collectRegridBinPayloadHashes;
-      decodeSession.collectRegridBinPayloadHashes = null;
-      if (mainRegridBinPayloadHashes.length === 0 && decodeSession.lastRecordCacheAllBulkDecoded === true) {
-        // The decode was served entirely from bulk-seeded run-local registry
-        // entries; rebuild the regrid-bin payload hash the bulk path would
-        // have recorded so the derived-grid cache still engages on warm
-        // in-process paths.
-        const reconstructed = await resolveMainDecodeRegridPayloadHash({
+      if (requiredRegridPack) {
+        const provisionalDecodeSession = createFrameDecodeSession(renderProfile);
+        let fastPackDecodeError = null;
+        try {
+          decoded = await decodeSelectedRecordsToGrids({
+            gribPath,
+            selectedPlan,
+            selection,
+            hour,
+            tempDir,
+            wgrib2Path,
+            bounds: view.bounds,
+            width,
+            height,
+            decodeConcurrency,
+            sparseReadPlan: mainDerivedState.sparseReadPlan,
+            profile: renderProfile,
+            decodeSession: provisionalDecodeSession,
+            requiredRegridPack,
+          });
+          const warmOutcome = decodedGridOutcome(decoded);
+          if (
+            !["regrid-pack", "regrid-pack-sparse"].includes(warmOutcome?.source) ||
+            warmOutcome?.payloadHash !== requiredRegridPack.payloadHash
+          ) {
+            throw new Error("Strict NOAA warm-pack decode returned an unexpected source identity.");
+          }
+        } catch (error) {
+          fastPackDecodeError = error;
+        }
+        if (!fastPackDecodeError) {
+          const source = commitSelectedGribProvenance(decodeSession, gribPath, selectedGribCandidate.provenanceSource);
+          seedDecodedSelectionRecordCache({
+            decoded,
+            selection,
+            hour,
+            bounds: view.bounds,
+            width,
+            height,
+            decodeSession,
+            sourceRef: source.id,
+          });
+          renderProfile.selectedGribCacheHit = true;
+          incrementProfileCounter(renderProfile, "selectedGribCacheHits");
+          incrementProfileCounter(renderProfile, "selectedGribHashBypasses");
+          renderProfile.selectedGribHashBypassBytes =
+            (Number(renderProfile.selectedGribHashBypassBytes) || 0) +
+            Number(selectedGribCandidate.metadata.selectedBytes);
+          disposeIsolatedFrameDecodeSession(provisionalDecodeSession);
+        } else {
+          incrementProfileCounter(renderProfile, "selectedGribFastPackFallbacks");
+          // The provisional session is intentionally abandoned wholesale:
+          // no record grids, provenance, promises, or stale pack context can
+          // cross into the verified retry.
+          disposeIsolatedFrameDecodeSession(provisionalDecodeSession);
+          decoded = {};
+          mainDerivedState = null;
+          requiredRegridPack = null;
+          selectedGribCandidate = null;
+          gribPath = await materializeVerifiedSelectedGrib();
+          mainDerivedState = await resolveMainDerivedState({ gribPath });
+          decoded = await decodeSelectedRecordsToGrids({
+            gribPath,
+            selectedPlan,
+            selection,
+            hour,
+            tempDir,
+            wgrib2Path,
+            bounds: view.bounds,
+            width,
+            height,
+            decodeConcurrency,
+            sparseReadPlan: mainDerivedState.sparseReadPlan,
+            profile: renderProfile,
+            decodeSession,
+          });
+        }
+      } else {
+        decoded = await decodeSelectedRecordsToGrids({
           gribPath,
+          selectedPlan,
+          selection,
+          hour,
+          tempDir,
           wgrib2Path,
           bounds: view.bounds,
           width,
           height,
+          decodeConcurrency,
+          sparseReadPlan: mainDerivedState.sparseReadPlan,
+          profile: renderProfile,
           decodeSession,
         });
-        if (reconstructed) {
-          mainRegridBinPayloadHashes = [reconstructed];
-        }
+      }
+      mainGribPath = gribPath;
+      const mainRegridBinPayloadHash = mainDerivedState.payloadHash;
+      mainRegridBinPayloadHashes = mainDerivedState.payloadHashes;
+      derivedCacheContext = mainDerivedState.cacheContext;
+      precomputedProfileDerived = mainDerivedState.precomputed;
+      const mainDecodeOutcome = decodedGridOutcome(decoded);
+      const outcomeUsesExpectedPack =
+        (mainDecodeOutcome?.source === "record-cache" &&
+          mainDecodeOutcome.allBulkDecoded === true &&
+          mainDecodeOutcome.payloadHash === mainRegridBinPayloadHash) ||
+        (["regrid-pack", "regrid-pack-sparse", "bulk-cold"].includes(mainDecodeOutcome?.source) &&
+          Boolean(mainRegridBinPayloadHash) &&
+          mainDecodeOutcome?.payloadHash === mainRegridBinPayloadHash);
+      if (outcomeUsesExpectedPack && derivedCacheContext) {
+        incrementProfileCounter(
+          renderProfile,
+          precomputedProfileDerived ? "derivedGridCacheHits" : "derivedGridCacheMisses",
+        );
+      }
+      if (!outcomeUsesExpectedPack) {
+        // Legacy fallback and any unrecognized/mismatched outcome must compute
+        // derived grids from the grids actually returned by that call. Never
+        // adopt or publish a sidecar under a pack identity that was not used.
+        mainRegridBinPayloadHashes = null;
+        derivedCacheContext = null;
+        precomputedProfileDerived = null;
       }
     }
     // The "decodeMs" stage recorded from this reset spans the grid-construction
@@ -651,33 +912,37 @@ async function renderNoaaGribFrame({
       );
     }
     if (!precomputeOnlyRender) {
-      // Derived-grid disk cache: the profile-derived severe products are a
-      // pure function of the main decode (pinned by its regrid-bin payload
-      // hashes), the methodology/catalog versions, and the requested
-      // product set. A hit restores the exact Float32 bytes the compute
-      // path would produce; anything else recomputes and persists.
-      const availableForDerived = new Set(selection?.availableParameters || []);
-      const derivedProducts = PROFILE_DERIVED_AVAILABILITY_KEYS.filter((key) => availableForDerived.has(key));
-      const derivedCacheContext =
+      // Exact derived-grid sidecars are pure functions of the main decode
+      // (pinned by its regrid-bin payload hashes), methodology/catalog
+      // versions, and requested product rosters. The established profile
+      // cache holds parcel/profile products; a separate checksummed sidecar
+      // holds the four expensive supplemental raw grids (surface LCL,
+      // theta-e and 850/700-mb frontogenesis). Keeping the families separate
+      // avoids invalidating the larger profile cache when either method set
+      // changes. Any read/validation failure falls through to normal compute.
+      const supplementalDerivedProducts = supplementalDerivedProductsForAvailability(availableForDerived);
+      const canCacheDerived =
         mainGribPath &&
         Array.isArray(mainRegridBinPayloadHashes) &&
         mainRegridBinPayloadHashes.length > 0 &&
-        mainRegridBinPayloadHashes.every(Boolean)
-          ? buildDerivedGridCacheContext({
-              gribPath: mainGribPath,
-              regridBinPayloadHashes: mainRegridBinPayloadHashes,
-              methodologyVersion: `${DERIVED_PROFILE_METHODOLOGY_VERSION}+parcel-${activeParcelKernelId()}`,
-              catalogVersion: CATALOG_VERSION,
-              products: derivedProducts,
-              cellCount: width * height,
-            })
-          : null;
-      let precomputedProfileDerived = null;
-      if (derivedCacheContext) {
-        precomputedProfileDerived = await readDerivedGridCache(derivedCacheContext);
+        mainRegridBinPayloadHashes.every(Boolean);
+      const supplementalDerivedCacheContext = canCacheDerived
+        ? buildSupplementalDerivedGridCacheContext({
+            gribPath: mainGribPath,
+            regridBinPayloadHashes: mainRegridBinPayloadHashes,
+            methodologyVersion: SUPPLEMENTAL_DERIVED_METHODOLOGY_VERSION,
+            catalogVersion: CATALOG_VERSION,
+            products: supplementalDerivedProducts,
+            cellCount: width * height,
+          })
+        : null;
+      const precomputedSupplementalDerived = supplementalDerivedCacheContext
+        ? await readDerivedGridCache(supplementalDerivedCacheContext)
+        : null;
+      if (supplementalDerivedCacheContext) {
         incrementProfileCounter(
           renderProfile,
-          precomputedProfileDerived ? "derivedGridCacheHits" : "derivedGridCacheMisses",
+          precomputedSupplementalDerived ? "supplementalDerivedGridCacheHits" : "supplementalDerivedGridCacheMisses",
         );
       }
       let parallelProfileDerived = null;
@@ -698,6 +963,8 @@ async function renderNoaaGribFrame({
         }
       }
       const profileDerivedCapture = derivedCacheContext && !precomputedProfileDerived ? {} : null;
+      const supplementalDerivedCapture =
+        supplementalDerivedCacheContext && !precomputedSupplementalDerived ? { grids: {} } : null;
       Object.assign(
         decoded,
         buildDerivedParameterGrids({
@@ -709,7 +976,9 @@ async function renderNoaaGribFrame({
           height,
           profile: renderProfile,
           precomputedProfileDerived,
+          precomputedSupplementalDerived,
           profileDerivedCapture,
+          supplementalDerivedCapture,
         }),
       );
       const derivedGridsToPersist =
@@ -722,55 +991,66 @@ async function renderNoaaGribFrame({
         // completion, so pool shutdown cannot strand a temporary file.
         void scheduleDerivedGridCacheWrite(derivedCacheContext, derivedGridsToPersist);
       }
+      const supplementalGridsToPersist = supplementalDerivedCapture?.grids;
+      if (
+        supplementalGridsToPersist &&
+        Object.keys(supplementalGridsToPersist).length === supplementalDerivedProducts.length &&
+        supplementalDerivedCacheContext
+      ) {
+        void scheduleDerivedGridCacheWrite(supplementalDerivedCacheContext, supplementalGridsToPersist);
+      }
     }
     recordProfileStage(renderProfile, "decodeMs", stageStartedAt);
 
     stageStartedAt = performance.now();
-    // Compression pool: PNG deflate + hover gzip run on helper threads and
+    // Compression pool: PNG deflate + hover gzip/Brotli run on helper threads and
     // overlap the raster/quantize work; a dead/absent pool degrades per call
     // to the identical inline codec. Snow/prefix parts keep inline encodes
     // (few small layers; not worth the round trip). Layer encodes submit the
-    // shared png-encode scanline scratch (released right after the synchronous
-    // submit clone) via layerEncodeContext; hover keeps the plain compressor.
+    // exact renderer-owned PNG scanline slabs via the raster-private encode
+    // gate; eligible MVH4 hover quantizes directly into one immutable arena
+    // only after the same admission. Generic compressor callers retain
+    // structured-clone isolation.
     const compressCounters = { jobs: 0, fallbacks: 0 };
-    const compressEnabled = resolveCompressThreads(compressThreads) > 0;
+    const compressEnabled = shouldUseCompressionPool(renderMode, compressThreads);
     const compressPool = compressEnabled ? getSharedCompressPool(compressThreads) : null;
     const compress = compressEnabled ? createCompressor(compressPool, compressCounters) : null;
     const layerEncodeContext = compressEnabled ? { pool: compressPool, counters: compressCounters } : null;
-    const renderedArtifacts =
-      renderMode === "snow-delta" || renderMode === "snow-prefix" || renderMode === "runmax-prefix"
-        ? buildSnowDeltaRenderedArtifacts({ framePlan })
-        : renderMode === "snow"
-          ? buildSnowRenderedArtifacts({
-              decoded,
-              selection,
-              framePlan,
-              bounds: view.bounds,
-              modelKey: resolvedModelKey,
-              width,
-              height,
-              pngCompressionLevel,
-              pngFilterType,
-              hoverGridFormat,
-              profile: renderProfile,
-            })
-          : buildRenderedArtifacts({
-              decoded,
-              selection,
-              framePlan,
-              bounds: view.bounds,
-              modelKey: resolvedModelKey,
-              width,
-              height,
-              reflectivityGates,
-              pngCompressionLevel,
-              pngFilterType,
-              hoverGridFormat,
-              profile: renderProfile,
-              sciencePrototypes: normalizeSciencePrototypeIds(renderSelection),
-              compress,
-              layerEncodeContext,
-            });
+    const renderedArtifacts = await (renderMode === "snow-delta" ||
+    renderMode === "snow-prefix" ||
+    renderMode === "runmax-prefix"
+      ? buildSnowDeltaRenderedArtifacts({ framePlan })
+      : renderMode === "snow"
+        ? buildSnowRenderedArtifacts({
+            decoded,
+            selection,
+            framePlan,
+            bounds: view.bounds,
+            modelKey: resolvedModelKey,
+            width,
+            height,
+            pngCompressionLevel,
+            pngFilterType,
+            hoverGridFormat,
+            profile: renderProfile,
+          })
+        : buildRenderedArtifacts({
+            decoded,
+            selection,
+            framePlan,
+            bounds: view.bounds,
+            modelKey: resolvedModelKey,
+            width,
+            height,
+            reflectivityGates,
+            pngCompressionLevel,
+            pngFilterType,
+            hoverGridFormat,
+            profile: renderProfile,
+            sciencePrototypes: normalizeSciencePrototypeIds(renderSelection),
+            compress,
+            layerEncodeContext,
+          }));
     if (renderedArtifacts.pendingEncodes) {
       // Only the codec time the pool could not hide behind the render work
       // above; the scanline/pack passes already ran on this thread.
@@ -782,6 +1062,19 @@ async function renderNoaaGribFrame({
     if (compress) {
       renderProfile.compressPoolJobs = compressCounters.jobs;
       renderProfile.compressPoolFallbacks = compressCounters.fallbacks;
+      renderProfile.compressOwnedInputJobs = Number(compressCounters.ownedInputJobs) || 0;
+      renderProfile.compressOwnedInputBytes = Number(compressCounters.ownedInputBytes) || 0;
+      renderProfile.compressOwnedInputFallbacks = Number(compressCounters.ownedInputFallbacks) || 0;
+      renderProfile.compressOwnedInputRebuilds = Number(compressCounters.ownedInputRebuilds) || 0;
+      renderProfile.compressSharedInputJobs = Number(compressCounters.sharedInputJobs) || 0;
+      renderProfile.compressSharedInputBytes = Number(compressCounters.sharedInputBytes) || 0;
+      renderProfile.compressSharedInputViewBytes = Number(compressCounters.sharedInputViewBytes) || 0;
+      renderProfile.compressSharedInputBackingBytes = Number(compressCounters.sharedInputBackingBytes) || 0;
+      renderProfile.compressSharedInputMaxBytes = Number(compressCounters.sharedInputMaxBytes) || 0;
+      renderProfile.compressSharedInputUniqueOwners = Number(compressCounters.sharedInputUniqueOwners) || 0;
+      renderProfile.compressSharedInputFallbacks = Number(compressCounters.sharedInputFallbacks) || 0;
+      renderProfile.compressTransportRetainedLiveBytes = Number(compressCounters.transportRetainedLiveBytes) || 0;
+      renderProfile.compressTransportPeakLiveBytes = Number(compressCounters.transportPeakLiveBytes) || 0;
     }
     recordProfileStage(renderProfile, "artifactsMs", stageStartedAt);
     const sourceProvenance = buildFrameSourceProvenance({
@@ -808,7 +1101,75 @@ async function renderNoaaGribFrame({
   }
 }
 
-function buildRenderedArtifacts({
+async function buildRenderedArtifacts(args) {
+  const pool = args?.layerEncodeContext?.pool;
+  const poolMaxPending = pool && !pool.dead ? Math.max(1, Number(pool.maxPending) || resolveCompressThreads(1) * 2) : 1;
+  const coordinator =
+    args?.layerEncodeContext || typeof args?.compress === "function"
+      ? new ArtifactEncodeCoordinator(poolMaxPending, {
+          admissionGate: pool && !pool.dead ? getArtifactEncodeAdmissionGate(pool, poolMaxPending) : null,
+        })
+      : null;
+  const layerEncodeContext = args?.layerEncodeContext
+    ? { ...args.layerEncodeContext, coordinator }
+    : args?.layerEncodeContext;
+  let artifacts = null;
+  let buildError = null;
+  let drainError = null;
+  try {
+    artifacts = await buildRenderedArtifactsCooperative({
+      ...args,
+      compress: args?.compress,
+      layerEncodeContext,
+      encodeCoordinator: coordinator,
+    });
+  } catch (error) {
+    buildError = error;
+  }
+  const compressionDrainStartedAt = performance.now();
+  if (coordinator) {
+    try {
+      await coordinator.drain();
+    } catch (error) {
+      drainError = error;
+    }
+  }
+  const hadPendingEncodes = Boolean(artifacts?.pendingEncodes);
+  if (artifacts?.pendingEncodes) {
+    try {
+      await Promise.all(artifacts.pendingEncodes);
+    } catch (error) {
+      drainError ||= error;
+    }
+    delete artifacts.pendingEncodes;
+  }
+  const compressWaitMs = performance.now() - compressionDrainStartedAt;
+  // Success releases at the last raster boundary inside the cooperative
+  // builder. Repeat the idempotent cleanup here for exceptions that exit
+  // before that boundary.
+  releaseFrameLocalRasterCaches(args?.decoded);
+  if (args?.profile && (coordinator || hadPendingEncodes)) {
+    args.profile.stages ||= {};
+    if (coordinator) {
+      const telemetry = coordinator.telemetry();
+      args.profile.artifactEncodeCheckpoints = telemetry.checkpoints;
+      args.profile.artifactEncodePeakActive = telemetry.peakActive;
+      args.profile.artifactEncodePeakQueued = telemetry.peakQueued;
+      args.profile.artifactEncodeSubmitted = telemetry.submitted;
+      args.profile.stages.artifactBackpressureMs = telemetry.backpressureMs;
+    }
+    args.profile.stages.compressWaitMs = compressWaitMs;
+  }
+  if (buildError) {
+    throw buildError;
+  }
+  if (drainError) {
+    throw drainError;
+  }
+  return artifacts;
+}
+
+async function buildRenderedArtifactsCooperative({
   decoded,
   selection,
   framePlan,
@@ -824,6 +1185,7 @@ function buildRenderedArtifacts({
   sciencePrototypes = [],
   compress = null,
   layerEncodeContext = null,
+  encodeCoordinator = null,
 }) {
   let stageStartedAt = performance.now();
   const temperatureF = transformGridAffine(decoded.temperature2m, 9 / 5, -459.67);
@@ -878,18 +1240,55 @@ function buildRenderedArtifacts({
     }
   }
   const hoverValueCounts = new Map();
-  // PNG deflate and hover gzip are deterministic pure functions of
+  // PNG deflate and hover gzip/Brotli are deterministic pure functions of
   // (bytes, level); the compression pool runs them on helper threads so they
   // overlap the remaining raster/quantize work instead of serializing after
   // it. `compress` serves the hover artifact (null = inline sync codecs, the
   // exact pre-pool behavior); layer PNGs go through `layerEncodeContext`
-  // ({pool, counters} or null), which builds each layer's scanlines in the
-  // shared png-encode scratch slot and releases it right after the pool's
-  // synchronous submit clone. Deferred descriptors resolve when the caller
-  // awaits the returned pendingEncodes, before anything reads them.
+  // ({pool, counters} or null). The renderer-private raster gate checks out an
+  // exact scanline owner only after coordinator admission, transfers it, and
+  // recycles a valid returned slab. Deferred descriptors resolve when the
+  // caller awaits pendingEncodes, before anything reads them.
   const pendingEncodes = [];
+  const categoricalOutputFormat = Number(pngFilterType) === 0 ? INDEXED_PIXEL_FORMAT : "rgba8";
+  const waitForEncodeCapacity = async () => {
+    if (encodeCoordinator) {
+      await encodeCoordinator.waitForCapacity();
+    }
+  };
+  const waitForEncodeIdle = async () => {
+    if (encodeCoordinator) {
+      await encodeCoordinator.waitForIdle();
+    }
+  };
+  // The production roster has three reflectivity thresholds. Keep it in one
+  // fused grid scan even when a one-thread pool admits only one or two codec
+  // jobs, while bounding unusual caller-supplied rosters to at most eight
+  // simultaneously materialized pixel planes.
+  const reflectivityEncodeBatchSize = Math.min(8, Math.max(4, Math.floor(Number(encodeCoordinator?.maxActive) || 4)));
+  const encodeBackpressureMs = () => Number(encodeCoordinator?.backpressureMs) || 0;
+  const recordExclusiveArtifactStage = (key, startedAt, backpressureAtStart, excludedMs = 0) => {
+    if (!profile || !key || !Number.isFinite(startedAt)) {
+      return;
+    }
+    profile.stages[key] = Math.max(
+      0,
+      performance.now() -
+        startedAt -
+        Math.max(0, Number(excludedMs) || 0) -
+        Math.max(0, encodeBackpressureMs() - backpressureAtStart),
+    );
+  };
   const deferLayerEncode = (layer) => {
-    const { descriptor, pending } = encodeLayerOrEmptyDeferred(
+    if (profile && layer?.visibleCount > 0 && isIndexedLayer(layer, width, height)) {
+      const cols = Math.max(0, Math.round(Number(width) || 0));
+      const rows = Math.max(0, Math.round(Number(height) || 0));
+      profile.indexedPngJobs = (Number(profile.indexedPngJobs) || 0) + 1;
+      profile.indexedPngRawBytes = (Number(profile.indexedPngRawBytes) || 0) + Math.max(0, (cols + 1) * rows);
+      profile.indexedPngRgbaRawBytesAvoided =
+        (Number(profile.indexedPngRgbaRawBytesAvoided) || 0) + Math.max(0, cols * rows * 3);
+    }
+    const { descriptor, pending } = _encodeRendererOwnedLayerOrEmptyDeferred(
       layer,
       emptyPng,
       width,
@@ -914,6 +1313,7 @@ function buildRenderedArtifacts({
   recordProfileStage(profile, "artifactPrepMs", stageStartedAt);
 
   stageStartedAt = performance.now();
+  const coreBackpressureStartedAt = encodeBackpressureMs();
   const temperatureLayer = renderScalarGrid({
     values: temperatureF,
     width,
@@ -923,6 +1323,74 @@ function buildRenderedArtifacts({
   setParameterAvailability(parameterAvailability, "temperature", renderedLayerHasValidData(temperatureLayer));
   layers.temperature = encodeTrackedLayer("temperature", temperatureLayer);
 
+  // Submit the first core PNG before packing hover, then submit the much
+  // larger hover body as the second codec job. Only temperature has recorded
+  // its hoverValueCounts entry at this point, so the legacy all-empty
+  // shortcut can fire for temperature alone; the explicit tracked-grid shape
+  // gate rejects length-mismatched grids for every tracked key, and
+  // well-formed all-invalid grids are still excluded downstream by the
+  // per-variable validCount filter when variables are added.
+  const hoverGridStartedAt = performance.now();
+  const hoverGrid = buildHoverGridArtifact({
+    width,
+    height,
+    variablePlan: _buildHoverGridVariablePlan({
+      decoded,
+      selection,
+      modelKey,
+      temperatureF,
+      windMph,
+      precipIn,
+      precipAccumulationIn,
+      snowfallIn,
+      reflectivityCompositeDbz,
+      reflectivity1kmDbz,
+      pressureHpa,
+      width,
+      height,
+      getWindSpeedGrid,
+      hoverValueCounts,
+      preDeltaEncode: HOVER_GRID_ENCODING.preDeltaEncode && String(hoverGridFormat || "").toLowerCase() === "binary",
+      preGradient:
+        HOVER_GRID_ENCODING.predictor === "gradient2d" && String(hoverGridFormat || "").toLowerCase() === "binary",
+      requireTrackedGridShape: true,
+    }),
+    format: hoverGridFormat,
+    compress,
+    coordinator: encodeCoordinator,
+  });
+  const recordHoverArtifactProfile = () => {
+    if (profile && hoverGrid?.diagnostics) {
+      profile.hoverQuantization = hoverGrid.diagnostics;
+    }
+    if (profile && hoverGrid?.arenaTelemetry) {
+      profile.hoverArena = hoverGrid.arenaTelemetry;
+    }
+    if (profile && hoverGrid?.arenaFallbackReason) {
+      profile.hoverArenaFallbackReason = hoverGrid.arenaFallbackReason;
+    }
+  };
+  if (hoverGrid?.pending) {
+    // Own the derived descriptor mutation promise immediately as well as the
+    // coordinator-owned compressor root.
+    void hoverGrid.pending.catch(() => {});
+    const profiledHoverPending = hoverGrid.pending.then(recordHoverArtifactProfile);
+    void profiledHoverPending.catch(() => {});
+    pendingEncodes.push(profiledHoverPending);
+  } else {
+    recordHoverArtifactProfile();
+  }
+  const hoverGridCallDurationMs = performance.now() - hoverGridStartedAt;
+  const hoverGridPackedDuringCall = Number.isFinite(hoverGrid?.packDurationMs);
+  const readHoverGridDurationMs = () =>
+    hoverGridCallDurationMs + (hoverGridPackedDuringCall ? 0 : Math.max(0, Number(hoverGrid?.packDurationMs) || 0));
+  // The trusted direct path allocates and packs synchronously once its
+  // coordinator entry is admitted. Under a tighter/shared admission cap, the
+  // scheduled start temporarily retains only its source plan; the next
+  // capacity checkpoint admits the arena before more raster owners are
+  // produced. Account for deferred packing explicitly in hoverGridMs.
+
+  await waitForEncodeCapacity();
   const windLayer = renderScalarGrid({
     values: windMph,
     width,
@@ -932,11 +1400,13 @@ function buildRenderedArtifacts({
   setParameterAvailability(parameterAvailability, "wind", renderedLayerHasValidData(windLayer));
   layers.wind = encodeTrackedLayer("wind", windLayer);
 
+  await waitForEncodeCapacity();
   const precipLayer = renderScalarGrid({
     values: precipIn,
     width,
     height,
     ...CORE_LAYER_RENDER_OPTIONS.precip,
+    outputFormat: categoricalOutputFormat,
   });
   setParameterAvailability(parameterAvailability, "precip", renderedLayerHasValidData(precipLayer));
   layers.precip = encodeTrackedLayer("precip", precipLayer);
@@ -945,18 +1415,20 @@ function buildRenderedArtifacts({
     if (layerKey === "precip") {
       continue;
     }
+    await waitForEncodeCapacity();
     const layer = renderScalarGrid({
       values,
       width,
       height,
       ...CORE_LAYER_RENDER_OPTIONS.precip,
+      outputFormat: categoricalOutputFormat,
     });
     setParameterAvailability(parameterAvailability, layerKey, renderedLayerHasValidData(layer));
     layers[layerKey] = encodeTrackedLayer(layerKey, layer);
   }
 
   const reflectivityVariantsByLayer = {};
-  const reflectivityVariants = renderReflectivityVariants({
+  const reflectivityVariants = await renderReflectivityVariantsCooperative({
     values: reflectivityCompositeDbz,
     width,
     height,
@@ -965,6 +1437,10 @@ function buildRenderedArtifacts({
     pngCompressionLevel,
     pngFilterType,
     encodeLayer: deferLayerEncode,
+    waitForEncodeCapacity,
+    waitForEncodeIdle,
+    maxBatchSize: reflectivityEncodeBatchSize,
+    outputFormat: categoricalOutputFormat,
   });
   reflectivityVariantsByLayer.reflectivityComposite = reflectivityVariants;
   layers.reflectivityComposite = pickDefaultReflectivityArtifact(reflectivityVariants) || encodeRawPng(emptyPng);
@@ -979,7 +1455,7 @@ function buildRenderedArtifacts({
   setParameterAvailability(parameterAvailability, "reflectivity", reflectivityCompositeAvailable);
 
   if (reflectivity1kmDbz) {
-    const reflectivity1kmVariants = renderReflectivityVariants({
+    const reflectivity1kmVariants = await renderReflectivityVariantsCooperative({
       values: reflectivity1kmDbz,
       width,
       height,
@@ -988,6 +1464,10 @@ function buildRenderedArtifacts({
       pngCompressionLevel,
       pngFilterType,
       encodeLayer: deferLayerEncode,
+      waitForEncodeCapacity,
+      waitForEncodeIdle,
+      maxBatchSize: reflectivityEncodeBatchSize,
+      outputFormat: categoricalOutputFormat,
     });
     reflectivityVariantsByLayer.reflectivity1km = reflectivity1kmVariants;
     layers.reflectivity1km = pickDefaultReflectivityArtifact(reflectivity1kmVariants) || encodeRawPng(emptyPng);
@@ -998,6 +1478,7 @@ function buildRenderedArtifacts({
     hasFiniteGridData(reflectivity1kmDbz, width, height),
   );
   if (selection.availableParameters?.includes(REFLECTIVITY_PRECIP_TYPE_LAYER_KEY)) {
+    await waitForEncodeCapacity();
     const precipTypeAvailable = hasColocatedFiniteGridData(
       [
         reflectivity1kmDbz,
@@ -1019,12 +1500,19 @@ function buildRenderedArtifacts({
         sleet: decoded.precipTypeIcePellets,
         width,
         height,
+        outputFormat: categoricalOutputFormat,
       }),
     );
+    await waitForEncodeCapacity();
   }
-  recordProfileStage(profile, "corePngMs", stageStartedAt);
+  // A deferred pack executes inside waitForCapacity(), whose backpressure
+  // clock already includes that admitted synchronous CPU. Exclude only the
+  // original call here; subtracting the deferred pack again would understate
+  // corePngMs. hoverGridMs below still reports both pieces.
+  recordExclusiveArtifactStage("corePngMs", stageStartedAt, coreBackpressureStartedAt, hoverGridCallDurationMs);
 
   stageStartedAt = performance.now();
+  const catalogBackpressureStartedAt = encodeBackpressureMs();
   for (const entry of selection.catalog || NOAA_NAM_PARAMETER_CATALOG) {
     if (!isEntryAvailable(entry)) {
       continue;
@@ -1035,6 +1523,7 @@ function buildRenderedArtifacts({
     if (layers[entry.key] || isReflectivityLayerKey(entry.key)) {
       continue;
     }
+    await waitForEncodeCapacity();
     if (entry.kind === "precipRateType") {
       const precipRateTypeAvailable = hasColocatedFiniteGridData(
         [
@@ -1056,6 +1545,7 @@ function buildRenderedArtifacts({
         sleet: decoded?.[entry.precipTypeKeys?.sleet],
         width,
         height,
+        outputFormat: categoricalOutputFormat,
       });
       if (layer) {
         layers[entry.key] = deferLayerEncode(layer);
@@ -1134,8 +1624,9 @@ function buildRenderedArtifacts({
     setParameterAvailability(parameterAvailability, entry.key, layerAvailable);
     layers[entry.key] = encodeTrackedLayer(entry.key, layer);
   }
-  recordProfileStage(profile, "catalogPngMs", stageStartedAt);
+  recordExclusiveArtifactStage("catalogPngMs", stageStartedAt, catalogBackpressureStartedAt);
 
+  await waitForEncodeCapacity();
   stageStartedAt = performance.now();
   const detailedPressurePayload = buildSynopticDetailGridPayload(pressureHpa, width, height);
   const detailedThicknessPayload = buildSynopticDetailGridPayload(thicknessDam, width, height);
@@ -1202,41 +1693,19 @@ function buildRenderedArtifacts({
   layers.synoptic = deferLayerEncode(synopticImage);
   recordProfileStage(profile, "synopticMs", stageStartedAt);
 
-  stageStartedAt = performance.now();
-  const hoverVariables = buildHoverGridVariables({
-    decoded,
-    selection,
-    modelKey,
-    temperatureF,
-    windMph,
-    precipIn,
-    precipAccumulationIn,
-    snowfallIn,
-    reflectivityCompositeDbz,
-    reflectivity1kmDbz,
-    pressureHpa,
-    width,
-    height,
-    getWindSpeedGrid,
-    hoverValueCounts,
-  });
-  const hoverGrid = buildHoverGridArtifact({
-    width,
-    height,
-    variables: hoverVariables,
-    format: hoverGridFormat,
-    compress,
-  });
-  if (hoverGrid?.pending) {
-    pendingEncodes.push(hoverGrid.pending);
-  }
-  if (profile && hoverGrid?.diagnostics) {
-    profile.hoverQuantization = hoverGrid.diagnostics;
-  }
-  recordProfileStage(profile, "hoverGridMs", stageStartedAt);
-  // The hover pass is the last consumer of the shared masked-grid copies.
+  // Hover has passed a capacity checkpoint, so its admitted start has
+  // materialized the immutable arena (or the fully preflighted legacy
+  // fallback); every queued PNG job owns immutable RGBA/index data. No codec
+  // fallback reads decoded pressure-level grids, so release the large masked
+  // source caches at the original last-raster boundary rather than retaining
+  // them through final compression drain.
   releaseFrameLocalRasterCaches(decoded);
-
+  await waitForEncodeCapacity();
+  if (profile) {
+    // Preserve the serialized stage-key order even though the measured work
+    // moved earlier in the frame.
+    profile.stages.hoverGridMs = readHoverGridDurationMs();
+  }
   return {
     pendingEncodes: pendingEncodes.length > 0 ? pendingEncodes : null,
     hour: Number(framePlan.hour),
@@ -1435,12 +1904,17 @@ function buildDerivedParameterGrids({
   height,
   profile = null,
   precomputedProfileDerived = null,
+  precomputedSupplementalDerived = null,
   profileDerivedCapture = null,
+  supplementalDerivedCapture = null,
 }) {
   const startedAt = performance.now();
   const out = {};
   const cellCount = Math.round(Number(width) * Number(height));
   const available = new Set(selection?.availableParameters || []);
+  const supplementalCaptureGrids = supplementalDerivedCapture
+    ? supplementalDerivedCapture.grids || (supplementalDerivedCapture.grids = {})
+    : null;
   if (!decoded || !Number.isFinite(cellCount) || cellCount <= 0) {
     recordProfileStage(profile, "derivedGridMs", startedAt);
     return out;
@@ -1520,7 +1994,19 @@ function buildDerivedParameterGrids({
     ),
   );
 
-  const surfaceThermo = buildSurfaceThermoDerivedGrids(decoded, available, cellCount);
+  const surfaceThermo = precomputedSupplementalDerived
+    ? {
+        surfaceBasedLclHeight: precomputedSupplementalDerived.surfaceBasedLclHeight,
+        surfaceThetaE: precomputedSupplementalDerived.surfaceThetaE,
+      }
+    : buildSurfaceThermoDerivedGrids(decoded, available, cellCount);
+  if (supplementalCaptureGrids && !precomputedSupplementalDerived) {
+    for (const key of ["surfaceBasedLclHeight", "surfaceThetaE"]) {
+      if (surfaceThermo[key]) {
+        supplementalCaptureGrids[key] = surfaceThermo[key];
+      }
+    }
+  }
   addGrid("surfaceBasedLclHeight", surfaceThermo.surfaceBasedLclHeight, { visibleThreshold: 0 });
   addGrid("surfaceThetaE", surfaceThermo.surfaceThetaE);
 
@@ -1531,10 +2017,20 @@ function buildDerivedParameterGrids({
   addGrid("lapseRate0to3km", profileDerived.lapseRate0to3km);
   addGrid("bulkShear0to6km", profileDerived.bulkShear0to6km, { visibleThreshold: 9.99 });
   addGrid("effectiveBulkShear", profileDerived.effectiveBulkShear, { visibleThreshold: 9.99 });
-  addComputedGrid("frontogenesis850", () =>
+  const addSupplementalComputedGrid = (key, builder) => {
+    if (!available.has(key)) {
+      return;
+    }
+    const values = precomputedSupplementalDerived ? precomputedSupplementalDerived[key] : builder();
+    if (supplementalCaptureGrids && !precomputedSupplementalDerived && values) {
+      supplementalCaptureGrids[key] = values;
+    }
+    addGrid(key, values);
+  };
+  addSupplementalComputedGrid("frontogenesis850", () =>
     buildFrontogenesisGrid(decoded, 850, bounds, width, height, sharedSpacingRows()),
   );
-  addComputedGrid("frontogenesis700", () =>
+  addSupplementalComputedGrid("frontogenesis700", () =>
     buildFrontogenesisGrid(decoded, 700, bounds, width, height, sharedSpacingRows()),
   );
 
@@ -1726,7 +2222,11 @@ function buildFrontogenesisGrid(decoded, level, bounds, width, height, spacingRo
       const dUdy = centralDiffY(u, x, y, cols, dy2);
       const dVdx = centralDiffX(v, x, y, cols, dx2);
       const dVdy = centralDiffY(v, x, y, cols, dy2);
-      const gradientMagnitude = Math.hypot(dThetaDx, dThetaDy);
+      // Both derivatives are finite and meteorological magnitudes here. The
+      // direct Euclidean norm avoids Math.hypot's generic overflow scaling;
+      // the result is stored to Float32 downstream and is differential-tested
+      // against the prior formulation.
+      const gradientMagnitude = Math.sqrt(dThetaDx * dThetaDx + dThetaDy * dThetaDy);
       if (
         !Number.isFinite(gradientMagnitude) ||
         gradientMagnitude < 1e-12 ||
@@ -2311,7 +2811,17 @@ function getNoaaGribRendererSignature(
     // transforms), so a gates or scale-tuning change cannot reuse stale
     // artifacts. v49 invalidates learned-snowfall output after making the
     // accumulated trace-liquid visibility bound conservative at f32 edges.
-    renderer: "noaa-grib2-beta-v49-trace-liquid-bound",
+    // v50 moves lossless hover artifacts from gzip level 1 to explicitly
+    // identified Brotli compression; decoded Int16 data is unchanged. v51
+    // records the direct finite-magnitude frontogenesis norm. It is
+    // meteorologically equivalent to Math.hypot at these derivative scales,
+    // but can move the final Float32 value at rounding-level near exact zero.
+    // v52 emits the four bounded categorical palette families directly as
+    // lossless indexed-color PNGs; decoded RGBA pixels are unchanged.
+    // v53 binds the selected hover container and predictor. MVH4 stores an
+    // exact per-variable gradient2d residue; the strict mvh3 rollback retains
+    // the legacy global stream and must never reuse MVH4 completion markers.
+    renderer: "noaa-grib2-beta-v53-hover-encoding-descriptor",
     ...(sciencePrototypes.length > 0 ? { sciencePrototypes } : {}),
     ...(forecastHourRosterIdentity ? { forecastHourRosterIdentity: String(forecastHourRosterIdentity) } : {}),
     ...(wgrib2ToolRef ? { wgrib2ToolRef: String(wgrib2ToolRef) } : {}),
@@ -2319,6 +2829,18 @@ function getNoaaGribRendererSignature(
     parameterAvailabilitySchema: "explicit-available-unavailable-v1",
     sourceProvenanceSchemaVersion: SOURCE_PROVENANCE_SCHEMA_VERSION,
     hoverGridFormat: "binary-full-resolution",
+    hoverGridEncoding: {
+      id: HOVER_GRID_ENCODING.id,
+      magic: HOVER_GRID_ENCODING.magic,
+      schemaVersion: HOVER_GRID_ENCODING.schemaVersion,
+      predictor: HOVER_GRID_ENCODING.predictor,
+      quantization: HOVER_GRID_ENCODING.quantization,
+      identity: HOVER_GRID_ENCODING.identity,
+    },
+    hoverGridCompression: {
+      backend: DEFAULT_HOVER_GRID_COMPRESSION.backend,
+      level: DEFAULT_HOVER_GRID_COMPRESSION.level,
+    },
     hoverGridVariables: {
       mode: "catalog-parameter-keys",
       parameterOrder: getNoaaNamParameterOrder(renderSelection),
@@ -2483,8 +3005,11 @@ module.exports = {
   _testBuildReflectivityPrecipTypeLookups: buildReflectivityPrecipTypeLookups,
   _testBuildPrecipRateTypeLookups: buildPrecipRateTypeLookups,
   _testBuildDerivedParameterGrids: buildDerivedParameterGrids,
+  _testBuildSupplementalDerivedMethodologyVersion: buildSupplementalDerivedMethodologyVersion,
+  _testSupplementalDerivedProductsForAvailability: supplementalDerivedProductsForAvailability,
   _testFilterCatalogForRenderMode: filterCatalogForRenderMode,
   _testCatalogCategorySet: catalogCategorySet,
+  _testShouldUseCompressionPool: shouldUseCompressionPool,
   _testComposeRunMaxGrid: composeRunMaxGrid,
   _testEffectiveLayerCellActive: isEffectiveLayerCellActive,
   _testBoltonThetaE: boltonThetaE,
@@ -2526,6 +3051,7 @@ module.exports = {
   _testApplyRealizedPrecipAccumulationGrids: applyRealizedPrecipAccumulationGrids,
   _testHasConclusiveNoCloudCeilingEvidence: hasConclusiveNoCloudCeilingEvidence,
   _testResolveCatalogSourceGrid: resolveCatalogSourceGrid,
+  _testResolveFastPackMode: resolveFastPackMode,
   _testMaskPressureLevelGridBelowTerrain: maskPressureLevelGridBelowTerrain,
   _testFindReflectivityPrecipTypeColorOffset: findReflectivityPrecipTypeColorOffset,
   _testFindStepColorOffset: findStepColorOffset,

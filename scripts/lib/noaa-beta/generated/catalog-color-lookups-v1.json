@@ -1,0 +1,584 @@
+{
+  "schemaVersion": 1,
+  "compiler": {
+    "id": "modelview-continuous-color-lookup-v1",
+    "closure": {
+      "encoding": "ordered-file-bytes-nul-v1",
+      "sha256": "9ad53c9938c168d26e2c79b44e4a558353c88ba9bdc3bd7264714f0f8db6ea22",
+      "files": [
+        {
+          "name": "color-lookup-compiler.js",
+          "byteLength": 9529,
+          "sha256": "a26305c6f0a2a560c15231f24a2ebcf52b6232b610f57d980b2627d346f0762e"
+        },
+        {
+          "name": "util.js",
+          "byteLength": 1184,
+          "sha256": "46493e5cc3c307ab913218e5880ca588ad93675c14ce5f8710002e2cdcf65697"
+        }
+      ]
+    }
+  },
+  "input": {
+    "sha256": "f1ec3deb48fb8d6828dd8583b2894de31b6aaf3684df0c2ab87646217c84e515",
+    "assignmentCount": 73,
+    "encoding": "ordered-id-canonical-recipe-nul-v1",
+    "recipeEncoding": "ieee754-f64be-hex-v1"
+  },
+  "assignmentMapping": {
+    "encoding": "sorted-id-palette-sha256-byte-length-nul-v1",
+    "assignmentCount": 73,
+    "sha256": "7ce7ec6c56506eecea40d197a18ae1c847217d95439850747838c4eb122fe964"
+  },
+  "binary": {
+    "file": "catalog-color-lookups-v1.bin",
+    "alignment": 4,
+    "byteLength": 819200,
+    "sha256": "81e90f3444f2b213be0173c1767c1c99874d614e06662f5e017006caae639263"
+  },
+  "paletteCount": 35,
+  "palettes": [
+    {
+      "sha256": "031ff1f78de839f0190236ae0e89b54a5b2a97fe912506edb086d95e8e2e6a6b",
+      "offset": 0,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "0601a6b536355f98316a1341bee795cd62fce9732a1bf3fd5a737dd330761848",
+      "offset": 16384,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "0866bb5e4b516c3c19f1c63ed2f4e6a0afa58de0aec2b09fd24b035b28e8a36f",
+      "offset": 32768,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "0fed61d75e4bad3f16b2fa8b78f13fc00be0e5e60167b7e84816f30a2293b394",
+      "offset": 49152,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "13ef8334eeabc2c67baf26cfae95de27fb39aec848d142c4f1571bfec2b0bcb2",
+      "offset": 65536,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "2087c42f7f24ce12be3e4a8768a3825333de1b2f6b5870718d599f9a4b14fb80",
+      "offset": 81920,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "26a9a1755a505d3885a16ffe3086d1d75a62e82f5ca6923a9e52d0ac9e02ef4a",
+      "offset": 98304,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "3b3a2c6af00accd32e66efb539295b5995a39e53193b93eb02a814373a22f9fa",
+      "offset": 114688,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "4efa555b37931cb6c80730dbba003ddb7873b7a9edc984d4c06e7bcb383d4b5c",
+      "offset": 131072,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "53d939dd23c61ae065247891eb4d6cc1514d405ea9f5e16be4b7907043a6a4c5",
+      "offset": 147456,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "5734cbf7451b0bfadb1cf82ad4c86d1995fe71ddf03c3ce118ce53bef1fbd3e9",
+      "offset": 163840,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "668aadced686ab90148291335938644bfb671f63d68713ac243abdea845589b4",
+      "offset": 180224,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "7c9ca26342b4e7a4246834755f6dc99a9c53b19e7f20b9098e052b754a4a84dc",
+      "offset": 196608,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "93d15cf6fbfa6f75ab9bd96ad95ea01844a16221d1479e9166ed16a35a448c93",
+      "offset": 212992,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "a81d094519923991756230d9746b857e246f82d5db49810b7927d515d2416b4e",
+      "offset": 229376,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "aaa9a65f20f28d0b26094651be9f49f3dafadad7585a5da70b94b6f6b3528140",
+      "offset": 245760,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "b69cbd844c5d104dd7a976151cf8a784fe98799c67b1f70dcaa8ebc43a0fe5e1",
+      "offset": 262144,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "b90d98ea2fe6a050e21d823f163cf32194a8004c1877bf51c99c5c8bc69e5b1c",
+      "offset": 278528,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "bbbd19d90f1b7dfa67f27edaf1a3f9f24621ac5cbc419e259ff996eba1670429",
+      "offset": 294912,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "c6e7ff728c787996d9d0a95a981e1b0bf6626e502ebe7298a05c2e4f7673fd88",
+      "offset": 311296,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "c9709236494e41dc2aab83f08122cfc5ca78183a520e889627a80030d626c5d1",
+      "offset": 327680,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "cbc593156c8cf8d6b25a863bdaca8732f5a5e4d9a7d390a7f0d5a086205aafeb",
+      "offset": 344064,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "cd4f1337188d239f84cf342b6029602d3bfea5044ded65fbb867dfa19b633894",
+      "offset": 360448,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "cfcdd1be39b587366083f3617c6a0850fd4e2db4095bab3bacc0e092fe579f6f",
+      "offset": 376832,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "d219f2cafcd539ad30f8e1763f90208cc38876ccbb3bdb23cca93d3ccfef41c2",
+      "offset": 393216,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "d786b3d266dcdb2e529bdde8464e77a1c3a88e4bb25313860e871d537b7f2d2b",
+      "offset": 409600,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "dfd03d5867778d7d5ca891463f44f218edf141bc0c35fa6f1250c095654160b8",
+      "offset": 425984,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "e62a876a3203fb4eacda638f6d7b8eadf05c2844754362463cec94ce53d63ce2",
+      "offset": 442368,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "ef744e2f355302ce793541b09430ef54eb61fb10f13cbe656e3019f734fadc47",
+      "offset": 458752,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "f84f7067b6db74b21a1568655aefc1466f2658aec669b7186ad162a6c33cd27e",
+      "offset": 475136,
+      "byteLength": 262144
+    },
+    {
+      "sha256": "fce488ddeea9de62dd256d16aa46827a83b9701037e0cbc9c904c35fabe3f949",
+      "offset": 737280,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "fdc76fe1d6a234a7ad421a7537d13a1ef3e959edd07103aa7574d113cc5c9dca",
+      "offset": 753664,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "fddcac0a767466222b1a6a21be23742a8c7c3d908e38d5313526be3379998ec7",
+      "offset": 770048,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "ffab6fe095b94942a2b2333f500bbce3ebc3f48d4cd676afcd4480dabd083d69",
+      "offset": 786432,
+      "byteLength": 16384
+    },
+    {
+      "sha256": "ffc3366d223b05a3c4a0c8d668d49615c244198e3dd57a9437df72512943323c",
+      "offset": 802816,
+      "byteLength": 16384
+    }
+  ],
+  "assignments": [
+    {
+      "id": "catalog:absoluteVorticity500",
+      "paletteSha256": "b69cbd844c5d104dd7a976151cf8a784fe98799c67b1f70dcaa8ebc43a0fe5e1",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:absoluteVorticity700",
+      "paletteSha256": "b69cbd844c5d104dd7a976151cf8a784fe98799c67b1f70dcaa8ebc43a0fe5e1",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:bulkShear0to6km",
+      "paletteSha256": "031ff1f78de839f0190236ae0e89b54a5b2a97fe912506edb086d95e8e2e6a6b",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:cloudCeiling",
+      "paletteSha256": "2087c42f7f24ce12be3e4a8768a3825333de1b2f6b5870718d599f9a4b14fb80",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:cloudCover",
+      "paletteSha256": "cfcdd1be39b587366083f3617c6a0850fd4e2db4095bab3bacc0e092fe579f6f",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:dcape",
+      "paletteSha256": "ffc3366d223b05a3c4a0c8d668d49615c244198e3dd57a9437df72512943323c",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:dewpoint2m",
+      "paletteSha256": "26a9a1755a505d3885a16ffe3086d1d75a62e82f5ca6923a9e52d0ac9e02ef4a",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:effectiveBulkShear",
+      "paletteSha256": "031ff1f78de839f0190236ae0e89b54a5b2a97fe912506edb086d95e8e2e6a6b",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:effectiveLayerSignificantTornadoParameter",
+      "paletteSha256": "ffab6fe095b94942a2b2333f500bbce3ebc3f48d4cd676afcd4480dabd083d69",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:effectiveLayerSupercellCompositeParameter",
+      "paletteSha256": "b90d98ea2fe6a050e21d823f163cf32194a8004c1877bf51c99c5c8bc69e5b1c",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:framFlatIce",
+      "paletteSha256": "53d939dd23c61ae065247891eb4d6cc1514d405ea9f5e16be4b7907043a6a4c5",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:framRadialIce",
+      "paletteSha256": "53d939dd23c61ae065247891eb4d6cc1514d405ea9f5e16be4b7907043a6a4c5",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:freezingRainLiquidTotal",
+      "paletteSha256": "53d939dd23c61ae065247891eb4d6cc1514d405ea9f5e16be4b7907043a6a4c5",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:frontogenesis700",
+      "paletteSha256": "93d15cf6fbfa6f75ab9bd96ad95ea01844a16221d1479e9166ed16a35a448c93",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:frontogenesis850",
+      "paletteSha256": "93d15cf6fbfa6f75ab9bd96ad95ea01844a16221d1479e9166ed16a35a448c93",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:gust",
+      "paletteSha256": "031ff1f78de839f0190236ae0e89b54a5b2a97fe912506edb086d95e8e2e6a6b",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:gustRunMax",
+      "paletteSha256": "031ff1f78de839f0190236ae0e89b54a5b2a97fe912506edb086d95e8e2e6a6b",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:height250",
+      "paletteSha256": "fce488ddeea9de62dd256d16aa46827a83b9701037e0cbc9c904c35fabe3f949",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:height300",
+      "paletteSha256": "fce488ddeea9de62dd256d16aa46827a83b9701037e0cbc9c904c35fabe3f949",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:height500",
+      "paletteSha256": "fce488ddeea9de62dd256d16aa46827a83b9701037e0cbc9c904c35fabe3f949",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:height700",
+      "paletteSha256": "fce488ddeea9de62dd256d16aa46827a83b9701037e0cbc9c904c35fabe3f949",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:height850",
+      "paletteSha256": "fce488ddeea9de62dd256d16aa46827a83b9701037e0cbc9c904c35fabe3f949",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:humidity2m",
+      "paletteSha256": "a81d094519923991756230d9746b857e246f82d5db49810b7927d515d2416b4e",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:lapseRate0to3km",
+      "paletteSha256": "0866bb5e4b516c3c19f1c63ed2f4e6a0afa58de0aec2b09fd24b035b28e8a36f",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:lapseRate700to500",
+      "paletteSha256": "0866bb5e4b516c3c19f1c63ed2f4e6a0afa58de0aec2b09fd24b035b28e8a36f",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:maxSimulatedHailSize",
+      "paletteSha256": "668aadced686ab90148291335938644bfb671f63d68713ac243abdea845589b4",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:mlcape",
+      "paletteSha256": "ffc3366d223b05a3c4a0c8d668d49615c244198e3dd57a9437df72512943323c",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:mlcin",
+      "paletteSha256": "e62a876a3203fb4eacda638f6d7b8eadf05c2844754362463cec94ce53d63ce2",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:mucape",
+      "paletteSha256": "ffc3366d223b05a3c4a0c8d668d49615c244198e3dd57a9437df72512943323c",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:pblHeight",
+      "paletteSha256": "7c9ca26342b4e7a4246834755f6dc99a9c53b19e7f20b9098e052b754a4a84dc",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:precipRateAndType",
+      "paletteSha256": "bbbd19d90f1b7dfa67f27edaf1a3f9f24621ac5cbc419e259ff996eba1670429",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:pwat",
+      "paletteSha256": "c9709236494e41dc2aab83f08122cfc5ca78183a520e889627a80030d626c5d1",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:reflectivity1kmPrecipType",
+      "paletteSha256": "fdc76fe1d6a234a7ad421a7537d13a1ef3e959edd07103aa7574d113cc5c9dca",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:relativeVorticity500",
+      "paletteSha256": "0fed61d75e4bad3f16b2fa8b78f13fc00be0e5e60167b7e84816f30a2293b394",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:relativeVorticity700",
+      "paletteSha256": "0fed61d75e4bad3f16b2fa8b78f13fc00be0e5e60167b7e84816f30a2293b394",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:rh500",
+      "paletteSha256": "a81d094519923991756230d9746b857e246f82d5db49810b7927d515d2416b4e",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:rh700",
+      "paletteSha256": "a81d094519923991756230d9746b857e246f82d5db49810b7927d515d2416b4e",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:rh850",
+      "paletteSha256": "a81d094519923991756230d9746b857e246f82d5db49810b7927d515d2416b4e",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:sbcape",
+      "paletteSha256": "ffc3366d223b05a3c4a0c8d668d49615c244198e3dd57a9437df72512943323c",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:sbcin",
+      "paletteSha256": "e62a876a3203fb4eacda638f6d7b8eadf05c2844754362463cec94ce53d63ce2",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:significantTornadoParameter",
+      "paletteSha256": "ffab6fe095b94942a2b2333f500bbce3ebc3f48d4cd676afcd4480dabd083d69",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:snow10to1",
+      "paletteSha256": "f84f7067b6db74b21a1568655aefc1466f2658aec669b7186ad162a6c33cd27e",
+      "byteLength": 262144
+    },
+    {
+      "id": "catalog:snowCobb",
+      "paletteSha256": "f84f7067b6db74b21a1568655aefc1466f2658aec669b7186ad162a6c33cd27e",
+      "byteLength": 262144
+    },
+    {
+      "id": "catalog:snowDepth",
+      "paletteSha256": "ef744e2f355302ce793541b09430ef54eb61fb10f13cbe656e3019f734fadc47",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:snowHrrrAsnow",
+      "paletteSha256": "f84f7067b6db74b21a1568655aefc1466f2658aec669b7186ad162a6c33cd27e",
+      "byteLength": 262144
+    },
+    {
+      "id": "catalog:snowKuchera",
+      "paletteSha256": "f84f7067b6db74b21a1568655aefc1466f2658aec669b7186ad162a6c33cd27e",
+      "byteLength": 262144
+    },
+    {
+      "id": "catalog:snowRfConus",
+      "paletteSha256": "f84f7067b6db74b21a1568655aefc1466f2658aec669b7186ad162a6c33cd27e",
+      "byteLength": 262144
+    },
+    {
+      "id": "catalog:snowWaterEq",
+      "paletteSha256": "cd4f1337188d239f84cf342b6029602d3bfea5044ded65fbb867dfa19b633894",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:snowWesternLinear",
+      "paletteSha256": "f84f7067b6db74b21a1568655aefc1466f2658aec669b7186ad162a6c33cd27e",
+      "byteLength": 262144
+    },
+    {
+      "id": "catalog:srh0to1km",
+      "paletteSha256": "fddcac0a767466222b1a6a21be23742a8c7c3d908e38d5313526be3379998ec7",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:srh0to3km",
+      "paletteSha256": "fddcac0a767466222b1a6a21be23742a8c7c3d908e38d5313526be3379998ec7",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:supercellCompositeParameter",
+      "paletteSha256": "b90d98ea2fe6a050e21d823f163cf32194a8004c1877bf51c99c5c8bc69e5b1c",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:surfaceBasedLclHeight",
+      "paletteSha256": "0601a6b536355f98316a1341bee795cd62fce9732a1bf3fd5a737dd330761848",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:surfaceThetaE",
+      "paletteSha256": "dfd03d5867778d7d5ca891463f44f218edf141bc0c35fa6f1250c095654160b8",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:temp500",
+      "paletteSha256": "d219f2cafcd539ad30f8e1763f90208cc38876ccbb3bdb23cca93d3ccfef41c2",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:temp700",
+      "paletteSha256": "c6e7ff728c787996d9d0a95a981e1b0bf6626e502ebe7298a05c2e4f7673fd88",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:temp850",
+      "paletteSha256": "3b3a2c6af00accd32e66efb539295b5995a39e53193b93eb02a814373a22f9fa",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:temperature",
+      "paletteSha256": "13ef8334eeabc2c67baf26cfae95de27fb39aec848d142c4f1571bfec2b0bcb2",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:updraftHelicity2to5km1h",
+      "paletteSha256": "cbc593156c8cf8d6b25a863bdaca8732f5a5e4d9a7d390a7f0d5a086205aafeb",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:updraftHelicity2to5kmRunMax",
+      "paletteSha256": "cbc593156c8cf8d6b25a863bdaca8732f5a5e4d9a7d390a7f0d5a086205aafeb",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:verticalVelocity500",
+      "paletteSha256": "5734cbf7451b0bfadb1cf82ad4c86d1995fe71ddf03c3ce118ce53bef1fbd3e9",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:verticalVelocity700",
+      "paletteSha256": "5734cbf7451b0bfadb1cf82ad4c86d1995fe71ddf03c3ce118ce53bef1fbd3e9",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:visibility",
+      "paletteSha256": "4efa555b37931cb6c80730dbba003ddb7873b7a9edc984d4c06e7bcb383d4b5c",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:wetBulbZeroHeight",
+      "paletteSha256": "d786b3d266dcdb2e529bdde8464e77a1c3a88e4bb25313860e871d537b7f2d2b",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:wind",
+      "paletteSha256": "aaa9a65f20f28d0b26094651be9f49f3dafadad7585a5da70b94b6f6b3528140",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:wind250",
+      "paletteSha256": "031ff1f78de839f0190236ae0e89b54a5b2a97fe912506edb086d95e8e2e6a6b",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:wind300",
+      "paletteSha256": "031ff1f78de839f0190236ae0e89b54a5b2a97fe912506edb086d95e8e2e6a6b",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:wind500",
+      "paletteSha256": "031ff1f78de839f0190236ae0e89b54a5b2a97fe912506edb086d95e8e2e6a6b",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:wind700",
+      "paletteSha256": "031ff1f78de839f0190236ae0e89b54a5b2a97fe912506edb086d95e8e2e6a6b",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:wind80m",
+      "paletteSha256": "aaa9a65f20f28d0b26094651be9f49f3dafadad7585a5da70b94b6f6b3528140",
+      "byteLength": 16384
+    },
+    {
+      "id": "catalog:wind850",
+      "paletteSha256": "031ff1f78de839f0190236ae0e89b54a5b2a97fe912506edb086d95e8e2e6a6b",
+      "byteLength": 16384
+    },
+    {
+      "id": "core:temperature",
+      "paletteSha256": "13ef8334eeabc2c67baf26cfae95de27fb39aec848d142c4f1571bfec2b0bcb2",
+      "byteLength": 16384
+    },
+    {
+      "id": "core:wind",
+      "paletteSha256": "aaa9a65f20f28d0b26094651be9f49f3dafadad7585a5da70b94b6f6b3528140",
+      "byteLength": 16384
+    }
+  ]
+}

@@ -270,7 +270,7 @@ test("snowfallEntryHasAvailableData dry verdict treats non-finite-only liquid as
   assert.equal(verdict(new Float32Array([Infinity, 0])), true, "one finite dry cell is enough");
 });
 
-test("reflectivity availability reuses one scan for both layer keys", () => {
+test("reflectivity availability reuses one scan for both layer keys", async () => {
   const render = (reflectivityComposite) =>
     buildRenderedArtifacts({
       decoded: { reflectivityComposite },
@@ -284,13 +284,13 @@ test("reflectivity availability reuses one scan for both layer keys", () => {
       pngCompressionLevel: 1,
       pngFilterType: 0,
     });
-  const missing = render(new Float32Array([NAN, NAN, NAN, NAN]));
+  const missing = await render(new Float32Array([NAN, NAN, NAN, NAN]));
   assert.equal(missing.parameterAvailability.reflectivityComposite, "unavailable");
   assert.equal(missing.parameterAvailability.reflectivity, "unavailable");
-  const present = render(new Float32Array([NAN, 20, NAN, NAN]));
+  const present = await render(new Float32Array([NAN, 20, NAN, NAN]));
   assert.equal(present.parameterAvailability.reflectivityComposite, "available");
   assert.equal(present.parameterAvailability.reflectivity, "available");
-  const absent = render(null);
+  const absent = await render(null);
   assert.equal(absent.parameterAvailability.reflectivityComposite, "unavailable");
   assert.equal(absent.parameterAvailability.reflectivity, "unavailable");
 });

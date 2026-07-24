@@ -139,7 +139,7 @@ async function materializeSelectedGribUncached({
   onLockContention = "wait-then-fetch",
 }) {
   const { cachePath, gribUrl, groups } = descriptor;
-  const cachedPath = cachePath ? await readCachedSelectedGribPath(cachePath, descriptor) : null;
+  const cachedPath = cachePath ? await readCachedSelectedGribPath(cachePath, descriptor, profile) : null;
   if (cachedPath) {
     if (profile) {
       profile.selectedGribCacheHit = true;
@@ -184,7 +184,7 @@ async function materializeSelectedGribUncached({
       return null;
     }
     incrementProfileCounter(profile, "selectedGribLockWaits");
-    const waited = await waitForCachedSelectedGrib(cachePath, descriptor, lockPath);
+    const waited = await waitForCachedSelectedGrib(cachePath, descriptor, lockPath, profile);
     if (waited) {
       if (profile) {
         profile.selectedGribCacheHit = true;
@@ -194,7 +194,7 @@ async function materializeSelectedGribUncached({
     }
   } else {
     try {
-      const cachedAfterLock = await readCachedSelectedGribPath(cachePath, descriptor);
+      const cachedAfterLock = await readCachedSelectedGribPath(cachePath, descriptor, profile);
       if (cachedAfterLock) {
         if (profile) {
           profile.selectedGribCacheHit = true;
@@ -302,6 +302,14 @@ async function statSelectedGribFileIdentity(filePath) {
   return selectedGribFileIdentity(await fs.promises.stat(filePath, { bigint: true }));
 }
 
+async function statSelectedGribRegularFileIdentity(filePath) {
+  const stat = await fs.promises.stat(filePath, { bigint: true });
+  if (!stat.isFile()) {
+    throw new Error(`Selected GRIB cache entry is not a regular file: ${filePath}`);
+  }
+  return selectedGribFileIdentity(stat);
+}
+
 function selectedGribFileIdentityMatches(left, right) {
   return (
     Boolean(left) &&
@@ -314,7 +322,7 @@ function selectedGribFileIdentityMatches(left, right) {
   );
 }
 
-async function readCachedSelectedGribPath(cachePath, descriptor) {
+async function readCachedSelectedGribPath(cachePath, descriptor, profile = null) {
   try {
     const identity = await statSelectedGribFileIdentity(cachePath);
     const verified = boundedRunCacheGet(SELECTED_GRIB_VERIFIED_CACHE, cachePath);
@@ -338,6 +346,10 @@ async function readCachedSelectedGribPath(cachePath, descriptor) {
     if (identity.size !== String(metadata.selectedBytes)) {
       return null;
     }
+    incrementProfileCounter(profile, "selectedGribVerifyHashes");
+    if (profile) {
+      profile.selectedGribVerifyHashBytes = (Number(profile.selectedGribVerifyHashBytes) || 0) + Number(identity.size);
+    }
     const sha256 = await hashFileSha256(cachePath);
     if (sha256 !== String(metadata.sha256).toLowerCase()) {
       return null;
@@ -359,6 +371,56 @@ async function readCachedSelectedGribPath(cachePath, descriptor) {
       metadataIdentity: verifiedMetadataIdentity,
     });
     return cachePath;
+  } catch {
+    return null;
+  }
+}
+
+// A warm Mercator pack is already keyed by the selected GRIB SHA-256 and
+// validates its own payload before use. Probe the current publication marker
+// so that callers can try that strict cache path without first streaming the
+// selected GRIB solely to recompute the same hash. This is intentionally only
+// a candidate: it neither verifies the body contents nor seeds the
+// authoritative selected-GRIB verification cache.
+async function probeCachedSelectedGribCandidate(descriptor) {
+  const gribPath = descriptor?.cachePath;
+  if (!gribPath) {
+    return null;
+  }
+  const metadataPath = `${gribPath}.ready.json`;
+  try {
+    const identityBefore = await statSelectedGribRegularFileIdentity(gribPath);
+    const metadataIdentityBefore = await statSelectedGribRegularFileIdentity(metadataPath);
+    const metadata = JSON.parse(await fs.promises.readFile(metadataPath, "utf8"));
+    const metadataIdentity = await statSelectedGribRegularFileIdentity(metadataPath);
+    const identity = await statSelectedGribRegularFileIdentity(gribPath);
+    if (
+      !selectedGribFileIdentityMatches(identityBefore, identity) ||
+      !selectedGribFileIdentityMatches(metadataIdentityBefore, metadataIdentity)
+    ) {
+      return null;
+    }
+    if (!selectedGribMetadataMatches(metadata, descriptor)) {
+      return null;
+    }
+    if (
+      !Number.isSafeInteger(metadata.selectedBytes) ||
+      metadata.selectedBytes <= 0 ||
+      identity.size !== String(metadata.selectedBytes)
+    ) {
+      return null;
+    }
+    if (!/^[a-f0-9]{64}$/i.test(String(metadata.sha256 || ""))) {
+      return null;
+    }
+    return {
+      gribPath,
+      metadata,
+      identity,
+      metadataPath,
+      metadataIdentity,
+      provenanceSource: buildSelectedGribProvenanceSource(descriptor, metadata),
+    };
   } catch {
     return null;
   }
@@ -424,11 +486,11 @@ function selectedGribMetadataMatches(metadata, descriptor) {
   return JSON.stringify(metadata.records || []) === descriptor.recordsJson;
 }
 
-async function waitForCachedSelectedGrib(cachePath, descriptor, lockPath) {
+async function waitForCachedSelectedGrib(cachePath, descriptor, lockPath, profile = null) {
   const startedAt = performance.now();
   while (performance.now() - startedAt < SELECTED_GRIB_LOCK_TIMEOUT_MS) {
     await sleep(SELECTED_GRIB_LOCK_POLL_MS + Math.round(Math.random() * 40));
-    const cached = await readCachedSelectedGribPath(cachePath, descriptor);
+    const cached = await readCachedSelectedGribPath(cachePath, descriptor, profile);
     if (cached) {
       return cached;
     }
@@ -686,21 +748,7 @@ function normalizeStatisticalWindow(record) {
   };
 }
 
-async function registerSelectedGribProvenance(decodeSession, descriptor, gribPath) {
-  if (!decodeSession || !descriptor || !gribPath) {
-    return null;
-  }
-  let metadata = null;
-  try {
-    metadata = await readSelectedGribMetadata(gribPath);
-  } catch {
-    const stat = await fs.promises.stat(gribPath);
-    metadata = {
-      selectedHash: descriptor.selectedHash,
-      selectedBytes: stat.size,
-      sha256: await hashFileSha256(gribPath),
-    };
-  }
+function buildSelectedGribProvenanceSource(descriptor, metadata) {
   const sha256 = String(metadata?.sha256 || "").trim();
   if (!/^[a-f0-9]{64}$/i.test(sha256)) {
     throw new Error(`Selected NOAA GRIB provenance is missing a SHA-256 identity for ${descriptor.gribUrl}`);
@@ -727,6 +775,14 @@ async function registerSelectedGribProvenance(decodeSession, descriptor, gribPat
     selectedBytes: Number(metadata?.selectedBytes) || null,
     records: descriptor.records.map(normalizeSelectedSourceRecord),
   };
+  return source;
+}
+
+function commitSelectedGribProvenance(decodeSession, gribPath, source) {
+  if (!decodeSession || !gribPath || !source) {
+    return null;
+  }
+  const id = source.id;
   if (!(decodeSession.sourceProvenanceSources instanceof Map)) {
     decodeSession.sourceProvenanceSources = new Map();
   }
@@ -737,6 +793,25 @@ async function registerSelectedGribProvenance(decodeSession, descriptor, gribPat
   }
   decodeSession.selectedGribSourceRefs.set(String(gribPath), id);
   return source;
+}
+
+async function registerSelectedGribProvenance(decodeSession, descriptor, gribPath) {
+  if (!decodeSession || !descriptor || !gribPath) {
+    return null;
+  }
+  let metadata;
+  try {
+    metadata = await readSelectedGribMetadata(gribPath);
+  } catch {
+    const stat = await fs.promises.stat(gribPath);
+    metadata = {
+      selectedHash: descriptor.selectedHash,
+      selectedBytes: stat.size,
+      sha256: await hashFileSha256(gribPath),
+    };
+  }
+  const source = buildSelectedGribProvenanceSource(descriptor, metadata);
+  return commitSelectedGribProvenance(decodeSession, gribPath, source);
 }
 
 function normalizeSelectedSourceRecord(record) {
@@ -764,7 +839,9 @@ function selectedRecordDecodeCacheKey(record) {
 }
 
 module.exports = {
+  buildSelectedGribProvenanceSource,
   CATALOG_VERSION,
+  commitSelectedGribProvenance,
   SELECTED_GRIB_CACHE_DIRNAME,
   SELECTED_GRIB_CACHE_METADATA_VERSION,
   SELECTED_GRIB_LOCK_POLL_MS,
@@ -777,9 +854,11 @@ module.exports = {
   materializeSelectedGrib,
   materializeSelectedGribUncached,
   normalizeStatisticalWindow,
+  probeCachedSelectedGribCandidate,
   readCachedSelectedGribPath,
   readSelectedGribMetadata,
   recordRangeFetchRetry,
+  registerSelectedGribProvenance,
   selectedGribCacheDescriptor,
   selectedGribGroupByteLength,
   selectedGribLockPayload,

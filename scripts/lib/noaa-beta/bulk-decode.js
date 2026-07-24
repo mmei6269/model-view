@@ -1,10 +1,13 @@
 "use strict";
 
+const crypto = require("crypto");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
+const zlib = require("zlib");
 const { NOAA_NAM_PARAMETER_CATALOG } = require("../noaa-nam-parameter-catalog");
 const { clampInt, incrementDecodeSessionCounter, incrementProfileCounter } = require("./util");
-const { decodeBinaryGridFileSlice } = require("./grid-ops");
+const { decodeBinaryGridFileSlice, readPackedFloat32GridFileSlice } = require("./grid-ops");
 const {
   boundedRunCacheGet,
   boundedRunCacheSet,
@@ -25,14 +28,27 @@ const {
   runCommand,
 } = require("./wgrib2");
 const {
-  BULK_DECODED_GRIDS,
+  decodedRecordCacheOutcome,
+  markBulkDecodedGrid,
   readDecodedSelectionFromRecordCache,
   writeDecodedRecordGridCache,
 } = require("./decode-session");
+const { applyDerivedDecodePlan } = require("./derived-decode-plan");
 
-const REGRIDDED_BIN_CACHE_VERSION = "regridded-bin-v1";
+const REGRIDDED_BIN_CACHE_VERSION = "mercator-grid-pack-v3-entry-crc32";
+
+const PREVIOUS_REGRIDDED_BIN_CACHE_VERSION = "mercator-grid-pack-v2";
+
+const LEGACY_REGRIDDED_BIN_CACHE_VERSION = "regridded-bin-v1";
 
 const REGRIDDED_BIN_EXPORT_ARGS = Object.freeze(["-s", "-order", "we:sn", "-no_header", "-bin"]);
+
+const DECODED_GRID_OUTCOME = Symbol("noaaDecodedGridOutcome");
+
+// A required-pack token is useful only inside this module. Keeping its
+// validated context in a WeakMap prevents callers from forging a cache hit or
+// swapping paths/payloads after the probe.
+const PROBED_MAIN_DECODE_WARM_PACKS = new WeakMap();
 
 async function decodeSelectedRecordsToGrids({
   gribPath,
@@ -46,28 +62,66 @@ async function decodeSelectedRecordsToGrids({
   height,
   decodeConcurrency = 1,
   categoricalPrecipTypeInterpolation = true,
+  sparseReadPlan = null,
   profile = null,
   decodeSession = null,
+  requiredRegridPack = null,
 }) {
+  const requiredPackDetails = requiredRegridPackDetails(requiredRegridPack);
+  if (requiredPackDetails) {
+    assertRequiredRegridPackMatchesDecode(requiredPackDetails, {
+      gribPath,
+      wgrib2Path,
+      selection,
+      bounds,
+      width,
+      height,
+      categoricalPrecipTypeInterpolation,
+    });
+  }
   const cacheKey = decodeSession
-    ? decodedSelectionCacheKey({ gribPath, selection, bounds, width, height, categoricalPrecipTypeInterpolation })
+    ? decodedSelectionCacheKey({
+        gribPath,
+        selection,
+        bounds,
+        width,
+        height,
+        categoricalPrecipTypeInterpolation,
+        sparseReadPlan,
+        requiredRegridPack,
+      })
     : null;
   const existing = cacheKey ? decodeSession.decodedGridPromises.get(cacheKey) : null;
   if (existing) {
     incrementDecodeSessionCounter(decodeSession, "decodedGridPromiseHits");
     return existing;
   }
-  const recordCached = readDecodedSelectionFromRecordCache({
-    selection,
-    hour,
-    bounds,
-    width,
-    height,
-    categoricalPrecipTypeInterpolation,
-    decodeSession,
-  });
+  // Required-pack decoding is an integrity policy, not merely a cache hint.
+  // Do not let a run-local record hit bypass validation/consumption of the
+  // exact probed pack.
+  const recordCached = requiredPackDetails
+    ? null
+    : readDecodedSelectionFromRecordCache({
+        selection,
+        hour,
+        bounds,
+        width,
+        height,
+        categoricalPrecipTypeInterpolation,
+        decodeSession,
+      });
   if (recordCached) {
-    return recordCached;
+    const recordCacheOutcome = decodedRecordCacheOutcome(recordCached);
+    const uniqueBulkPayloadHash =
+      recordCacheOutcome?.allBulkDecoded === true && recordCacheOutcome.bulkPayloadHashes.length === 1
+        ? recordCacheOutcome.bulkPayloadHashes[0]
+        : null;
+    return attachDecodedGridOutcome(recordCached, {
+      source: "record-cache",
+      payloadHash: uniqueBulkPayloadHash,
+      sparseApplied: false,
+      allBulkDecoded: recordCacheOutcome?.allBulkDecoded === true,
+    });
   }
   const promise = (async () => {
     try {
@@ -82,11 +136,13 @@ async function decodeSelectedRecordsToGrids({
         width,
         height,
         categoricalPrecipTypeInterpolation,
+        sparseReadPlan,
         profile,
         decodeSession,
+        requiredRegridPack,
       });
     } catch (error) {
-      if (process.env.MODELVIEW_NOAA_STRICT_BULK_DECODE === "1") {
+      if (requiredPackDetails || process.env.MODELVIEW_NOAA_STRICT_BULK_DECODE === "1") {
         throw error;
       }
       // The legacy per-record path is several times slower; surface every silent downgrade.
@@ -94,7 +150,7 @@ async function decodeSelectedRecordsToGrids({
       console.warn(
         `[noaa-beta] bulk decode failed for ${gribPath}; falling back to legacy per-record decode: ${String(error?.message || error)}`,
       );
-      return decodeSelectedRecordsLegacy({
+      const decoded = await decodeSelectedRecordsLegacy({
         gribPath,
         selectedPlan,
         selection,
@@ -109,6 +165,11 @@ async function decodeSelectedRecordsToGrids({
         profile,
         decodeSession,
       });
+      return attachDecodedGridOutcome(decoded, {
+        source: "legacy-fallback",
+        payloadHash: null,
+        sparseApplied: false,
+      });
     }
   })();
   if (cacheKey) {
@@ -117,13 +178,34 @@ async function decodeSelectedRecordsToGrids({
   return promise;
 }
 
-function decodedSelectionCacheKey({ gribPath, selection, bounds, width, height, categoricalPrecipTypeInterpolation }) {
+function decodedSelectionCacheKey({
+  gribPath,
+  selection,
+  bounds,
+  width,
+  height,
+  categoricalPrecipTypeInterpolation,
+  sparseReadPlan = null,
+  requiredRegridPack = null,
+}) {
+  const requiredPackDetails = requiredRegridPackDetails(requiredRegridPack);
   return JSON.stringify({
     gribPath,
     bounds,
     width,
     height,
     categoricalPrecipTypeInterpolation: Boolean(categoricalPrecipTypeInterpolation),
+    sparseReadPlan: sparseReadPlanCacheIdentity(sparseReadPlan),
+    ...(requiredPackDetails
+      ? {
+          regridPackPolicy: {
+            policy: "required",
+            payloadHash: requiredPackDetails.cacheContext.payloadHash,
+            binIdentity: requiredPackDetails.cached.binIdentity,
+            metadataIdentity: requiredPackDetails.cached.metadataIdentity,
+          },
+        }
+      : {}),
     records: Object.fromEntries(
       Object.entries(selection?.records || {})
         .sort(([left], [right]) => left.localeCompare(right))
@@ -132,34 +214,128 @@ function decodedSelectionCacheKey({ gribPath, selection, bounds, width, height, 
   });
 }
 
-async function resolveRegriddedBinCacheContext({ gribPath, wgrib2Path, regridArgsSignature, decodeSession = null }) {
+function sparseReadPlanCacheIdentity(plan) {
+  if (!plan) {
+    return null;
+  }
+  return {
+    schemaVersion: String(plan.schemaVersion || ""),
+    identity: String(plan.identity || ""),
+    valid: plan.valid === true,
+    expectedProfileGridNames: Array.isArray(plan.expectedProfileGridNames) ? plan.expectedProfileGridNames : [],
+    restoredGridNames: Array.isArray(plan.restoredGridNames) ? plan.restoredGridNames : [],
+    omittedDecodeKeys: Array.isArray(plan.omittedDecodeKeys) ? plan.omittedDecodeKeys : [],
+    retainedDecodeKeys: Array.isArray(plan.retainedDecodeKeys) ? plan.retainedDecodeKeys : [],
+    regridBinPayloadHash: String(plan.regridBinPayloadHash || ""),
+    cellCount: Number(plan.cellCount) || null,
+  };
+}
+
+function attachDecodedGridOutcome(decoded, outcome) {
+  if (!decoded || typeof decoded !== "object") {
+    return decoded;
+  }
+  Object.defineProperty(decoded, DECODED_GRID_OUTCOME, {
+    configurable: true,
+    enumerable: false,
+    value: Object.freeze({ ...outcome }),
+  });
+  return decoded;
+}
+
+function decodedGridOutcome(decoded) {
+  return decoded?.[DECODED_GRID_OUTCOME] || null;
+}
+
+async function resolveRegriddedBinCacheContext({
+  gribPath,
+  wgrib2Path,
+  regridArgsSignature,
+  gridMapping = [],
+  width = null,
+  height = null,
+  decodeSession = null,
+}) {
   // The context is fully determined by the selected GRIB path (whose cached
-  // sidecar bytes are immutable once written), the regrid signature, and the
-  // wgrib2 identity, so frame sessions memoize it to avoid re-reading and
-  // re-hashing the sidecar for every decode consumer of the same hour.
+  // sidecar bytes are immutable once written), the wgrib2 regrid signature,
+  // and the exact record/interpolation mapping. The latter is essential:
+  // identical selected bytes can legitimately be consumed with nearest or
+  // bilinear Mercator-row interpolation.
+  const normalizedGridMapping = normalizeMercatorGridMapping(gridMapping);
   const memo = decodeSession?.regridBinCacheContexts;
-  const memoKey = memo ? regriddedBinMemoKey(gribPath, regridArgsSignature) : null;
+  const memoKey = memo
+    ? regriddedBinMemoKey(gribPath, regridArgsSignature, normalizedGridMapping, width, height)
+    : null;
   if (memo && memo.has(memoKey)) {
     return memo.get(memoKey);
   }
-  const context = await resolveRegriddedBinCacheContextUncached({ gribPath, wgrib2Path, regridArgsSignature });
+  const context = await resolveRegriddedBinCacheContextUncached({
+    gribPath,
+    wgrib2Path,
+    regridArgsSignature,
+    gridMapping: normalizedGridMapping,
+    width,
+    height,
+  });
   if (memo) {
     memo.set(memoKey, context);
   }
   return context;
 }
 
-function regriddedBinMemoKey(gribPath, regridArgsSignature) {
-  return `${gribPath}\u0000${(Array.isArray(regridArgsSignature) ? regridArgsSignature : []).join("\u0000")}`;
+function regriddedBinMemoKey(gribPath, regridArgsSignature, gridMapping = [], width = null, height = null) {
+  // Preserve the exported two-argument helper contract used by provenance
+  // tooling/tests. Internal indexed-pack callers always pass the mapping and shape, so
+  // they use the collision-safe structured identity below.
+  if (arguments.length <= 2) {
+    return `${gribPath}\u0000${(Array.isArray(regridArgsSignature) ? regridArgsSignature : []).join("\u0000")}`;
+  }
+  return JSON.stringify({
+    gribPath,
+    regridArgsSignature: Array.isArray(regridArgsSignature) ? regridArgsSignature : [],
+    gridMapping: normalizeMercatorGridMapping(gridMapping),
+    width: Number(width) || null,
+    height: Number(height) || null,
+  });
 }
 
-async function resolveRegriddedBinCacheContextUncached({ gribPath, wgrib2Path, regridArgsSignature }) {
+async function resolveRegriddedBinCacheContextUncached({
+  gribPath,
+  wgrib2Path,
+  regridArgsSignature,
+  gridMapping = [],
+  width = null,
+  height = null,
+}) {
   let selectedMetadata;
   try {
     selectedMetadata = await readSelectedGribMetadata(gribPath);
   } catch {
     return null;
   }
+  return resolveRegriddedBinCacheContextFromSelectedMetadata({
+    gribPath,
+    selectedMetadata,
+    wgrib2Path,
+    regridArgsSignature,
+    gridMapping,
+    width,
+    height,
+  });
+}
+
+// Build the content-addressed Mercator-pack identity from sidecar metadata
+// already captured by the selected-GRIB publication probe. Unlike the
+// historical resolver, this helper never reopens that sidecar.
+async function resolveRegriddedBinCacheContextFromSelectedMetadata({
+  gribPath,
+  selectedMetadata,
+  wgrib2Path,
+  regridArgsSignature,
+  gridMapping = [],
+  width = null,
+  height = null,
+}) {
   const selectedSha256 = String(selectedMetadata?.sha256 || "");
   const selectedHash = String(selectedMetadata?.selectedHash || "");
   if (!selectedSha256 || !selectedHash) {
@@ -169,6 +345,13 @@ async function resolveRegriddedBinCacheContextUncached({ gribPath, wgrib2Path, r
   if (!wgrib2Identity) {
     return null;
   }
+  const resolvedWidth = Math.round(Number(width));
+  const resolvedHeight = Math.round(Number(height));
+  const fieldBytes = resolvedWidth * resolvedHeight * Float32Array.BYTES_PER_ELEMENT;
+  if (resolvedWidth <= 0 || resolvedHeight <= 0 || !Number.isSafeInteger(fieldBytes) || fieldBytes <= 0) {
+    return null;
+  }
+  const normalizedGridMapping = normalizeMercatorGridMapping(gridMapping);
   const payload = {
     kind: REGRIDDED_BIN_CACHE_VERSION,
     selectedSha256,
@@ -176,80 +359,311 @@ async function resolveRegriddedBinCacheContextUncached({ gribPath, wgrib2Path, r
     regridArgs: regridArgsSignature,
     exportArgs: REGRIDDED_BIN_EXPORT_ARGS,
     wgrib2: wgrib2Identity,
+    gridShape: { width: resolvedWidth, height: resolvedHeight, fieldBytes },
+    byteOrder: os.endianness(),
+    gridMapping: normalizedGridMapping,
   };
   const descriptor = cachePayloadDescriptor(payload);
   const pathToken = descriptor.payloadHash.slice(0, 16);
+  const previousPayload = { ...payload, kind: PREVIOUS_REGRIDDED_BIN_CACHE_VERSION };
+  const previousPathToken = cachePayloadDescriptor(previousPayload).payloadHash.slice(0, 16);
+  const legacyPayload = {
+    kind: LEGACY_REGRIDDED_BIN_CACHE_VERSION,
+    selectedSha256,
+    selectedHash,
+    regridArgs: regridArgsSignature,
+    exportArgs: REGRIDDED_BIN_EXPORT_ARGS,
+    wgrib2: wgrib2Identity,
+  };
+  const legacyPathToken = cachePayloadDescriptor(legacyPayload).payloadHash.slice(0, 16);
   return {
     payload,
     payloadHash: descriptor.payloadHash,
-    binPath: `${gribPath}.regrid-${pathToken}.bin`,
-    metadataPath: `${gribPath}.regrid-${pathToken}.json`,
+    binPath: `${gribPath}.mercator-${pathToken}.bin`,
+    metadataPath: `${gribPath}.mercator-${pathToken}.json`,
+    previousBinPath: `${gribPath}.mercator-${previousPathToken}.bin`,
+    previousMetadataPath: `${gribPath}.mercator-${previousPathToken}.json`,
+    legacyBinPath: `${gribPath}.regrid-${legacyPathToken}.bin`,
+    legacyMetadataPath: `${gribPath}.regrid-${legacyPathToken}.json`,
   };
 }
 
-// Validated regrid-bin metadata (which embeds the full wgrib2 inventory
-// text) is content-addressed by the cache payload hash and immutable once
-// written, so the JSON parse and inventory parse are shared across every
-// frame consumer of the same selected GRIB in this process. The bin stat
-// stays on every read to detect deletion by cache pruning.
+function requiredRegridPackDetails(requiredRegridPack) {
+  if (requiredRegridPack === null || requiredRegridPack === undefined) {
+    return null;
+  }
+  const details =
+    requiredRegridPack && typeof requiredRegridPack === "object"
+      ? PROBED_MAIN_DECODE_WARM_PACKS.get(requiredRegridPack)
+      : null;
+  if (!details) {
+    const error = new Error("Required NOAA Mercator grid pack was not produced by the warm-pack probe.");
+    error.code = "NOAA_REGRID_PACK_REQUIRED_INVALID";
+    throw error;
+  }
+  return details;
+}
+
+function requiredRegridPackError(message, code = "NOAA_REGRID_PACK_REQUIRED_MISS") {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function mercatorGridPackEntryKey(record, rowInterpolation) {
+  return JSON.stringify({
+    record: selectedRecordDecodeCacheKey(record),
+    rowInterpolation: String(rowInterpolation || "bilinear"),
+  });
+}
+
+function mercatorGridMappingForSelection(selection, categoricalPrecipTypeInterpolation = true) {
+  return normalizeMercatorGridMapping(
+    Object.entries(selection?.records || {})
+      .filter(([, record]) => Boolean(record))
+      .map(([key, record]) =>
+        mercatorGridPackEntryKey(record, decodeRowInterpolationForKey(key, categoricalPrecipTypeInterpolation)),
+      ),
+  );
+}
+
+function normalizeMercatorGridMapping(gridMapping) {
+  return Array.from(
+    new Set((Array.isArray(gridMapping) ? gridMapping : []).map((value) => String(value || "")).filter(Boolean)),
+  ).sort();
+}
+
+// Validated pack metadata is content-addressed and immutable once written.
+// The bin stat stays on every read to detect deletion/truncation by pruning
+// or an interrupted external cache copy.
 const REGRID_BIN_METADATA_CACHE = createBoundedRunCacheMap(16);
+const REGRID_BIN_CORRUPT_PAYLOADS = createBoundedRunCacheMap(16);
+
+function regridPackFileIdentity(stat) {
+  if (!stat) {
+    return null;
+  }
+  const nanoseconds = (value, milliseconds) =>
+    value !== undefined ? String(value) : String(Math.round(Number(milliseconds) * 1e6));
+  return {
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    size: String(stat.size),
+    mtimeNs: nanoseconds(stat.mtimeNs, stat.mtimeMs),
+    ctimeNs: nanoseconds(stat.ctimeNs, stat.ctimeMs),
+  };
+}
+
+function regridPackFileIdentityMatches(left, right) {
+  return (
+    Boolean(left) &&
+    Boolean(right) &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+async function statRegridPackFileIdentity(filePath) {
+  return regridPackFileIdentity(await fs.promises.stat(filePath, { bigint: true }));
+}
 
 async function readRegriddedBinCache(cacheContext) {
   if (!cacheContext) {
     return null;
   }
   try {
+    if (boundedRunCacheGet(REGRID_BIN_CORRUPT_PAYLOADS, cacheContext.payloadHash)) {
+      return null;
+    }
     const memo = boundedRunCacheGet(REGRID_BIN_METADATA_CACHE, cacheContext.payloadHash);
     if (memo) {
-      const stat = await fs.promises.stat(cacheContext.binPath);
-      if (stat.size !== memo.binBytes) {
+      const [binIdentity, metadataIdentity] = await Promise.all([
+        statRegridPackFileIdentity(cacheContext.binPath),
+        statRegridPackFileIdentity(cacheContext.metadataPath),
+      ]);
+      if (Number(binIdentity.size) !== memo.binBytes) {
         return null;
       }
-      return memo;
+      if (regridPackFileIdentityMatches(metadataIdentity, memo.metadataIdentity)) {
+        return { ...memo, binIdentity };
+      }
+      // A content-addressed sidecar is normally immutable. If another
+      // process republished this payload, discard the old CRC/layout snapshot
+      // and validate the current generation from bytes below.
+      REGRID_BIN_METADATA_CACHE.delete(cacheContext.payloadHash);
     }
+    const metadataIdentityBefore = await statRegridPackFileIdentity(cacheContext.metadataPath);
     const metadata = JSON.parse(await fs.promises.readFile(cacheContext.metadataPath, "utf8"));
+    const metadataIdentity = await statRegridPackFileIdentity(cacheContext.metadataPath);
+    if (!regridPackFileIdentityMatches(metadataIdentityBefore, metadataIdentity)) {
+      return null;
+    }
     if (!cacheMetadataPayloadMatches(metadata, cacheContext.payload, cacheContext.payloadHash)) {
       return null;
     }
-    const inventoryText = String(metadata.inventoryText || "");
-    const binBytes = Number(metadata.binBytes);
-    if (!inventoryText || !Number.isFinite(binBytes) || binBytes <= 0) {
+    const entry = validatedMercatorGridPackMetadata(metadata, cacheContext.payload);
+    if (!entry) {
       return null;
     }
-    const stat = await fs.promises.stat(cacheContext.binPath);
-    if (stat.size !== binBytes) {
+    const binIdentity = await statRegridPackFileIdentity(cacheContext.binPath);
+    if (Number(binIdentity.size) !== entry.binBytes) {
       return null;
     }
-    const entry = { inventoryText, binBytes, inventory: null };
-    boundedRunCacheSet(REGRID_BIN_METADATA_CACHE, cacheContext.payloadHash, entry);
-    return entry;
+    const memoEntry = { ...entry, metadataIdentity };
+    boundedRunCacheSet(REGRID_BIN_METADATA_CACHE, cacheContext.payloadHash, memoEntry);
+    return { ...memoEntry, binIdentity };
   } catch {
     return null;
   }
 }
 
-async function writeRegriddedBinCache(cacheContext, { binSourcePath, inventoryText, binBytes, profile = null }) {
-  const tmp = `${cacheContext.binPath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-  try {
-    try {
-      await fs.promises.rename(binSourcePath, tmp);
-    } catch {
-      await fs.promises.copyFile(binSourcePath, tmp);
+function validatedMercatorGridPackMetadata(metadata, payload) {
+  const fieldBytes = Number(payload?.gridShape?.fieldBytes);
+  const expectedKeys = normalizeMercatorGridMapping(payload?.gridMapping);
+  const binBytes = Number(metadata?.binBytes);
+  if (!Number.isSafeInteger(fieldBytes) || fieldBytes <= 0 || !Number.isSafeInteger(binBytes) || binBytes < 0) {
+    return null;
+  }
+  if (Number(metadata?.fieldBytes) !== fieldBytes || !Array.isArray(metadata?.entries)) {
+    return null;
+  }
+  const missingEntryKeys = normalizeMercatorGridMapping(metadata?.missingEntryKeys);
+  const missingSet = new Set(missingEntryKeys);
+  const entries = [];
+  const entryByKey = new Map();
+  for (const raw of metadata.entries) {
+    const key = String(raw?.key || "");
+    const byteOffset = Number(raw?.byteOffset);
+    const crc32 = String(raw?.crc32 || "");
+    if (
+      !key ||
+      missingSet.has(key) ||
+      entryByKey.has(key) ||
+      !/^[a-f0-9]{8}$/.test(crc32) ||
+      !Number.isSafeInteger(byteOffset) ||
+      byteOffset < 0 ||
+      byteOffset % fieldBytes !== 0
+    ) {
+      return null;
     }
-    await fs.promises.writeFile(
-      `${tmp}.json`,
-      JSON.stringify(cacheMetadataWithPayload(cacheContext.payload, { inventoryText, binBytes })),
+    const entry = { key, byteOffset, crc32 };
+    entries.push(entry);
+    entryByKey.set(key, entry);
+  }
+  entries.sort((left, right) => left.byteOffset - right.byteOffset);
+  if (entries.some((entry, index) => entry.byteOffset !== index * fieldBytes)) {
+    return null;
+  }
+  if (binBytes !== entries.length * fieldBytes) {
+    return null;
+  }
+  const representedKeys = normalizeMercatorGridMapping([...entryByKey.keys(), ...missingEntryKeys]);
+  if (JSON.stringify(representedKeys) !== JSON.stringify(expectedKeys)) {
+    return null;
+  }
+  if (
+    !/^[a-f0-9]{64}$/.test(String(metadata?.entryManifestSha256 || "")) ||
+    metadata.entryManifestSha256 !==
+      mercatorGridPackManifestSha256({
+        fieldBytes,
+        binBytes,
+        entries,
+        missingEntryKeys,
+      })
+  ) {
+    return null;
+  }
+  return { binBytes, fieldBytes, entries, entryByKey, missingEntryKeys: missingSet };
+}
+
+async function writeRegriddedBinCache(cacheContext, { gridEntries = [], missingEntryKeys = [], profile = null } = {}) {
+  const tmp = `${cacheContext.binPath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  let handle = null;
+  try {
+    const fieldBytes = Number(cacheContext?.payload?.gridShape?.fieldBytes);
+    const expectedKeys = normalizeMercatorGridMapping(cacheContext?.payload?.gridMapping);
+    const missingKeys = normalizeMercatorGridMapping(missingEntryKeys);
+    const valuesByKey = new Map();
+    for (const entry of Array.isArray(gridEntries) ? gridEntries : []) {
+      const key = String(entry?.key || "");
+      const values = entry?.values;
+      if (!key || valuesByKey.has(key) || !(values instanceof Float32Array) || values.byteLength !== fieldBytes) {
+        throw new Error("invalid or duplicate Mercator grid-pack entry");
+      }
+      valuesByKey.set(key, values);
+    }
+    if (missingKeys.some((key) => valuesByKey.has(key))) {
+      throw new Error("Mercator grid-pack entries and missing keys must be disjoint");
+    }
+    const representedKeys = normalizeMercatorGridMapping([...valuesByKey.keys(), ...missingKeys]);
+    if (JSON.stringify(representedKeys) !== JSON.stringify(expectedKeys)) {
+      throw new Error("Mercator grid-pack entries do not cover the cache mapping");
+    }
+    const orderedEntries = [...valuesByKey.entries()].sort(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0,
     );
+    const metadataEntries = [];
+    handle = await fs.promises.open(tmp, "wx");
+    let byteOffset = 0;
+    for (const [key, values] of orderedEntries) {
+      const body = Buffer.from(values.buffer, values.byteOffset, values.byteLength);
+      let written = 0;
+      while (written < body.byteLength) {
+        const result = await handle.write(body, written, body.byteLength - written, byteOffset + written);
+        if (!result || result.bytesWritten <= 0) {
+          throw new Error(`Mercator grid-pack write stopped after ${written}/${body.byteLength} bytes`);
+        }
+        written += result.bytesWritten;
+      }
+      metadataEntries.push({ key, byteOffset, crc32: crc32Bytes(body) });
+      byteOffset += body.byteLength;
+    }
+    await handle.close();
+    handle = null;
+    const metadata = cacheMetadataWithPayload(cacheContext.payload, {
+      fieldBytes,
+      binBytes: byteOffset,
+      entries: metadataEntries,
+      missingEntryKeys: missingKeys,
+      entryManifestSha256: mercatorGridPackManifestSha256({
+        fieldBytes,
+        binBytes: byteOffset,
+        entries: metadataEntries,
+        missingEntryKeys: missingKeys,
+      }),
+    });
+    await fs.promises.writeFile(`${tmp}.json`, JSON.stringify(metadata));
     await fs.promises.rename(tmp, cacheContext.binPath);
     await fs.promises.rename(`${tmp}.json`, cacheContext.metadataPath);
+    REGRID_BIN_METADATA_CACHE.delete(cacheContext.payloadHash);
+    REGRID_BIN_CORRUPT_PAYLOADS.delete(cacheContext.payloadHash);
+    // v3 replaces both the unhashed v2 Mercator pack and the older
+    // linear-latitude v1 body. Removing only these exact content-addressed
+    // siblings after successful publication avoids retaining another
+    // ~0.9 GB/frame; every removed cache is deterministically recomputable.
+    for (const stalePath of [
+      cacheContext.previousBinPath,
+      cacheContext.previousMetadataPath,
+      cacheContext.legacyBinPath,
+      cacheContext.legacyMetadataPath,
+    ].filter(Boolean)) {
+      await fs.promises.rm(stalePath, { force: true }).catch(() => {});
+    }
+    return true;
   } catch (error) {
-    // A failed persist silently forces wgrib2 regrid+export on every warm rebuild.
+    // A failed persist silently forces wgrib2 regrid+export/remap on every
+    // warm rebuild; the already-decoded frame remains authoritative.
     incrementProfileCounter(profile, "regridBinCacheWriteFailures");
     console.warn(
       `[noaa-beta] regridded-bin cache write failed for ${cacheContext.binPath}: ${String(error?.message || error)}`,
     );
+    await handle?.close().catch(() => {});
     await fs.promises.rm(tmp, { force: true }).catch(() => {});
     await fs.promises.rm(`${tmp}.json`, { force: true }).catch(() => {});
+    return false;
   }
 }
 
@@ -258,7 +672,9 @@ async function writeRegriddedBinCache(cacheContext, { binSourcePath, inventoryTe
 // diverge between the decode path and hash reconstruction).
 function resolveBulkRegridBinCacheContext({
   gribPath,
+  selectedMetadata = null,
   wgrib2Path,
+  selection,
   bounds,
   width,
   height,
@@ -273,7 +689,115 @@ function resolveBulkRegridBinCacheContext({
     height,
     useCategoricalPrecipTypeInterpolation: Boolean(categoricalPrecipTypeInterpolation),
   }).slice(1, -1);
-  return resolveRegriddedBinCacheContext({ gribPath, wgrib2Path, regridArgsSignature, decodeSession });
+  const contextOptions = {
+    gribPath,
+    wgrib2Path,
+    regridArgsSignature,
+    gridMapping: mercatorGridMappingForSelection(selection, categoricalPrecipTypeInterpolation),
+    width,
+    height,
+  };
+  if (selectedMetadata) {
+    return resolveRegriddedBinCacheContextFromSelectedMetadata({
+      ...contextOptions,
+      selectedMetadata,
+    });
+  }
+  return resolveRegriddedBinCacheContext({
+    ...contextOptions,
+    decodeSession,
+  });
+}
+
+// Structurally probe the exact main-decode Mercator pack using selected-GRIB
+// metadata captured by the publication probe. Entry CRCs are deliberately
+// deferred to decode, where every consumed Float32 field is checked before it
+// can enter the result.
+async function probeMainDecodeWarmPack({
+  gribPath,
+  selectedMetadata,
+  wgrib2Path,
+  selection,
+  bounds,
+  width,
+  height,
+  categoricalPrecipTypeInterpolation = true,
+}) {
+  if (
+    !/^[a-f0-9]{64}$/.test(String(selectedMetadata?.sha256 || "")) ||
+    !/^[a-f0-9]{24}$/.test(String(selectedMetadata?.selectedHash || ""))
+  ) {
+    return null;
+  }
+  const cacheContext = await resolveBulkRegridBinCacheContext({
+    gribPath,
+    selectedMetadata,
+    wgrib2Path,
+    selection,
+    bounds,
+    width,
+    height,
+    categoricalPrecipTypeInterpolation,
+    // A speculative candidate must never enter the authoritative frame memo.
+    decodeSession: null,
+  });
+  const cached = await readRegriddedBinCache(cacheContext);
+  if (!cacheContext || !cached) {
+    return null;
+  }
+  const candidate = Object.freeze({
+    payloadHash: cacheContext.payloadHash,
+    selectedMetadata,
+  });
+  PROBED_MAIN_DECODE_WARM_PACKS.set(candidate, {
+    cacheContext,
+    cached,
+    gribPath: String(gribPath || ""),
+    wgrib2Path: String(wgrib2Path || ""),
+    width: Number(width),
+    height: Number(height),
+    categoricalPrecipTypeInterpolation: Boolean(categoricalPrecipTypeInterpolation),
+    gridMapping: mercatorGridMappingForSelection(selection, categoricalPrecipTypeInterpolation),
+    regridArgsSignature: buildNoaaRegridArgs({
+      gribPath: "",
+      gridPath: "",
+      bounds,
+      width,
+      height,
+      useCategoricalPrecipTypeInterpolation: Boolean(categoricalPrecipTypeInterpolation),
+    }).slice(1, -1),
+  });
+  return candidate;
+}
+
+function assertRequiredRegridPackMatchesDecode(
+  details,
+  { gribPath, wgrib2Path, selection, bounds, width, height, categoricalPrecipTypeInterpolation = true },
+) {
+  const expectedGridMapping = mercatorGridMappingForSelection(selection, categoricalPrecipTypeInterpolation);
+  const expectedRegridArgsSignature = buildNoaaRegridArgs({
+    gribPath: "",
+    gridPath: "",
+    bounds,
+    width,
+    height,
+    useCategoricalPrecipTypeInterpolation: Boolean(categoricalPrecipTypeInterpolation),
+  }).slice(1, -1);
+  const matches =
+    details.gribPath === String(gribPath || "") &&
+    details.wgrib2Path === String(wgrib2Path || "") &&
+    details.width === Number(width) &&
+    details.height === Number(height) &&
+    details.categoricalPrecipTypeInterpolation === Boolean(categoricalPrecipTypeInterpolation) &&
+    JSON.stringify(details.gridMapping) === JSON.stringify(expectedGridMapping) &&
+    JSON.stringify(details.regridArgsSignature) === JSON.stringify(expectedRegridArgsSignature) &&
+    details.cacheContext?.payloadHash === cachePayloadDescriptor(details.cacheContext?.payload).payloadHash;
+  if (!matches) {
+    throw requiredRegridPackError(
+      "Required NOAA Mercator grid pack does not match this decode request.",
+      "NOAA_REGRID_PACK_REQUIRED_MISMATCH",
+    );
+  }
 }
 
 // Rebuilds the regrid-bin payload hash the bulk decoder would have used
@@ -283,6 +807,7 @@ function resolveBulkRegridBinCacheContext({
 async function resolveMainDecodeRegridPayloadHash({
   gribPath,
   wgrib2Path,
+  selection,
   bounds,
   width,
   height,
@@ -292,6 +817,7 @@ async function resolveMainDecodeRegridPayloadHash({
   const cacheContext = await resolveBulkRegridBinCacheContext({
     gribPath,
     wgrib2Path,
+    selection,
     bounds,
     width,
     height,
@@ -312,28 +838,53 @@ async function decodeSelectedRecordsBulk({
   width,
   height,
   categoricalPrecipTypeInterpolation = true,
+  sparseReadPlan = null,
   profile,
   decodeSession = null,
+  requiredRegridPack = null,
 }) {
   const gridPath = path.join(tempDir, "selected-regridded.grib2");
   const binPath = path.join(tempDir, "selected-regridded.bin");
-  const cacheContext = await resolveBulkRegridBinCacheContext({
-    gribPath,
-    wgrib2Path,
-    bounds,
-    width,
-    height,
-    categoricalPrecipTypeInterpolation,
-    decodeSession,
-  });
+  const requiredPackDetails = requiredRegridPackDetails(requiredRegridPack);
+  if (requiredPackDetails) {
+    assertRequiredRegridPackMatchesDecode(requiredPackDetails, {
+      gribPath,
+      wgrib2Path,
+      selection,
+      bounds,
+      width,
+      height,
+      categoricalPrecipTypeInterpolation,
+    });
+  }
+  const cacheContext = requiredPackDetails
+    ? requiredPackDetails.cacheContext
+    : await resolveBulkRegridBinCacheContext({
+        gribPath,
+        wgrib2Path,
+        selection,
+        bounds,
+        width,
+        height,
+        categoricalPrecipTypeInterpolation,
+        decodeSession,
+      });
   const cached = await readRegriddedBinCache(cacheContext);
+  if (requiredPackDetails && !cached) {
+    throw requiredRegridPackError(`Required NOAA Mercator grid pack is no longer available for ${gribPath}.`);
+  }
+  if (
+    requiredPackDetails &&
+    (!regridPackFileIdentityMatches(requiredPackDetails.cached.binIdentity, cached.binIdentity) ||
+      !regridPackFileIdentityMatches(requiredPackDetails.cached.metadataIdentity, cached.metadataIdentity))
+  ) {
+    throw mercatorGridPackRaceError();
+  }
   let inventoryText;
   let binReadPath;
   let cachedBinBytes = null;
   let persistBinAfterDecode = false;
   if (cached) {
-    incrementProfileCounter(profile, "regridBinCacheHits");
-    inventoryText = cached.inventoryText;
     binReadPath = cacheContext.binPath;
     cachedBinBytes = cached.binBytes;
   } else {
@@ -361,17 +912,29 @@ async function decodeSelectedRecordsBulk({
     recordProfileStage(profile, "wgribExportMs", regridStageStartedAt);
     binReadPath = binPath;
   }
-  // Warm hits share one parsed inventory per cached bin; the per-frame
-  // record index below builds fresh queue arrays from these shared,
-  // never-mutated row objects, so cross-frame sharing is safe.
-  let inventory = cached?.inventory;
-  if (!inventory) {
-    inventory = parseWgribSimpleInventory(inventoryText);
-    if (cached) {
-      cached.inventory = inventory;
-    }
+  // A derived sidecar is authoritative only for the exact full Mercator pack
+  // identity from which it was computed. Keep this check at the adoption
+  // point (after pack metadata validation) so a stale/tampered plan can never
+  // prune reads merely because its dependency graph still matches.
+  const sparsePlanMatchesPack =
+    Boolean(cached && sparseReadPlan) &&
+    /^[a-f0-9]{64}$/.test(String(sparseReadPlan.regridBinPayloadHash || "")) &&
+    sparseReadPlan.regridBinPayloadHash === cacheContext?.payloadHash;
+  const candidateSelection = sparsePlanMatchesPack
+    ? applyDerivedDecodePlan(selection, sparseReadPlan, width * height)
+    : selection;
+  const sparseApplied =
+    candidateSelection !== selection &&
+    Array.isArray(candidateSelection?.appliedDerivedDecodePlan?.omittedDecodeKeys) &&
+    candidateSelection.appliedDerivedDecodePlan.omittedDecodeKeys.length > 0;
+  const decodeSelection = sparseApplied ? candidateSelection : selection;
+  if (cached && sparseReadPlan && !sparseApplied) {
+    incrementProfileCounter(profile, "regridBinSparseDeclines");
   }
-  if (inventory.length === 0) {
+  // A pack hit is already indexed by selected-record identity and row mode;
+  // only a miss needs to parse/match the temporary wgrib inventory.
+  const inventory = cached ? null : parseWgribSimpleInventory(inventoryText);
+  if (!cached && inventory.length === 0) {
     throw new Error("Bulk NOAA decode produced an empty regridded inventory.");
   }
   let stageStartedAt = performance.now();
@@ -380,69 +943,131 @@ async function decodeSelectedRecordsBulk({
   const binSize = cachedBinBytes !== null ? cachedBinBytes : (await fs.promises.stat(binReadPath)).size;
   recordProfileStage(profile, "binaryReadMs", stageStartedAt);
   const fieldBytes = width * height * 4;
-  if (binSize < inventory.length * fieldBytes) {
+  if (!cached && binSize < inventory.length * fieldBytes) {
     throw new Error(`Bulk NOAA binary has ${binSize} bytes; expected at least ${inventory.length * fieldBytes}.`);
   }
   const decoded = {};
   const usedRecordNumbers = new Set();
   const regriddedRecordBySource = new Map();
-  const regriddedInventoryIndex = buildBulkDecodedRecordIndex(inventory);
+  const regriddedInventoryIndex = cached ? null : buildBulkDecodedRecordIndex(inventory);
   const selectedRecordIndex = selectedPlan?.recordIndexByOriginalRecord || null;
   const decodedGridByRecord = new Map();
+  const recordCacheSeededKeys = new Set();
+  const packEntriesByKey = new Map();
+  const missingPackEntryKeys = new Set();
   let sliceScratchBuffer = null;
   const requiredKeys = requiredDecodeKeys(selection.catalog || NOAA_NAM_PARAMETER_CATALOG);
+  const livePackEntryKeys = new Set(
+    Object.entries(decodeSelection.records || {})
+      .filter(([, record]) => Boolean(record))
+      .map(([key, record]) =>
+        mercatorGridPackEntryKey(record, decodeRowInterpolationForKey(key, categoricalPrecipTypeInterpolation)),
+      ),
+  );
+  let packEntriesRead = 0;
+  let packEntriesSkipped = 0;
+  let packBytesRead = 0;
+  let packBytesSkipped = 0;
   stageStartedAt = performance.now();
   const binHandle = await fs.promises.open(binReadPath, "r");
+  let openedBinIdentity = null;
+  let completedBinIdentity = null;
+  let completedMetadataIdentity = null;
+  let gridDecodeError = null;
   try {
-    for (const [key, sourceRecord] of Object.entries(selection.records || {})) {
+    if (cached) {
+      openedBinIdentity = regridPackFileIdentity(await binHandle.stat({ bigint: true }));
+      if (!regridPackFileIdentityMatches(cached.binIdentity, openedBinIdentity)) {
+        throw mercatorGridPackRaceError();
+      }
+    }
+    if (cached) {
+      // Metadata entries are in increasing byte-offset order. Read the pack
+      // sequentially up front so selection/catalog order cannot turn a warm
+      // 0.9 GB HRRR hit into random I/O.
+      const packedEntries = sparseApplied
+        ? cached.entries.filter((entry) => livePackEntryKeys.has(entry.key))
+        : cached.entries;
+      packEntriesRead = packedEntries.length;
+      packEntriesSkipped = cached.entries.length - packedEntries.length;
+      packBytesRead = packEntriesRead * fieldBytes;
+      packBytesSkipped = packEntriesSkipped * fieldBytes;
+      for (const packedEntry of packedEntries) {
+        const values = await readPackedFloat32GridFileSlice({
+          fileHandle: binHandle,
+          byteOffset: packedEntry.byteOffset,
+          fieldBytes,
+        });
+        if (crc32Float32(values) !== packedEntry.crc32) {
+          throw mercatorGridPackIntegrityError(packedEntry);
+        }
+        markBulkDecodedGrid(values, cacheContext?.payloadHash);
+        decodedGridByRecord.set(packedEntry.key, values);
+      }
+    }
+    for (const [key, sourceRecord] of Object.entries(decodeSelection.records || {})) {
       if (!sourceRecord) {
         continue;
       }
       const sourceRecordKey = selectedRecordDecodeCacheKey(sourceRecord);
       const rowInterpolation = decodeRowInterpolationForKey(key, categoricalPrecipTypeInterpolation);
-      let regriddedRecord = regriddedRecordBySource.get(sourceRecordKey);
-      if (!regriddedRecord) {
-        regriddedRecord =
-          takeBulkDecodedRecordBySelectedPlan(
-            regriddedInventoryIndex,
-            selectedRecordIndex,
-            sourceRecord,
-            usedRecordNumbers,
-          ) || takeBulkDecodedRecord(regriddedInventoryIndex, sourceRecord, usedRecordNumbers);
-        if (regriddedRecord) {
-          usedRecordNumbers.add(bulkDecodedRecordOrdinal(regriddedRecord));
-          regriddedRecordBySource.set(sourceRecordKey, regriddedRecord);
-        }
-      }
-      if (!regriddedRecord) {
+      const packEntryKey = mercatorGridPackEntryKey(sourceRecord, rowInterpolation);
+      if (cached?.missingEntryKeys.has(packEntryKey)) {
         if (requiredKeys.has(key)) {
-          throw new Error(`Bulk NOAA decode is missing required regridded record for ${key}.`);
+          throw new Error(`Bulk NOAA grid pack is missing required record for ${key}.`);
         }
         continue;
       }
-      const fieldOrdinal = bulkDecodedRecordOrdinal(regriddedRecord);
-      const gridCacheKey = `${fieldOrdinal}:${rowInterpolation}`;
-      let values = decodedGridByRecord.get(gridCacheKey);
+      let values = decodedGridByRecord.get(packEntryKey);
       if (!values) {
-        // The slice loop is sequential within this call, so one scratch read
-        // buffer serves every field slice.
-        if (!sliceScratchBuffer) {
-          sliceScratchBuffer = Buffer.allocUnsafe(fieldBytes);
+        if (cached) {
+          throw new Error(`Bulk NOAA grid pack has no validated entry for ${key}.`);
+        } else {
+          let regriddedRecord = regriddedRecordBySource.get(sourceRecordKey);
+          if (!regriddedRecord) {
+            regriddedRecord =
+              takeBulkDecodedRecordBySelectedPlan(
+                regriddedInventoryIndex,
+                selectedRecordIndex,
+                sourceRecord,
+                usedRecordNumbers,
+              ) || takeBulkDecodedRecord(regriddedInventoryIndex, sourceRecord, usedRecordNumbers);
+            if (regriddedRecord) {
+              usedRecordNumbers.add(bulkDecodedRecordOrdinal(regriddedRecord));
+              regriddedRecordBySource.set(sourceRecordKey, regriddedRecord);
+            }
+          }
+          if (!regriddedRecord) {
+            if (requiredKeys.has(key)) {
+              throw new Error(`Bulk NOAA decode is missing required regridded record for ${key}.`);
+            }
+            missingPackEntryKeys.add(packEntryKey);
+            continue;
+          }
+          const fieldOrdinal = bulkDecodedRecordOrdinal(regriddedRecord);
+          // The cold slice loop is sequential, so one scratch read buffer
+          // serves every linear-latitude field before exact Mercator remap.
+          if (!sliceScratchBuffer) {
+            sliceScratchBuffer = Buffer.allocUnsafe(fieldBytes);
+          }
+          values = await decodeBinaryGridFileSlice({
+            fileHandle: binHandle,
+            byteOffset: (fieldOrdinal - 1) * fieldBytes,
+            fieldBytes,
+            bounds,
+            width,
+            height,
+            rowInterpolation,
+            rowMapCache: decodeSession?.rowMaps,
+            decodeSession,
+            scratchBuffer: sliceScratchBuffer,
+          });
+          packEntriesByKey.set(packEntryKey, values);
         }
-        values = await decodeBinaryGridFileSlice({
-          fileHandle: binHandle,
-          byteOffset: (fieldOrdinal - 1) * fieldBytes,
-          fieldBytes,
-          bounds,
-          width,
-          height,
-          rowInterpolation,
-          rowMapCache: decodeSession?.rowMaps,
-          decodeSession,
-          scratchBuffer: sliceScratchBuffer,
-        });
-        BULK_DECODED_GRIDS.add(values);
-        decodedGridByRecord.set(gridCacheKey, values);
+        markBulkDecodedGrid(values, cacheContext?.payloadHash);
+        decodedGridByRecord.set(packEntryKey, values);
+      }
+      if (!recordCacheSeededKeys.has(packEntryKey)) {
         writeDecodedRecordGridCache({
           record: sourceRecord,
           values,
@@ -454,20 +1079,69 @@ async function decodeSelectedRecordsBulk({
           decodeSession,
           sourceRef: decodeSession?.selectedGribSourceRefs?.get(String(gribPath)) || null,
         });
+        recordCacheSeededKeys.add(packEntryKey);
       }
       decoded[key] = values;
     }
+  } catch (error) {
+    gridDecodeError = error;
   } finally {
+    if (cached && openedBinIdentity) {
+      completedBinIdentity = await binHandle
+        .stat({ bigint: true })
+        .then(regridPackFileIdentity)
+        .catch(() => null);
+    }
+    if (requiredPackDetails) {
+      completedMetadataIdentity = await statRegridPackFileIdentity(cacheContext.metadataPath).catch(() => null);
+    }
     await binHandle.close().catch(() => {});
   }
+  if (cached && openedBinIdentity && !regridPackFileIdentityMatches(openedBinIdentity, completedBinIdentity)) {
+    gridDecodeError = mercatorGridPackRaceError();
+  }
+  if (
+    requiredPackDetails &&
+    !regridPackFileIdentityMatches(requiredPackDetails.cached.metadataIdentity, completedMetadataIdentity)
+  ) {
+    gridDecodeError = mercatorGridPackRaceError();
+  }
+  if (gridDecodeError) {
+    if (gridDecodeError.code === "NOAA_REGRID_PACK_INTEGRITY") {
+      incrementProfileCounter(profile, "regridBinCacheCorruptions");
+      await invalidateCorruptRegriddedBinCache(cacheContext, gridDecodeError.packEntry, {
+        expectedBinIdentity: openedBinIdentity,
+        expectedMetadataIdentity: cached?.metadataIdentity || null,
+        removeFiles: !requiredPackDetails,
+      });
+    }
+    throw gridDecodeError;
+  }
+  if (cached) {
+    incrementProfileCounter(profile, "regridBinCacheHits");
+  }
+  if (sparseApplied) {
+    incrementProfileCounter(profile, "regridBinSparseHits");
+  }
   recordProfileStage(profile, "gridMapMs", stageStartedAt);
+  if (!cached) {
+    packEntriesRead = packEntriesByKey.size;
+    packBytesRead = packEntriesRead * fieldBytes;
+  }
+  if (profile) {
+    profile.regridBinPackEntriesRead = (Number(profile.regridBinPackEntriesRead) || 0) + packEntriesRead;
+    profile.regridBinPackEntriesSkipped = (Number(profile.regridBinPackEntriesSkipped) || 0) + packEntriesSkipped;
+    profile.regridBinPackBytesRead = (Number(profile.regridBinPackBytesRead) || 0) + packBytesRead;
+    profile.regridBinPackBytesSkipped = (Number(profile.regridBinPackBytesSkipped) || 0) + packBytesSkipped;
+  }
   if (persistBinAfterDecode) {
+    const persistStartedAt = performance.now();
     await writeRegriddedBinCache(cacheContext, {
-      binSourcePath: binPath,
-      inventoryText,
-      binBytes: binSize,
+      gridEntries: [...packEntriesByKey].map(([key, values]) => ({ key, values })),
+      missingEntryKeys: [...missingPackEntryKeys],
       profile,
     }).catch(() => {});
+    recordProfileStage(profile, "regridBinPersistMs", persistStartedAt);
   }
   // Recorded only on successful bulk completion so consumers (the
   // derived-grid cache) never key on a hash whose grids actually came from
@@ -475,7 +1149,126 @@ async function decodeSelectedRecordsBulk({
   if (Array.isArray(decodeSession?.collectRegridBinPayloadHashes)) {
     decodeSession.collectRegridBinPayloadHashes.push(cacheContext?.payloadHash || null);
   }
-  return decoded;
+  return attachDecodedGridOutcome(decoded, {
+    source: cached ? (sparseApplied ? "regrid-pack-sparse" : "regrid-pack") : "bulk-cold",
+    payloadHash: cacheContext?.payloadHash || null,
+    sparseApplied,
+    packEntriesRead,
+    packEntriesSkipped,
+    packBytesRead,
+    packBytesSkipped,
+  });
+}
+
+function sha256Bytes(body) {
+  return crypto.createHash("sha256").update(body).digest("hex");
+}
+
+function crc32Bytes(body) {
+  return zlib.crc32(body).toString(16).padStart(8, "0");
+}
+
+function crc32Float32(values) {
+  return crc32Bytes(Buffer.from(values.buffer, values.byteOffset, values.byteLength));
+}
+
+function mercatorGridPackIntegrityError(entry) {
+  const error = new Error(`Mercator grid-pack checksum mismatch for ${entry?.key || "unknown entry"}.`);
+  error.code = "NOAA_REGRID_PACK_INTEGRITY";
+  error.packEntry = entry;
+  return error;
+}
+
+function mercatorGridPackRaceError() {
+  const error = new Error("Mercator grid pack read changed identity; expected the probed file generation.");
+  error.code = "NOAA_REGRID_PACK_RACE";
+  return error;
+}
+
+async function invalidateCorruptRegriddedBinCache(
+  cacheContext,
+  entry,
+  { expectedBinIdentity = null, expectedMetadataIdentity = null, removeFiles = true } = {},
+) {
+  if (!cacheContext || !entry) {
+    return false;
+  }
+  REGRID_BIN_METADATA_CACHE.delete(cacheContext.payloadHash);
+  let remainsCorrupt;
+  try {
+    const currentBinIdentity = await statRegridPackFileIdentity(cacheContext.binPath);
+    if (expectedBinIdentity && !regridPackFileIdentityMatches(expectedBinIdentity, currentBinIdentity)) {
+      return false;
+    }
+    const currentMetadataIdentity = await statRegridPackFileIdentity(cacheContext.metadataPath).catch(() => null);
+    if (
+      expectedMetadataIdentity &&
+      currentMetadataIdentity &&
+      !regridPackFileIdentityMatches(expectedMetadataIdentity, currentMetadataIdentity)
+    ) {
+      return false;
+    }
+    const handle = await fs.promises.open(cacheContext.binPath, "r");
+    try {
+      const openedIdentity = regridPackFileIdentity(await handle.stat({ bigint: true }));
+      if (expectedBinIdentity && !regridPackFileIdentityMatches(expectedBinIdentity, openedIdentity)) {
+        return false;
+      }
+      const values = await readPackedFloat32GridFileSlice({
+        fileHandle: handle,
+        byteOffset: entry.byteOffset,
+        fieldBytes: cacheContext.payload.gridShape.fieldBytes,
+      });
+      remainsCorrupt = crc32Float32(values) !== entry.crc32;
+    } finally {
+      await handle.close().catch(() => {});
+    }
+  } catch {
+    remainsCorrupt = true;
+  }
+  if (!remainsCorrupt) {
+    return false;
+  }
+  const finalBinIdentity = await statRegridPackFileIdentity(cacheContext.binPath).catch(() => null);
+  const finalMetadataIdentity = await statRegridPackFileIdentity(cacheContext.metadataPath).catch(() => null);
+  if (
+    (expectedBinIdentity && !regridPackFileIdentityMatches(expectedBinIdentity, finalBinIdentity)) ||
+    (expectedMetadataIdentity &&
+      finalMetadataIdentity &&
+      !regridPackFileIdentityMatches(expectedMetadataIdentity, finalMetadataIdentity))
+  ) {
+    return false;
+  }
+  boundedRunCacheSet(REGRID_BIN_CORRUPT_PAYLOADS, cacheContext.payloadHash, true);
+  if (!removeFiles) {
+    return true;
+  }
+  // Metadata first makes future readers miss before the recomputable body is
+  // removed. A run-local blacklist closes the same-size-corruption hole even
+  // if filesystem cleanup is denied; the next call cold-rebuilds the pack and
+  // a successful publication clears the blacklist.
+  await fs.promises.rm(cacheContext.metadataPath, { force: true }).catch(() => {});
+  await fs.promises.rm(cacheContext.binPath, { force: true }).catch(() => {});
+  return true;
+}
+
+function mercatorGridPackManifestSha256({ fieldBytes, binBytes, entries, missingEntryKeys }) {
+  const manifest = {
+    version: "mercator-grid-pack-entry-manifest-v1",
+    fieldBytes: Number(fieldBytes),
+    binBytes: Number(binBytes),
+    entries: (Array.isArray(entries) ? entries : [])
+      .map((entry) => ({
+        key: String(entry?.key || ""),
+        byteOffset: Number(entry?.byteOffset),
+        crc32: String(entry?.crc32 || ""),
+      }))
+      .sort((left, right) => left.byteOffset - right.byteOffset || left.key.localeCompare(right.key)),
+    missingEntryKeys: normalizeMercatorGridMapping(
+      missingEntryKeys instanceof Set ? [...missingEntryKeys] : missingEntryKeys,
+    ),
+  };
+  return sha256Bytes(Buffer.from(JSON.stringify(manifest)));
 }
 
 function parseWgribSimpleInventory(text) {
@@ -705,16 +1498,24 @@ module.exports = {
   decodeSelectedRecordsBulk,
   decodeSelectedRecordsLegacy,
   decodeSelectedRecordsToGrids,
+  decodedGridOutcome,
   decodedSelectionCacheKey,
   parseWgribSimpleInventory,
+  mercatorGridMappingForSelection,
+  mercatorGridPackManifestSha256,
+  mercatorGridPackEntryKey,
+  normalizeMercatorGridMapping,
+  probeMainDecodeWarmPack,
   resolveMainDecodeRegridPayloadHash,
   readRegriddedBinCache,
   regriddedBinMemoKey,
   requiredDecodeKeys,
   resolveRegriddedBinCacheContext,
+  resolveRegriddedBinCacheContextFromSelectedMetadata,
   resolveRegriddedBinCacheContextUncached,
   takeBulkDecodedRecord,
   takeBulkDecodedRecordBySelectedPlan,
   takeFirstUnusedRecord,
+  validatedMercatorGridPackMetadata,
   writeRegriddedBinCache,
 };

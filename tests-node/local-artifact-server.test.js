@@ -14,7 +14,7 @@ function rawGet(port, rawPath) {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("end", () => {
-        resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString("utf8") });
+        resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString("utf8") });
       });
     });
     req.on("error", reject);
@@ -47,6 +47,25 @@ test("asset requests inside the artifact root are still served", async () => {
 
     const response = await rawGet(port, `/${key}`);
     assert.equal(response.status, 200, "a legit in-root asset must still be served");
+  });
+});
+
+test("hover artifacts advertise Brotli and legacy gzip content encodings", async () => {
+  await withServer(async ({ runtime, port }) => {
+    for (const [extension, expectedEncoding] of [
+      ["br", "br"],
+      ["gz", "gzip"],
+    ]) {
+      const key = `${runtime.artifactPrefix}/gfs/20260313-0000Z/conus/000/hover-grid.bin.${extension}`;
+      const filePath = runtime.getArtifactStoragePath(key);
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.promises.writeFile(filePath, Buffer.from([1, 2, 3, 4]));
+
+      const response = await rawGet(port, `/${key}`);
+      assert.equal(response.status, 200);
+      assert.equal(response.headers["content-encoding"], expectedEncoding);
+      assert.equal(response.headers["content-type"], "application/octet-stream");
+    }
   });
 });
 

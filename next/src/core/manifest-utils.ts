@@ -157,7 +157,10 @@ export function normalizeManifest(raw: ModelManifest, modelKey: ModelKey, viewKe
         parameterAvailability: normalizeFrameParameterAvailability(frame.parameterAvailability),
         hoverGridKey: frame.hoverGridKey || null,
         hoverGridBytes: Number(frame.hoverGridBytes) || null,
-        hoverGridSchemaVersion: Number(frame.hoverGridSchemaVersion) || null,
+        hoverGridSchemaVersion: normalizeHoverGridSchemaVersion(
+          frame.hoverGridSchemaVersion,
+          `frame ${frame.hour} hoverGridSchemaVersion`,
+        ),
         hoverGridSupplemental: normalizeHoverGridSupplemental(frame.hoverGridSupplemental),
         reflectivityVariants: frame.reflectivityVariants || null,
         reflectivityVariantsByLayer: frame.reflectivityVariantsByLayer || null,
@@ -479,10 +482,32 @@ function normalizeHoverGridSupplemental(
     normalized[name] = {
       key,
       bytes: Number(ref?.bytes) || null,
-      schemaVersion: Number(ref?.schemaVersion) || null,
+      schemaVersion: normalizeHoverGridSchemaVersion(ref?.schemaVersion, `hoverGridSupplemental.${name}.schemaVersion`),
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+let warnedAboutFutureHoverSchemaVersion = false;
+
+function normalizeHoverGridSchemaVersion(value: unknown, label: string): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Manifest ${label} must be an integer hover schema identity from 0 through 4.`);
+  }
+  if (value > 4) {
+    // A future schema version published ahead of this client must degrade to
+    // "hover unavailable for this frame", not fail the whole manifest load;
+    // the payload decoder still rejects unknown magics loudly on its own.
+    if (!warnedAboutFutureHoverSchemaVersion) {
+      warnedAboutFutureHoverSchemaVersion = true;
+      console.warn(`Manifest ${label} declares unsupported hover schema ${value}; hover is disabled for such frames.`);
+    }
+    return null;
+  }
+  return value;
 }
 
 function normalizeContourVectorRefs(refs: FrameRecord["contourVectorRefs"]): FrameRecord["contourVectorRefs"] {

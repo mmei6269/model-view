@@ -5,7 +5,10 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const test = require("node:test");
-const { mergeManifestWithTemplate } = require("../scripts/lib/local-artifact-manifest");
+const {
+  applyRenderedFrameToManifestFrame,
+  mergeManifestWithTemplate,
+} = require("../scripts/lib/local-artifact-manifest");
 const { buildManifestTemplate } = require("../scripts/lib/modelview-runtime");
 const { LocalArtifactRuntime } = require("../scripts/lib/local-artifact-runtime");
 const { buildLatestStatesWithGlobalFrameQueue } = require("../scripts/lib/noaa-build/frame-queue");
@@ -114,6 +117,123 @@ test("manifest merge with absent/empty existing manifest returns exactly the tem
     template.frames.map((frame) => frame.hour),
   );
   assert.equal(mergedEmpty.frames.length, template.frames.length);
+});
+
+test("manifest merge preserves explicit unknown hover schema identities for base and supplemental refs", () => {
+  const existing = JSON.parse(JSON.stringify(buildTemplateForHours(1)));
+  const template = buildTemplateForHours(1);
+  existing.frames[0].hoverGridBytes = 321;
+  existing.frames[0].hoverGridSchemaVersion = 0;
+  existing.frames[0].hoverGridSupplemental = {
+    legacy: {
+      key: "tiles/nam/existing/hover-grid-legacy.bin.gz",
+      bytes: 123,
+      schemaVersion: 0,
+    },
+  };
+  template.frames[0].hoverGridSchemaVersion = 4;
+  template.frames[0].hoverGridSupplemental = {
+    legacy: {
+      key: "tiles/nam/template/hover-grid-legacy.bin.br",
+      bytes: 456,
+      schemaVersion: 4,
+    },
+  };
+
+  const frame = mergeManifestWithTemplate(existing, template).frames[0];
+  assert.equal(frame.hoverGridBytes, 321);
+  assert.equal(frame.hoverGridSchemaVersion, 0);
+  assert.deepEqual(frame.hoverGridSupplemental.legacy, {
+    key: "tiles/nam/existing/hover-grid-legacy.bin.gz",
+    bytes: 123,
+    schemaVersion: 0,
+  });
+});
+
+test("manifest merge keeps absent and null persisted hover schemas unknown", () => {
+  for (const schemaState of ["absent", "null"]) {
+    const existing = JSON.parse(JSON.stringify(buildTemplateForHours(1)));
+    const template = buildTemplateForHours(1);
+    existing.frames[0].hoverGridBytes = 321;
+    existing.frames[0].hoverGridSupplemental = {
+      legacy: {
+        key: `tiles/nam/existing/hover-grid-${schemaState}.bin.gz`,
+        bytes: 123,
+        schemaVersion: null,
+      },
+    };
+    if (schemaState === "absent") {
+      delete existing.frames[0].hoverGridSchemaVersion;
+      delete existing.frames[0].hoverGridSupplemental.legacy.schemaVersion;
+    } else {
+      existing.frames[0].hoverGridSchemaVersion = null;
+    }
+    template.frames[0].hoverGridSchemaVersion = 4;
+    template.frames[0].hoverGridSupplemental = {
+      legacy: {
+        key: "tiles/nam/template/hover-grid-current.bin.br",
+        bytes: 456,
+        schemaVersion: 4,
+      },
+    };
+
+    const frame = mergeManifestWithTemplate(existing, template).frames[0];
+    assert.equal(frame.hoverGridBytes, 321, schemaState);
+    assert.equal(frame.hoverGridSchemaVersion, null, schemaState);
+    assert.equal(frame.hoverGridSupplemental.legacy.schemaVersion, null, schemaState);
+    assert.equal(frame.hoverGridSupplemental.legacy.key, `tiles/nam/existing/hover-grid-${schemaState}.bin.gz`);
+    assert.equal(frame.hoverGridSupplemental.legacy.bytes, 123);
+  }
+});
+
+test("manifest merge rejects malformed base and supplemental hover schema identities", () => {
+  for (const invalid of [-1, 5, 1.5, "3", NaN]) {
+    const existingBase = JSON.parse(JSON.stringify(buildTemplateForHours(1)));
+    const templateBase = buildTemplateForHours(1);
+    existingBase.frames[0].hoverGridSchemaVersion = invalid;
+    assert.throws(
+      () => mergeManifestWithTemplate(existingBase, templateBase),
+      /integer hover schema identity from 0 through 4/,
+    );
+
+    const existingSupplemental = JSON.parse(JSON.stringify(buildTemplateForHours(1)));
+    const templateSupplemental = buildTemplateForHours(1);
+    existingSupplemental.frames[0].hoverGridSupplemental = {
+      invalid: {
+        key: "tiles/nam/existing/hover-grid-invalid.bin.gz",
+        bytes: 123,
+        schemaVersion: invalid,
+      },
+    };
+    assert.throws(
+      () => mergeManifestWithTemplate(existingSupplemental, templateSupplemental),
+      /integer hover schema identity from 0 through 4/,
+    );
+  }
+});
+
+test("supplemental application defaults new producer refs while preserving unknown persisted refs", () => {
+  const frame = buildTemplateForHours(1).frames[0];
+  const activeSchemaVersion = frame.hoverGridSchemaVersion;
+  frame.hoverGridSupplemental = {
+    persisted: { key: "tiles/nam/persisted.bin.gz", bytes: 10 },
+    replaced: { key: "tiles/nam/old.bin.gz", bytes: 11 },
+  };
+  applyRenderedFrameToManifestFrame(frame, {
+    hoverGridSupplemental: {
+      replaced: { key: "tiles/nam/new.bin.br", bytes: 12 },
+      produced: { key: "tiles/nam/produced.bin.br", bytes: 13 },
+    },
+    layers: {},
+    reflectivityVariants: {},
+    reflectivityVariantsByLayer: {},
+  });
+
+  assert.deepEqual(frame.hoverGridSupplemental, {
+    persisted: { key: "tiles/nam/persisted.bin.gz", bytes: 10, schemaVersion: null },
+    replaced: { key: "tiles/nam/new.bin.br", bytes: 12, schemaVersion: activeSchemaVersion },
+    produced: { key: "tiles/nam/produced.bin.br", bytes: 13, schemaVersion: activeSchemaVersion },
+  });
 });
 
 test("NOAA partial-hours rebuilds keep previously rendered frames in the run manifest", async () => {

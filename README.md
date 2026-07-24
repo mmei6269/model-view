@@ -168,7 +168,7 @@ The two benchmark scripts emit their complete sample arrays and workload assumpt
 
 ## Local Runtime Notes
 
-- The React app consumes `manifests/{model}/latest.json`, run manifests, PNG layers, synoptic JSON, and `hover-grid.json.gz` or `hover-grid.bin.gz`.
+- The React app consumes `manifests/{model}/latest.json`, run manifests, PNG layers, synoptic JSON, and lossless hover artifacts. New renders default to `hover-grid.bin.br` (Brotli q0); legacy `.json.gz`/`.bin.gz` artifacts remain readable.
 - `npm run noaa:build` writes artifacts under `output/noaa-beta-cache`.
 - `npm run local:data` serves only files already present in the configured cache root.
 - `output/` is gitignored, so local artifact caches stay out of the repo.

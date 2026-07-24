@@ -20,6 +20,8 @@ const { decodeRowInterpolationForKey } = require("./wgrib2");
 // registry-served frames must only do so when every served grid came from
 // the bulk path the key describes.
 const BULK_DECODED_GRIDS = new WeakSet();
+const BULK_DECODED_GRID_PAYLOAD_HASHES = new WeakMap();
+const DECODED_RECORD_CACHE_OUTCOME = Symbol("noaaDecodedRecordCacheOutcome");
 
 function readDecodedSelectionFromRecordCache({
   selection,
@@ -37,6 +39,7 @@ function readDecodedSelectionFromRecordCache({
   }
   const decoded = {};
   let allBulkDecoded = true;
+  const bulkPayloadHashes = new Set();
   for (const [key, record] of records) {
     const rowInterpolation = decodeRowInterpolationForKey(key, categoricalPrecipTypeInterpolation);
     const values = restoreRunLocalGridCacheEntry(
@@ -46,16 +49,42 @@ function readDecodedSelectionFromRecordCache({
     if (!values) {
       return null;
     }
-    if (!BULK_DECODED_GRIDS.has(values)) {
+    const bulkPayloadHash = BULK_DECODED_GRID_PAYLOAD_HASHES.get(values);
+    if (!BULK_DECODED_GRIDS.has(values) || !bulkPayloadHash) {
       allBulkDecoded = false;
+    } else {
+      bulkPayloadHashes.add(bulkPayloadHash);
     }
     decoded[key] = values;
   }
+  const cacheOutcome = Object.freeze({
+    allBulkDecoded,
+    bulkPayloadHashes: Object.freeze([...bulkPayloadHashes].sort()),
+  });
+  Object.defineProperty(decoded, DECODED_RECORD_CACHE_OUTCOME, {
+    enumerable: false,
+    value: cacheOutcome,
+  });
   incrementDecodeSessionCounter(decodeSession, "decodedRecordGridHits");
   if (decodeSession) {
     decodeSession.lastRecordCacheAllBulkDecoded = allBulkDecoded;
   }
   return decoded;
+}
+
+function decodedRecordCacheOutcome(decoded) {
+  return decoded?.[DECODED_RECORD_CACHE_OUTCOME] || null;
+}
+
+function markBulkDecodedGrid(values, payloadHash) {
+  if (!(values instanceof Float32Array)) {
+    return;
+  }
+  BULK_DECODED_GRIDS.add(values);
+  const hash = String(payloadHash || "");
+  if (/^[a-f0-9]{64}$/.test(hash)) {
+    BULK_DECODED_GRID_PAYLOAD_HASHES.set(values, hash);
+  }
 }
 
 function writeDecodedRecordGridCache({
@@ -78,6 +107,49 @@ function writeDecodedRecordGridCache({
     decodedRecordGridCacheKey({ record, hour, bounds, width, height, rowInterpolation }),
     buildRunLocalGridCacheEntry(values, decodeSession, [{ hour, record }], sourceRef ? [sourceRef] : null),
   );
+}
+
+function seedDecodedSelectionRecordCache({
+  decoded,
+  selection,
+  hour = null,
+  bounds,
+  width,
+  height,
+  categoricalPrecipTypeInterpolation = true,
+  decodeSession,
+  sourceRef = null,
+}) {
+  if (!decoded || typeof decoded !== "object" || !decodeSession) {
+    return 0;
+  }
+  let seeded = 0;
+  const seededKeys = new Set();
+  for (const [key, record] of Object.entries(selection?.records || {})) {
+    const values = decoded[key];
+    if (!record || !(values instanceof Float32Array)) {
+      continue;
+    }
+    const rowInterpolation = decodeRowInterpolationForKey(key, categoricalPrecipTypeInterpolation);
+    const cacheKey = decodedRecordGridCacheKey({ record, hour, bounds, width, height, rowInterpolation });
+    if (seededKeys.has(cacheKey)) {
+      continue;
+    }
+    writeDecodedRecordGridCache({
+      record,
+      values,
+      hour,
+      bounds,
+      width,
+      height,
+      rowInterpolation,
+      decodeSession,
+      sourceRef,
+    });
+    seededKeys.add(cacheKey);
+    seeded += 1;
+  }
+  return seeded;
 }
 
 function readDecodedRecordsForKeyedRecords({
@@ -242,6 +314,30 @@ function createFrameDecodeSession(profile = null) {
   };
 }
 
+function disposeIsolatedFrameDecodeSession(decodeSession) {
+  if (!decodeSession || decodeSession.runCache) {
+    return false;
+  }
+  for (const key of [
+    "selectedGribPromises",
+    "decodedGridPromises",
+    "decodedRecordGrids",
+    "sourceGridRegistry",
+    "profileGridRegistry",
+    "profileDecodeBatches",
+    "rowMaps",
+    "parsedRecords",
+    "selectedPlans",
+    "regridBinCacheContexts",
+    "selectedGribSourceRefs",
+    "sourceProvenanceSources",
+    "temporalProvenanceDerivations",
+  ]) {
+    decodeSession[key]?.clear?.();
+  }
+  return true;
+}
+
 function attachRunLocalDecodeSession(decodeSession, context) {
   if (!decodeSession) {
     return null;
@@ -279,11 +375,27 @@ function finalizeNoaaRenderProfile(profile) {
     selectedGribLockWaits: Number(profile.selectedGribLockWaits) || 0,
     selectedGribLockDeclines: Number(profile.selectedGribLockDeclines) || 0,
     selectedGribPromiseHits: Number(profile.selectedGribPromiseHits) || 0,
+    selectedGribFastPackProbes: Number(profile.selectedGribFastPackProbes) || 0,
+    selectedGribFastPackMetadataHits: Number(profile.selectedGribFastPackMetadataHits) || 0,
+    selectedGribHashBypasses: Number(profile.selectedGribHashBypasses) || 0,
+    selectedGribHashBypassBytes: Number(profile.selectedGribHashBypassBytes) || 0,
+    selectedGribFastPackFallbacks: Number(profile.selectedGribFastPackFallbacks) || 0,
+    selectedGribVerifyHashes: Number(profile.selectedGribVerifyHashes) || 0,
+    selectedGribVerifyHashBytes: Number(profile.selectedGribVerifyHashBytes) || 0,
     regridBinCacheHits: Number(profile.regridBinCacheHits) || 0,
     regridBinCacheMisses: Number(profile.regridBinCacheMisses) || 0,
     regridBinCacheWriteFailures: Number(profile.regridBinCacheWriteFailures) || 0,
+    regridBinCacheCorruptions: Number(profile.regridBinCacheCorruptions) || 0,
+    regridBinSparseHits: Number(profile.regridBinSparseHits) || 0,
+    regridBinSparseDeclines: Number(profile.regridBinSparseDeclines) || 0,
+    regridBinPackEntriesRead: Number(profile.regridBinPackEntriesRead) || 0,
+    regridBinPackEntriesSkipped: Number(profile.regridBinPackEntriesSkipped) || 0,
+    regridBinPackBytesRead: Number(profile.regridBinPackBytesRead) || 0,
+    regridBinPackBytesSkipped: Number(profile.regridBinPackBytesSkipped) || 0,
     derivedGridCacheHits: Number(profile.derivedGridCacheHits) || 0,
     derivedGridCacheMisses: Number(profile.derivedGridCacheMisses) || 0,
+    supplementalDerivedGridCacheHits: Number(profile.supplementalDerivedGridCacheHits) || 0,
+    supplementalDerivedGridCacheMisses: Number(profile.supplementalDerivedGridCacheMisses) || 0,
     bulkDecodeFallbacks: Number(profile.bulkDecodeFallbacks) || 0,
     selectedPlanCacheHits: Number(profile.selectedPlanCacheHits) || 0,
     decodedGridPromiseHits: Number(profile.decodedGridPromiseHits) || 0,
@@ -340,9 +452,31 @@ function finalizeNoaaRenderProfile(profile) {
     effectiveDiagnosticsCandidateCount: Number(profile.effectiveDiagnosticsCandidateCount) || 0,
     compressPoolJobs: Number(profile.compressPoolJobs) || 0,
     compressPoolFallbacks: Number(profile.compressPoolFallbacks) || 0,
+    compressOwnedInputJobs: Number(profile.compressOwnedInputJobs) || 0,
+    compressOwnedInputBytes: Number(profile.compressOwnedInputBytes) || 0,
+    compressOwnedInputFallbacks: Number(profile.compressOwnedInputFallbacks) || 0,
+    compressOwnedInputRebuilds: Number(profile.compressOwnedInputRebuilds) || 0,
+    compressSharedInputJobs: Number(profile.compressSharedInputJobs) || 0,
+    compressSharedInputBytes: Number(profile.compressSharedInputBytes) || 0,
+    compressSharedInputViewBytes: Number(profile.compressSharedInputViewBytes) || 0,
+    compressSharedInputBackingBytes: Number(profile.compressSharedInputBackingBytes) || 0,
+    compressSharedInputMaxBytes: Number(profile.compressSharedInputMaxBytes) || 0,
+    compressSharedInputUniqueOwners: Number(profile.compressSharedInputUniqueOwners) || 0,
+    compressSharedInputFallbacks: Number(profile.compressSharedInputFallbacks) || 0,
+    compressTransportRetainedLiveBytes: Number(profile.compressTransportRetainedLiveBytes) || 0,
+    compressTransportPeakLiveBytes: Number(profile.compressTransportPeakLiveBytes) || 0,
+    indexedPngJobs: Number(profile.indexedPngJobs) || 0,
+    indexedPngRawBytes: Number(profile.indexedPngRawBytes) || 0,
+    indexedPngRgbaRawBytesAvoided: Number(profile.indexedPngRgbaRawBytesAvoided) || 0,
+    artifactEncodeCheckpoints: Number(profile.artifactEncodeCheckpoints) || 0,
+    artifactEncodePeakActive: Number(profile.artifactEncodePeakActive) || 0,
+    artifactEncodePeakQueued: Number(profile.artifactEncodePeakQueued) || 0,
+    artifactEncodeSubmitted: Number(profile.artifactEncodeSubmitted) || 0,
     derivedParallelChunks: Number(profile.derivedParallelChunks) || 0,
     derivedParallelWorkers: Number(profile.derivedParallelWorkers) || 0,
     hoverQuantization: profile.hoverQuantization || null,
+    hoverArena: profile.hoverArena || null,
+    hoverArenaFallbackReason: profile.hoverArenaFallbackReason || null,
     sourceProvenance: profile.sourceProvenance || null,
     stages: {},
   };
@@ -420,10 +554,14 @@ module.exports = {
   createNoaaRenderProfile,
   finalizeNoaaRenderProfile,
   createFrameDecodeSession,
+  disposeIsolatedFrameDecodeSession,
   attachRunLocalDecodeSession,
   BULK_DECODED_GRIDS,
+  BULK_DECODED_GRID_PAYLOAD_HASHES,
+  decodedRecordCacheOutcome,
   decodedRecordGridCacheKey,
   profileGridRegistryKey,
+  markBulkDecodedGrid,
   readDecodedRecordsForKeyedRecords,
   readDecodedSelectionFromRecordCache,
   readRegisteredProfileGrids,
@@ -431,5 +569,6 @@ module.exports = {
   registerProfileGrids,
   registerSourceGrid,
   sourceGridRegistryKey,
+  seedDecodedSelectionRecordCache,
   writeDecodedRecordGridCache,
 };

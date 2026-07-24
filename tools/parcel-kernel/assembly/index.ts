@@ -1191,6 +1191,86 @@ function quantizeWindScalarPacked(index: i32, quantizeMultiplier: f64, speedMult
 }
 
 // ============================================================================
+// Continuous RGBA colorizer (2026-07-23 Stage H) — EXACT f64 port.
+//
+// This is the hot raw/affine continuous lookup loop from
+// scripts/lib/noaa-beta/raster.js. Inputs remain f32 source grids, while
+// transform, visibility, lookup position, and bucket arithmetic use f64 in
+// the same order as JavaScript. The output is copied by JS into an owned
+// Buffer before this thread-local scratch can be reused.
+//
+// QIN_A is shared with hover quantization because both drivers are
+// synchronous and non-reentrant. The dedicated RGBA output and palette add
+// only 384 KiB plus counters per kernel instance.
+// ============================================================================
+
+export const COLOR_CHUNK: i32 = QUANT_CHUNK;
+export const COLOR_PALETTE_CAP: i32 = 65536;
+export const COLORIZER_ABI_VERSION: i32 = 1;
+export const COLOR_OUT_PTR: usize = memory.data(131072, 16); // RGBA8 x 32768
+export const COLOR_PALETTE_PTR: usize = memory.data(262144, 16); // RGBA8 x 65536
+export const COLOR_STATS_PTR: usize = memory.data(8, 8); // visibleCount, validCount
+
+export function colorizeContinuousF64(
+  count: i32,
+  paletteSize: i32,
+  lookupMin: f64,
+  lookupScale: f64,
+  hasVisibleMin: i32,
+  visibleMin: f64,
+  hasVisibleMax: i32,
+  visibleMax: f64,
+  affineScale: f64,
+  affineOffset: f64,
+  affineHasMin: i32,
+  affineMin: f64,
+): void {
+  const n = count <= 0 ? 0 : count > COLOR_CHUNK ? COLOR_CHUNK : count;
+  const resolvedPaletteSize =
+    paletteSize <= 0 ? 0 : paletteSize > COLOR_PALETTE_CAP ? COLOR_PALETTE_CAP : paletteSize;
+  memory.fill(COLOR_OUT_PTR, 0, <usize>n * 4);
+  if (n <= 0 || resolvedPaletteSize <= 0) {
+    store<i32>(COLOR_STATS_PTR, 0);
+    store<i32>(COLOR_STATS_PTR + 4, 0);
+    return;
+  }
+  const lastBucket = resolvedPaletteSize - 1;
+  const applyVisibleMin = hasVisibleMin != 0;
+  const applyVisibleMax = hasVisibleMax != 0;
+  const applyAffineMin = affineHasMin != 0;
+  let visibleCount = 0;
+  let validCount = 0;
+  for (let index = 0; index < n; index += 1) {
+    let value = <f64>load<f32>(QIN_A_PTR + (<usize>index << 2));
+    value = value * affineScale + affineOffset;
+    if (applyAffineMin && value < affineMin) {
+      value = affineMin;
+    }
+    if (!isFinite(value)) {
+      continue;
+    }
+    validCount += 1;
+    if (applyVisibleMin && value < visibleMin) {
+      continue;
+    }
+    if (applyVisibleMax && value > visibleMax) {
+      continue;
+    }
+    const position = (value - lookupMin) * lookupScale;
+    const bucket =
+      position <= 0.0 ? 0 : position >= 1.0 ? lastBucket : <i32>Math.floor(position * <f64>lastBucket);
+    const color = load<u32>(COLOR_PALETTE_PTR + (<usize>bucket << 2));
+    if ((color >>> 24) == 0) {
+      continue;
+    }
+    store<u32>(COLOR_OUT_PTR + (<usize>index << 2), color);
+    visibleCount += 1;
+  }
+  store<i32>(COLOR_STATS_PTR, visibleCount);
+  store<i32>(COLOR_STATS_PTR + 4, validCount);
+}
+
+// ============================================================================
 // Effective-layer product glue (2026-07-12 Stage G1) — f64 NativeMath port
 // of the post-fill chain in severe.calculateEffectiveLayerProductsFromSources:
 // profile-wind interpolators (height + log-pressure), pressure-bracket
@@ -2722,6 +2802,48 @@ function smoothInterior5Pair(ptr: usize, centerIndex: i32, stride: i32): v128 {
   return f64x2.div(weighted, f64x2.splat(16.0));
 }
 
+// Vector 5-tap over two adjacent cells with the scalar fallback's exact
+// finite-skip semantics. Each lane conditionally accumulates the same taps,
+// in the same order, and renormalizes by the same accepted weight total as
+// smoothFiniteKernelSampleInline. Adding an explicit +0 for a rejected tap
+// is value-identical to skipping the statement, including signed-zero
+// behavior, while allowing masked pressure-surface/domain grids to retain
+// f64x2 SIMD instead of forcing the entire grid through scalar branches.
+// @ts-ignore: decorator
+@inline
+function smoothMasked5Pair(ptr: usize, centerIndex: i32, stride: i32): v128 {
+  const base = ptr + (<usize>centerIndex << 2);
+  const strideBytes = <usize>stride << 2;
+  const t0 = f64x2.promote_low_f32x4(v128.load64_zero(base - 2 * strideBytes));
+  const t1 = f64x2.promote_low_f32x4(v128.load64_zero(base - strideBytes));
+  const t2 = f64x2.promote_low_f32x4(v128.load64_zero(base));
+  const t3 = f64x2.promote_low_f32x4(v128.load64_zero(base + strideBytes));
+  const t4 = f64x2.promote_low_f32x4(v128.load64_zero(base + 2 * strideBytes));
+  const zero = f64x2.splat(0.0);
+  const infinity = f64x2.splat(Infinity);
+  const w0 = f64x2.splat(SW0);
+  const w1 = f64x2.splat(SW1);
+  const w2 = f64x2.splat(SW2);
+  const w3 = f64x2.splat(SW3);
+  const w4 = f64x2.splat(SW4);
+  const finite0 = f64x2.lt(f64x2.abs(t0), infinity);
+  const finite1 = f64x2.lt(f64x2.abs(t1), infinity);
+  const finite2 = f64x2.lt(f64x2.abs(t2), infinity);
+  const finite3 = f64x2.lt(f64x2.abs(t3), infinity);
+  const finite4 = f64x2.lt(f64x2.abs(t4), infinity);
+  let weighted = f64x2.add(zero, v128.bitselect(f64x2.mul(t0, w0), zero, finite0));
+  let weightTotal = f64x2.add(zero, v128.bitselect(w0, zero, finite0));
+  weighted = f64x2.add(weighted, v128.bitselect(f64x2.mul(t1, w1), zero, finite1));
+  weightTotal = f64x2.add(weightTotal, v128.bitselect(w1, zero, finite1));
+  weighted = f64x2.add(weighted, v128.bitselect(f64x2.mul(t2, w2), zero, finite2));
+  weightTotal = f64x2.add(weightTotal, v128.bitselect(w2, zero, finite2));
+  weighted = f64x2.add(weighted, v128.bitselect(f64x2.mul(t3, w3), zero, finite3));
+  weightTotal = f64x2.add(weightTotal, v128.bitselect(w3, zero, finite3));
+  weighted = f64x2.add(weighted, v128.bitselect(f64x2.mul(t4, w4), zero, finite4));
+  weightTotal = f64x2.add(weightTotal, v128.bitselect(w4, zero, finite4));
+  return f64x2.div(weighted, weightTotal);
+}
+
 // @ts-ignore: decorator
 @inline
 function storeSmoothedPair(outPtr: usize, index: i32, pair: v128): void {
@@ -2757,7 +2879,11 @@ export function smoothGrid(cellCount: i32, width: i32, height: i32, passes: i32)
   let curPtr = SMOOTH_IN_PTR;
   for (let pass = 0; pass < passes; pass += 1) {
     const fastHorizontal = maskAllFinite && currentAllFinite;
-    let horizontalAllFinite = true;
+    // A nonfinite original mask is preserved into every horizontal/output
+    // buffer, so its all-finite flags are known false without rescanning pair
+    // results. The checks remain active for the all-finite path (including
+    // its defensive scalar fallback after an exceptional prior pass).
+    let horizontalAllFinite = maskAllFinite;
     for (let y = 0; y < height; y += 1) {
       const rowOffset = y * width;
       let x = 0;
@@ -2792,15 +2918,41 @@ export function smoothGrid(cellCount: i32, width: i32, height: i32, passes: i32)
             horizontalAllFinite = false;
           }
         }
-      } else {
+      } else if (!maskAllFinite) {
+        // The original finite mask remains authoritative across passes. Work
+        // scalar at the horizontal boundaries, then process interior cells
+        // in exact f64x2 pairs even when some taps are NaN/Infinity.
+        for (; x < 2 && x < width; x += 1) {
+          const index = rowOffset + x;
+          const smoothed = isFinite(smoothLoadF32(SMOOTH_IN_PTR, index))
+            ? smoothInline5(curPtr, index, 1, x, width)
+            : NaN;
+          store<f32>(SMOOTH_H_PTR + (<usize>index << 2), <f32>smoothed);
+        }
+        const interiorEnd = width - 3;
+        for (; x + 1 <= interiorEnd; x += 2) {
+          const index = rowOffset + x;
+          const pair = smoothMasked5Pair(curPtr, index, 1);
+          const originalCenters = f64x2.promote_low_f32x4(
+            v128.load64_zero(SMOOTH_IN_PTR + (<usize>index << 2)),
+          );
+          const centerFinite = f64x2.lt(f64x2.abs(originalCenters), f64x2.splat(Infinity));
+          const result = v128.bitselect(pair, f64x2.splat(NaN), centerFinite);
+          storeSmoothedPair(SMOOTH_H_PTR, index, result);
+        }
         for (; x < width; x += 1) {
           const index = rowOffset + x;
-          let smoothed: f64;
-          if (isFinite(smoothLoadF32(SMOOTH_IN_PTR, index))) {
-            smoothed = smoothInline5(curPtr, index, 1, x, width);
-          } else {
-            smoothed = NaN;
-          }
+          const smoothed = isFinite(smoothLoadF32(SMOOTH_IN_PTR, index))
+            ? smoothInline5(curPtr, index, 1, x, width)
+            : NaN;
+          store<f32>(SMOOTH_H_PTR + (<usize>index << 2), <f32>smoothed);
+        }
+      } else {
+        // Defensive path for an originally all-finite grid whose previous
+        // pass nevertheless produced a nonfinite value.
+        for (; x < width; x += 1) {
+          const index = rowOffset + x;
+          const smoothed = smoothInline5(curPtr, index, 1, x, width);
           store<f32>(SMOOTH_H_PTR + (<usize>index << 2), <f32>smoothed);
           if (smoothed != smoothed || smoothed == Infinity || smoothed == -Infinity) {
             horizontalAllFinite = false;
@@ -2809,7 +2961,7 @@ export function smoothGrid(cellCount: i32, width: i32, height: i32, passes: i32)
       }
     }
     const fastVertical = maskAllFinite && horizontalAllFinite;
-    let outAllFinite = true;
+    let outAllFinite = maskAllFinite;
     for (let y = 0; y < height; y += 1) {
       const rowOffset = y * width;
       const fastRow = fastVertical && y >= 2 && y <= height - 3;
@@ -2839,6 +2991,37 @@ export function smoothGrid(cellCount: i32, width: i32, height: i32, passes: i32)
         }
         if (rowNaN) {
           outAllFinite = false;
+        }
+      } else if (!maskAllFinite && y >= 2 && y <= height - 3) {
+        // Masked grids keep the same original-cell gate as the scalar path,
+        // but every interior row can still evaluate two columns at a time.
+        let x = 0;
+        const pairEnd = width & ~1;
+        for (; x < pairEnd; x += 2) {
+          const index = rowOffset + x;
+          const pair = smoothMasked5Pair(SMOOTH_H_PTR, index, width);
+          const originalCenters = f64x2.promote_low_f32x4(
+            v128.load64_zero(SMOOTH_IN_PTR + (<usize>index << 2)),
+          );
+          const centerFinite = f64x2.lt(f64x2.abs(originalCenters), f64x2.splat(Infinity));
+          const pairFinite = f64x2.lt(f64x2.abs(pair), f64x2.splat(Infinity));
+          const result = v128.bitselect(
+            f64x2.max(pair, f64x2.splat(0.0)),
+            f64x2.splat(NaN),
+            v128.and(centerFinite, pairFinite),
+          );
+          storeSmoothedPair(SMOOTH_OUT_PTR, index, result);
+        }
+        for (; x < width; x += 1) {
+          const index = rowOffset + x;
+          let result: f64;
+          if (isFinite(smoothLoadF32(SMOOTH_IN_PTR, index))) {
+            const smoothed = smoothInline5(SMOOTH_H_PTR, index, width, y, height);
+            result = isFinite(smoothed) ? Math.max(0.0, smoothed) : NaN;
+          } else {
+            result = NaN;
+          }
+          store<f32>(SMOOTH_OUT_PTR + (<usize>index << 2), <f32>result);
         }
       } else {
         for (let x = 0; x < width; x += 1) {
@@ -2870,8 +3053,10 @@ export function smoothGrid(cellCount: i32, width: i32, height: i32, passes: i32)
 export const DELTA_CHUNK: i32 = 65536;
 export const DELTA_PTR: usize = memory.data(131072, 16); // i16 x 65536
 
-export function deltaEncodeI16(count: i32, previous: i32): i32 {
-  const n = count > DELTA_CHUNK ? DELTA_CHUNK : count;
+// @ts-ignore: decorator
+@inline
+function deltaEncodeI16At(ptr: usize, count: i32, previous: i32, capacity: i32): i32 {
+  const n = count > capacity ? capacity : count;
   if (n <= 0) {
     return previous;
   }
@@ -2883,20 +3068,228 @@ export function deltaEncodeI16(count: i32, previous: i32): i32 {
     // block's prev_last (lane 7, bytes 14-15 in the shuffle) is the carry.
     let prevLast = i16x8.splat(<i16>carry);
     while (index < blockEnd) {
-      const cur = v128.load(DELTA_PTR + (<usize>index << 1));
+      const cur = v128.load(ptr + (<usize>index << 1));
       const shifted = i8x16.shuffle(prevLast, cur, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29);
-      v128.store(DELTA_PTR + (<usize>index << 1), i16x8.sub(cur, shifted));
+      v128.store(ptr + (<usize>index << 1), i16x8.sub(cur, shifted));
       prevLast = cur;
       index += 8;
     }
     carry = <i32>i16x8.extract_lane_s(prevLast, 7);
   }
   for (; index < n; index += 1) {
-    const value = <i32>load<i16>(DELTA_PTR + (<usize>index << 1));
-    store<i16>(DELTA_PTR + (<usize>index << 1), <i16>(value - carry));
+    const value = <i32>load<i16>(ptr + (<usize>index << 1));
+    store<i16>(ptr + (<usize>index << 1), <i16>(value - carry));
     carry = value;
   }
   return carry;
+}
+
+export function deltaEncodeI16(count: i32, previous: i32): i32 {
+  return deltaEncodeI16At(DELTA_PTR, count, previous, DELTA_CHUNK);
+}
+
+// Fused hover path: quantizeRaw/Affine/Wind has just populated QOUT_PTR, so
+// delta that hot buffer in place before JS copies it into the packed variable
+// body. This removes the later raw -> DELTA_PTR -> raw round trip while using
+// the exact same wrapping-i16 implementation as deltaEncodeI16.
+export function deltaEncodeQuantizedI16(count: i32, previous: i32): i32 {
+  return deltaEncodeI16At(QOUT_PTR, count, previous, QUANT_CHUNK);
+}
+
+// Fused MVH4 path: quantizeRaw/Affine/Wind has just populated QOUT_PTR, so
+// replace that absolute chunk with the exact per-variable 2D gradient
+// residues before JS copies it out. A bounded previous-row arena is the only
+// persistent storage. resetQuantizedGradient2d starts each variable and
+// gradientEncodeQuantizedI16 preserves row/column state across arbitrary
+// QUANT_CHUNK splits, including splits in the middle of a row.
+//
+// The public constants form a fail-closed optional ABI. JS validates the ABI,
+// cap, canary, scratch ranges, and an active split-row oracle before exposing
+// this capability to the hover producer.
+export const GRADIENT_ABI_VERSION: i32 = 1;
+export const GRADIENT_COLS_CAP: i32 = 32768;
+export const GRADIENT_CANARY: i32 = 0x47523244; // ASCII "GR2D"
+export const GRADIENT_PREVIOUS_ROW_PTR: usize = memory.data(65536, 16); // i16 x 32768
+
+let gradientCols: i32 = 0;
+let gradientCol: i32 = 0;
+let gradientTopRow: bool = true;
+let gradientLeft: i32 = 0;
+let gradientUpLeft: i32 = 0;
+
+export function resetQuantizedGradient2d(cols: i32): i32 {
+  gradientCols = 0;
+  gradientCol = 0;
+  gradientTopRow = true;
+  gradientLeft = 0;
+  gradientUpLeft = 0;
+  if (cols <= 0 || cols > GRADIENT_COLS_CAP) {
+    return 0;
+  }
+  gradientCols = cols;
+  return cols;
+}
+
+// @ts-ignore: decorator
+@inline
+function gradientFinishRow(): void {
+  if (gradientCol == gradientCols) {
+    gradientCol = 0;
+    gradientTopRow = false;
+    gradientLeft = 0;
+    gradientUpLeft = 0;
+  }
+}
+
+// Encode up to one row segment from QOUT_PTR. Top-row blocks are horizontal
+// deltas; later-row blocks use [left, current0..6] and
+// [up-left, up0..6] shifted vectors. All arithmetic is i16 lane arithmetic,
+// exactly matching the container's modular signed-Int16 predictor.
+export function gradientEncodeQuantizedI16(count: i32): i32 {
+  if (gradientCols <= 0 || count <= 0) {
+    return 0;
+  }
+  const n = count > QUANT_CHUNK ? QUANT_CHUNK : count;
+  let index = 0;
+  while (index < n) {
+    const segmentEnd = index + min<i32>(gradientCols - gradientCol, n - index);
+    if (gradientTopRow) {
+      if (gradientCol == 0 && index < segmentEnd) {
+        const value = <i32>load<i16>(QOUT_PTR + (<usize>index << 1));
+        store<i16>(GRADIENT_PREVIOUS_ROW_PTR, <i16>value);
+        // The first predictor is zero, so QOUT already contains its residue.
+        gradientLeft = value;
+        gradientCol = 1;
+        index += 1;
+      }
+      while (index + 8 <= segmentEnd) {
+        const current = v128.load(QOUT_PTR + (<usize>index << 1));
+        const previousLast = i16x8.splat(<i16>gradientLeft);
+        const shiftedCurrent = i8x16.shuffle(
+          previousLast,
+          current,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+        );
+        v128.store(QOUT_PTR + (<usize>index << 1), i16x8.sub(current, shiftedCurrent));
+        v128.store(GRADIENT_PREVIOUS_ROW_PTR + (<usize>gradientCol << 1), current);
+        gradientLeft = <i32>i16x8.extract_lane_s(current, 7);
+        gradientCol += 8;
+        index += 8;
+      }
+      while (index < segmentEnd) {
+        const value = <i32>load<i16>(QOUT_PTR + (<usize>index << 1));
+        store<i16>(
+          QOUT_PTR + (<usize>index << 1),
+          <i16>(value - gradientLeft),
+        );
+        store<i16>(
+          GRADIENT_PREVIOUS_ROW_PTR + (<usize>gradientCol << 1),
+          <i16>value,
+        );
+        gradientLeft = value;
+        gradientCol += 1;
+        index += 1;
+      }
+    } else {
+      if (gradientCol == 0 && index < segmentEnd) {
+        const value = <i32>load<i16>(QOUT_PTR + (<usize>index << 1));
+        const up = <i32>load<i16>(GRADIENT_PREVIOUS_ROW_PTR);
+        store<i16>(QOUT_PTR + (<usize>index << 1), <i16>(value - up));
+        store<i16>(GRADIENT_PREVIOUS_ROW_PTR, <i16>value);
+        gradientLeft = value;
+        gradientUpLeft = up;
+        gradientCol = 1;
+        index += 1;
+      }
+      while (index + 8 <= segmentEnd) {
+        const current = v128.load(QOUT_PTR + (<usize>index << 1));
+        const up = v128.load(GRADIENT_PREVIOUS_ROW_PTR + (<usize>gradientCol << 1));
+        const previousLast = i16x8.splat(<i16>gradientLeft);
+        const previousUp = i16x8.splat(<i16>gradientUpLeft);
+        const shiftedCurrent = i8x16.shuffle(
+          previousLast,
+          current,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+        );
+        const shiftedUp = i8x16.shuffle(
+          previousUp,
+          up,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+        );
+        const horizontal = i16x8.sub(current, shiftedCurrent);
+        const verticalDelta = i16x8.sub(up, shiftedUp);
+        v128.store(QOUT_PTR + (<usize>index << 1), i16x8.sub(horizontal, verticalDelta));
+        v128.store(GRADIENT_PREVIOUS_ROW_PTR + (<usize>gradientCol << 1), current);
+        gradientLeft = <i32>i16x8.extract_lane_s(current, 7);
+        gradientUpLeft = <i32>i16x8.extract_lane_s(up, 7);
+        gradientCol += 8;
+        index += 8;
+      }
+      while (index < segmentEnd) {
+        const value = <i32>load<i16>(QOUT_PTR + (<usize>index << 1));
+        const up = <i32>load<i16>(GRADIENT_PREVIOUS_ROW_PTR + (<usize>gradientCol << 1));
+        store<i16>(
+          QOUT_PTR + (<usize>index << 1),
+          <i16>(value - gradientLeft - up + gradientUpLeft),
+        );
+        store<i16>(
+          GRADIENT_PREVIOUS_ROW_PTR + (<usize>gradientCol << 1),
+          <i16>value,
+        );
+        gradientLeft = value;
+        gradientUpLeft = up;
+        gradientCol += 1;
+        index += 1;
+      }
+    }
+    gradientFinishRow();
+  }
+  return n;
 }
 
 // JS fills raw knot inputs (level hPa, height MSL m, tempK, rh%) for rows

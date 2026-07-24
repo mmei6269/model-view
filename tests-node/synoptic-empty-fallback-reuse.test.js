@@ -113,10 +113,7 @@ function frameArgs(decoded) {
 
 async function renderFrame(decoded) {
   renderCalls.length = 0;
-  const artifacts = buildRenderedArtifacts(frameArgs(decoded));
-  if (artifacts.pendingEncodes) {
-    await Promise.all(artifacts.pendingEncodes);
-  }
+  const artifacts = await buildRenderedArtifacts(frameArgs(decoded));
   const simpleCalls = renderCalls.filter((call) => call.args.detailMode === "simple");
   const detailedCalls = renderCalls.filter((call) => call.args.detailMode === "detailed");
   return { artifacts, simpleCalls, detailedCalls };

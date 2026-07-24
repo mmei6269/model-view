@@ -1,0 +1,12 @@
+scripts/generate-noaa-catalog-color-lookups.js text eol=lf
+scripts/lib/noaa-beta/catalog-color-lookup-asset.js text eol=lf
+scripts/lib/noaa-beta/catalog-color-lookup-recipes.js text eol=lf
+scripts/lib/noaa-beta/color-lookup-compiler.js text eol=lf
+scripts/generate-noaa-snow-rf-asset.js text eol=lf
+scripts/lib/noaa-beta/snow-rf-asset.js text eol=lf
+scripts/lib/noaa-beta/snow-rf-compiler.js text eol=lf
+scripts/lib/noaa-beta/util.js text eol=lf
+scripts/lib/noaa-beta/generated/catalog-color-lookups-v1.json text eol=lf
+scripts/lib/noaa-beta/generated/catalog-color-lookups-v1.bin binary
+scripts/lib/noaa-beta/generated/snow-rf-conus-v1.json text eol=lf
+scripts/lib/noaa-beta/generated/snow-rf-conus-v1.bin binary

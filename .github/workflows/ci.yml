@@ -31,8 +31,67 @@ jobs:
             echo "Run 'npm run parcel-kernel:build' and commit the rebuilt binary."
             exit 1
           fi
+      - name: Verify committed generated assets
+        run: |
+          npm run noaa:color-lookups:check
+          npm run noaa:snow-rf:check
       - name: Vite build
         run: npm run build
+
+  node-20-floor:
+    name: Renderer arena (Node 20.19.0 floor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.0"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify exact runtime and growable shared-buffer support
+        run: |
+          node <<'NODE'
+          const assert = require("node:assert/strict");
+          const {
+            supportsGrowableSharedArrayBuffer,
+          } = require("./scripts/lib/noaa-beta/hover-arena");
+
+          assert.equal(process.versions.node, "20.19.0");
+          assert.equal(
+            supportsGrowableSharedArrayBuffer(),
+            true,
+            "Node 20.19.0 must run the arena tests instead of skipping them",
+          );
+
+          const owner = new SharedArrayBuffer(8, { maxByteLength: 64 });
+          assert.equal(owner.growable, true);
+          assert.equal(owner.maxByteLength, 64);
+          owner.grow(32);
+          assert.equal(owner.byteLength, 32);
+          const bounded = Buffer.from(owner, 7, 17);
+          assert.equal(bounded.byteOffset, 7);
+          assert.equal(bounded.byteLength, 17);
+          assert.equal(bounded.buffer, owner);
+          NODE
+      - name: Test renderer arena and shared-input protocol at the Node floor
+        shell: bash
+        run: |
+          set -o pipefail
+          test_output="$RUNNER_TEMP/node-20.19-renderer.tap"
+          node --test --test-reporter=tap \
+            tests-node/hover-grid-arena.test.js \
+            tests-node/compress-transport-ownership.test.js \
+            tests-node/artifact-encode-coordinator.test.js \
+            tests-node/env-config.test.js \
+            tests-node/renderer-signature-completeness.test.js \
+            | tee "$test_output"
+          if grep -Eq '# SKIP|^# skipped [1-9][0-9]*$' "$test_output"; then
+            echo "Node 20.19.0 compatibility tests unexpectedly skipped coverage."
+            exit 1
+          fi
+          grep -Fx '# skipped 0' "$test_output"
 
   quality:
     name: Quality (${{ matrix.name }})

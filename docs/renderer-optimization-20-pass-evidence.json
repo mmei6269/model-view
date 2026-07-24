@@ -1,0 +1,280 @@
+{
+  "schemaVersion": 1,
+  "campaign": "renderer-optimization-20-pass-2026-07-22",
+  "branch": "codex/renderer-optimization-20-pass",
+  "fixture": {
+    "view": "conus",
+    "date": "20260716",
+    "models": {
+      "gfs": { "cycle": "06", "hours": [0, 3, 6, 9] },
+      "nam": { "cycle": "12", "hours": [0, 1, 2, 3] },
+      "nam3km": { "cycle": "12", "hours": [0, 1, 2, 3] },
+      "hrrr": { "cycle": "13", "hours": [0, 1, 2, 3] }
+    }
+  },
+  "provenance": {
+    "environmentPolicy": "renderer-isolated-v1",
+    "system": {
+      "node": "v22.23.1",
+      "os": "darwin-25.5.0-arm64",
+      "cpu": "Apple M5 Max",
+      "logicalCores": 18,
+      "memoryBytes": 137438953472
+    },
+    "originalCommit": "a7d7cb7",
+    "originalTreeSha256": "8c428bc0134dafb0b9b17d1c42fae79c6753dca7219d7e2608279826b879e1fa",
+    "finalMeasuredTreeSha256": "6be72574383d1a0a1a18a0ea3547b794fdc4564cf951ff5740649d15f9280500",
+    "wgrib2": {
+      "version": "3.8.0",
+      "sha256": "539dd9f1812cdd4b9023d20911498e6dffb147cbe50c1733ee90ba534d0a5c6c"
+    },
+    "libdeflate": {
+      "entrySha256": "49f2d320276acbf6db668779a7b42ba9af25004a522ed0990b25a33670335785",
+      "wasmSha256": "0fb97852aab6f9a8938eb1e6c244d941d733554ea64ce40e21d88e5e56fd526d"
+    },
+    "finalParcelKernelWasmSha256": "f4958603102744ff2d4b24ac34cfd4ccc51c2c900007b3f4cf53afd9fc0992be"
+  },
+  "cumulativeHrrr": {
+    "original": {
+      "combinedMedianMs": 13040.3612705,
+      "pre": {
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-final-original-pre-hrrr-20260716-13z-20260722T184707160Z/summary.json",
+        "samplesMs": [13222.748041, 13000.653167, 12964.901166],
+        "medianMs": 13000.653167,
+        "madMs": 35.752001000000746
+      },
+      "post": {
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-idle-original-post-hrrr-20260716-13z-20260722T185706200Z/summary.json",
+        "samplesMs": [13191.936875, 13011.302208, 13069.420333],
+        "medianMs": 13069.420333,
+        "madMs": 58.11812500000087
+      }
+    },
+    "acceptedCheckpoints": [
+      {
+        "pass": 3,
+        "sourceTreeSha256": "e329aa7c926b6c21c52c6f1b3d46dad8cefe11f8425ac339aebb23c94541da88",
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-final-p03-hrrr-20260716-13z-20260722T184746638Z/summary.json",
+        "samplesMs": [11446.411583, 10995.081291, 11065.409375],
+        "medianMs": 11065.409375,
+        "madMs": 70.32808399999885,
+        "cumulativeChangePct": -15.144917035
+      },
+      {
+        "pass": 5,
+        "sourceTreeSha256": "771fca220f9f6b977c6a9a304fe312c32dafabcbe08b43fa44dc1527b8786eb1",
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-final-p05-hrrr-20260716-13z-20260722T184820434Z/summary.json",
+        "samplesMs": [10936.620083, 10973.099417, 10946.750042],
+        "medianMs": 10946.750042,
+        "madMs": 10.129958999999872,
+        "cumulativeChangePct": -16.054856036
+      },
+      {
+        "pass": 7,
+        "sourceTreeSha256": "0db8c738d098a73639c51cd3a3209e694e6b2c79c0ca4aa63768fdaf9843752d",
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-idle-rerun-p07-hrrr-20260716-13z-20260722T185250742Z/summary.json",
+        "samplesMs": [11213.150584, 11030.846959, 11077.004625],
+        "medianMs": 11077.004625,
+        "madMs": 46.15766599999915,
+        "cumulativeChangePct": -15.05599887
+      },
+      {
+        "pass": 8,
+        "sourceTreeSha256": "3bc30808247747cd509e082bd1e2adee47954a78425646cd584ea285462bd251",
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-idle-p08-hrrr-20260716-13z-20260722T185356321Z/summary.json",
+        "samplesMs": [10913.692334, 10910.325625, 10951.3445],
+        "medianMs": 10913.692334,
+        "madMs": 3.3667089999999007,
+        "cumulativeChangePct": -16.308359043
+      },
+      {
+        "pass": 11,
+        "sourceTreeSha256": "c0837a7007a601bf271c65d273826ce29c2bd9c632f394e4f79b674bde99e4c2",
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-idle-p11-hrrr-20260716-13z-20260722T185439445Z/summary.json",
+        "samplesMs": [10898.795167, 10910.970625, 10984.394583],
+        "medianMs": 10910.970625,
+        "madMs": 12.175457999999708,
+        "cumulativeChangePct": -16.329230466
+      },
+      {
+        "pass": 12,
+        "sourceTreeSha256": "187f7d354033afbe55c889853c7b8ee6dc0c8e4ce5323faaf4611984a88345d6",
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-idle-p12-hrrr-20260716-13z-20260722T185522587Z/summary.json",
+        "samplesMs": [10773.169667, 10712.583166, 10793.209667],
+        "medianMs": 10773.169667,
+        "madMs": 20.039999999999054,
+        "cumulativeChangePct": -17.385957003
+      },
+      {
+        "pass": 14,
+        "sourceTreeSha256": "6dbc4c4d61ae99a92a2e393ceacd43601fb2d01cefb37171dc6662ae21351f24",
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-idle-p14-hrrr-20260716-13z-20260722T185605217Z/summary.json",
+        "samplesMs": [10631.535333, 10668.23675, 10737.444375],
+        "medianMs": 10668.23675,
+        "madMs": 36.70141700000022,
+        "cumulativeChangePct": -18.190634993
+      },
+      {
+        "pass": 15,
+        "sourceTreeSha256": "6b7cf4e993401a2584cc3274edd5b5364b636834778b7bacb434ec01ae5e9536",
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-idle-p15-hrrr-20260716-13z-20260722T185839859Z/summary.json",
+        "samplesMs": [9485.66475, 9377.901958, 9395.678208],
+        "medianMs": 9395.678208,
+        "madMs": 17.77624999999898,
+        "cumulativeChangePct": -27.949249157
+      },
+      {
+        "pass": 16,
+        "sourceTreeSha256": "4910a38417141aa437d0838de48dfed3333c3e2f5c40bf6c750910a335230bbd",
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-idle-p16-hrrr-20260716-13z-20260722T185918450Z/summary.json",
+        "samplesMs": [9371.43775, 9348.133, 9341.276583],
+        "medianMs": 9348.133,
+        "madMs": 6.856416999999055,
+        "cumulativeChangePct": -28.313849547
+      },
+      {
+        "pass": 18,
+        "sourceTreeSha256": "c421ab5cd9d40888e396f30e37b2ebaed26af6c37321cfdcb2d154fcd1e98e52",
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-idle-p18-hrrr-20260716-13z-20260722T185956841Z/summary.json",
+        "samplesMs": [9265.529583, 9246.145542, 9340.4125],
+        "medianMs": 9265.529583,
+        "madMs": 19.384040999999343,
+        "cumulativeChangePct": -28.947293784
+      },
+      {
+        "pass": 19,
+        "sourceTreeSha256": "6be72574383d1a0a1a18a0ea3547b794fdc4564cf951ff5740649d15f9280500",
+        "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-idle-p19-hrrr-20260716-13z-20260722T190035016Z/summary.json",
+        "samplesMs": [8860.446333, 8848.836, 8843.248333],
+        "medianMs": 8848.836,
+        "madMs": 5.587666999999783,
+        "cumulativeChangePct": -32.142708193,
+        "supplementalCacheHitRate": 1
+      }
+    ],
+    "cumulativeChangePctByPass": [
+      0, 0, -15.144917035, -15.144917035, -16.054856036, -16.054856036, -15.05599887, -16.308359043, -16.308359043,
+      -16.308359043, -16.329230466, -17.385957003, -17.385957003, -18.190634993, -27.949249157, -28.313849547,
+      -28.313849547, -28.947293784, -32.142708193, -32.142708193
+    ],
+    "quarantinedSession": {
+      "summary": "output/noaa-benchmarks/renderer-20pass/cumulative-final-p07-hrrr-20260716-13z-20260722T184853582Z/summary.json",
+      "samplesMs": [11139.4245, 13723.374916, 18495.815333],
+      "reason": "The session overlapped with browser and frozen-checkpoint review work, progressively degraded, and coincided with 1-2 GiB free-memory telemetry; rerun only after every other test/build/browser process stopped."
+    }
+  },
+  "finalAllModel": {
+    "originalMedianSumMs": 50631.994667,
+    "finalMedianSumMs": 34737.514916,
+    "changePct": -31.392165873645528,
+    "models": {
+      "gfs": {
+        "original": {
+          "summary": "output/noaa-benchmarks/renderer-20pass/final-original-gfs-gfs-20260716-06z-20260722T190442725Z/summary.json",
+          "samplesMs": [11831.758458, 11879.869417, 11989.823042],
+          "medianMs": 11879.869417,
+          "madMs": 48.11095899999964
+        },
+        "final": {
+          "summary": "output/noaa-benchmarks/renderer-20pass/final-candidate-gfs-gfs-20260716-06z-20260722T190533752Z/summary.json",
+          "samplesMs": [8520.394917, 8589.291, 8514.407833],
+          "medianMs": 8520.394917,
+          "madMs": 5.987084000000323
+        },
+        "changePct": -28.27871571713253
+      },
+      "nam": {
+        "original": {
+          "summary": "output/noaa-benchmarks/renderer-20pass/final-original-nam-nam-20260716-12z-20260722T190619808Z/summary.json",
+          "samplesMs": [11723.645958, 11152.261708, 11091.480333],
+          "medianMs": 11152.261708,
+          "madMs": 60.78137500000048
+        },
+        "final": {
+          "summary": "output/noaa-benchmarks/renderer-20pass/final-candidate-nam-nam-20260716-12z-20260722T190709074Z/summary.json",
+          "samplesMs": [7644.294791, 7543.126167, 7558.127833],
+          "medianMs": 7558.127833,
+          "madMs": 15.001665999999204
+        },
+        "changePct": -32.22784731120301
+      },
+      "nam3km": {
+        "original": {
+          "summary": "output/noaa-benchmarks/renderer-20pass/final-original-nam3km-nam3km-20260716-12z-20260722T190752217Z/summary.json",
+          "samplesMs": [14334.369708, 13884.722584, 14151.267667],
+          "medianMs": 14151.267667,
+          "madMs": 183.1020410000001
+        },
+        "final": {
+          "summary": "output/noaa-benchmarks/renderer-20pass/final-candidate-nam3km-nam3km-20260716-12z-20260722T190849911Z/summary.json",
+          "samplesMs": [9675.955, 9489.754208, 9481.128417],
+          "medianMs": 9489.754208,
+          "madMs": 8.62579100000039
+        },
+        "changePct": -32.94060693848934
+      },
+      "hrrr": {
+        "original": {
+          "summary": "output/noaa-benchmarks/renderer-20pass/final-original-hrrr-hrrr-20260716-13z-20260722T190938961Z/summary.json",
+          "samplesMs": [13448.595875, 13408.603833, 13454.893958],
+          "medianMs": 13448.595875,
+          "madMs": 6.298082999999679
+        },
+        "final": {
+          "summary": "output/noaa-benchmarks/renderer-20pass/final-candidate-hrrr-hrrr-20260716-13z-20260722T191034609Z/summary.json",
+          "samplesMs": [9176.362917, 9169.237958, 9158.930459],
+          "medianMs": 9169.237958,
+          "madMs": 7.124959000000672
+        },
+        "changePct": -31.82010937628833
+      }
+    },
+    "failureCounts": {
+      "processFailures": 0,
+      "fixtureValidationFailures": 0,
+      "frameErrorLines": 0,
+      "reportedFailedFrames": 0,
+      "sourceMutationFailures": 0
+    },
+    "finalSupplementalCacheHitRate": 1
+  },
+  "artifactParity": {
+    "payloads": 1348,
+    "canonicalBytes": 4184780835,
+    "hoverPayloads": 28,
+    "missing": 0,
+    "mismatches": 0,
+    "aggregateCanonicalSha256": "7187e7456c945025563e11a22636b8b841bdd002d1ff9128278e3f561c7a47c6",
+    "byModel": {
+      "gfs": { "payloads": 319, "canonicalBytes": 1008765583 },
+      "nam": { "payloads": 303, "canonicalBytes": 926347966 },
+      "nam3km": { "payloads": 359, "canonicalBytes": 1130304651 },
+      "hrrr": { "payloads": 367, "canonicalBytes": 1119362635 }
+    }
+  },
+  "browserIntegration": {
+    "engine": "repository-pinned Playwright 1.52 Chromium",
+    "brotli": {
+      "wireBytes": 37609354,
+      "decodedBytes": 188165868,
+      "variables": 60,
+      "exactFingerprints": 60
+    },
+    "gzip": {
+      "wireBytes": 38962388,
+      "decodedBytes": 191301966,
+      "variables": 61,
+      "exactFingerprints": 61
+    },
+    "fusedDeltaRawParity": true
+  },
+  "finalValidation": {
+    "nodeTests": { "passed": 940, "failed": 0 },
+    "reactPlaywrightTests": { "passed": 164, "failed": 0 },
+    "typescript": "pass",
+    "eslint": "pass",
+    "prettier": "pass",
+    "gitDiffCheck": "pass",
+    "independentAudit": "no open P0/P1/P2 findings"
+  }
+}

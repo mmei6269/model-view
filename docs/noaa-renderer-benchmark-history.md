@@ -4,8 +4,19 @@ This file keeps the detailed renderer benchmark chronology and optimization back
 
 ## Benchmark Fixtures
 
-- Fixed benchmark fixture: cold full render after deleting `output/noaa-beta-cache`, exact run `20260426 12Z`, `view=conus`, models `gfs,nam,nam3km,hrrr`, full horizon, forced render, profile enabled.
-- Current benchmark fixture: clear `output/noaa-beta-cache` and NOAA temp caches before every cold render; exact run `20260427 06Z`, `view=conus`, models `gfs,nam,nam3km,hrrr`, full horizon with default available-hour cap, forced render, profile enabled. April 27 06Z and 00Z both have the normal NAM `F036` cap; 06Z was used because 00Z was not more complete.
+- Historical fixture only (do not reuse its cache procedure): cold full render after deleting the then-disposable `output/noaa-beta-cache`, exact run `20260426 12Z`, `view=conus`, models `gfs,nam,nam3km,hrrr`, full horizon, forced render, profile enabled.
+- Historical fixture only (do not clear the current application cache): clear the then-disposable `output/noaa-beta-cache` and NOAA temp caches before every cold render; exact run `20260427 06Z`, `view=conus`, models `gfs,nam,nam3km,hrrr`, full horizon with default available-hour cap, forced render, profile enabled. April 27 06Z and 00Z both have the normal NAM `F036` cap; 06Z was used because 00Z was not more complete.
+- Current campaigns must use dedicated APFS-cloned cache roots under a campaign-specific temporary directory. Never benchmark directly in or delete the application's real `output/noaa-beta-cache`.
+
+## 2026-07-22 Twenty-Pass Follow-up Campaign
+
+- The high-yield-first follow-up, pinned fixture, scientific acceptance contract, per-pass benchmark records, decisions, and cumulative results live in [`renderer-optimization-20-pass-followup-2026-07-22.md`](./renderer-optimization-20-pass-followup-2026-07-22.md). Its sealed benchmark directories retain the historical `renderer-30pass` namespace because the requested scope was reduced after those paths became provenance identifiers.
+- 2026-07-23/24: the campaign completed with Pass 16 (content-addressed Snow-RF typed asset; loader −90.4%, four-model parity exact) and its final aggregate gate; Passes 17–20 remain deferred roadmap items. The same session's branch review also rescued the passes 06–15 ephemeral evidence into `output/noaa-benchmarks/renderer-30pass/followup-durable-evidence/` (29/29 files SHA-verified) and corrected a pass-10/12 commit swap in the evidence file.
+- Backlog (from the 2026-07-23 review, deliberately deferred): fold the catalog color-lookup asset's mode-neutral compiler identity (`compilerId` + `compilerClosureSha256`, identical across dynamic/precompiled modes) and the Snow-RF compiler identity into `getNoaaGribRendererSignature`, so a compiler-algorithm change that legitimately regenerates a committed asset also invalidates completed frames. Deferred mid-campaign because any signature change invalidates every cached completion and would have broken the Pass 16 parity gates; the practical drift risk is closed in the interim by the new CI step that rebuilds and byte-compares both committed generated assets on every push.
+
+## 2026-07-22 Twenty-Pass Campaign
+
+- The completed high-yield-first campaign, pinned 16-frame fixture, scientific acceptance contract, raw A/B evidence, pass decisions, and cumulative results live in [`renderer-optimization-20-pass-2026-07-22.md`](./renderer-optimization-20-pass-2026-07-22.md).
 
 ## 2026-05-10 Optimization Passes
 

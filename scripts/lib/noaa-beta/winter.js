@@ -1,7 +1,7 @@
 "use strict";
 
 const path = require("path");
-const { HOVER_GRID_SCHEMA_VERSION } = require("../modelview-runtime");
+const { HOVER_GRID_ENCODING, HOVER_GRID_SCHEMA_VERSION } = require("../modelview-runtime");
 const { NOAA_NAM_PARAMETER_CATALOG } = require("../noaa-nam-parameter-catalog");
 const { M_TO_IN, incrementProfileCounter } = require("./util");
 const { createTransparentPng } = require("./png-encode");
@@ -247,6 +247,9 @@ function buildSnowRenderedArtifacts({
     width,
     height,
     hoverValueCounts,
+    preDeltaEncode: HOVER_GRID_ENCODING.preDeltaEncode && String(hoverGridFormat || "").toLowerCase() === "binary",
+    preGradient:
+      HOVER_GRID_ENCODING.predictor === "gradient2d" && String(hoverGridFormat || "").toLowerCase() === "binary",
   });
   const hoverGrid = buildHoverGridArtifact({
     width,

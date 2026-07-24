@@ -1,0 +1,4083 @@
+{
+  "schemaVersion": 1,
+  "format": "modelview-snow-rf-tree-major-fields-v1",
+  "endian": "little",
+  "source": {
+    "artifactRequired": "snow-rf/conus-rf.json",
+    "sha256": "b3bc9395135c6ef79d103e82516b70cdca6c28571807b362d4080de512f6c731",
+    "bytes": 27054389
+  },
+  "compiler": {
+    "id": "modelview-strict-snow-rf-compiler-v1",
+    "closure": {
+      "encoding": "ordered-generator-compiler-file-bytes-nul-v1",
+      "sha256": "45565719e40741d453d8af66cd5912f2fcd4215f1c4bd7920a7ce084fe05dbc4",
+      "files": [
+        {
+          "name": "snow-rf-compiler.js",
+          "byteLength": 14931,
+          "sha256": "c3b5a66f0d51a6df102c4516c0c4990ad6f84aae9c25778742c198ec9c345e58"
+        },
+        {
+          "name": "snow-rf-asset.js",
+          "byteLength": 35223,
+          "sha256": "cb22c3d112370e96274498847ada6529c3da338873446e3beee465c6f0d16b2f"
+        },
+        {
+          "name": "generate-noaa-snow-rf-asset.js",
+          "byteLength": 22604,
+          "sha256": "93385d619dbd9a4432575850ae1c6d23c0da6ee9463b0d226c4ca2065fd8cffd"
+        }
+      ]
+    }
+  },
+  "model": {
+    "featureCount": 27,
+    "treeCount": 100,
+    "nodeCount": 666406,
+    "internalNodeCount": 333153,
+    "leafCount": 333253,
+    "maxDepth": 21
+  },
+  "layout": {
+    "alignmentBytes": 8,
+    "fieldOrder": [
+      {
+        "name": "childrenLeft",
+        "type": "Int32",
+        "elementBytes": 4
+      },
+      {
+        "name": "childrenRight",
+        "type": "Int32",
+        "elementBytes": 4
+      },
+      {
+        "name": "feature",
+        "type": "Int32",
+        "elementBytes": 4
+      },
+      {
+        "name": "threshold",
+        "type": "Float64",
+        "elementBytes": 8
+      },
+      {
+        "name": "value",
+        "type": "Float64",
+        "elementBytes": 8
+      }
+    ],
+    "regionCount": 500,
+    "payloadBytes": 18659368,
+    "paddingBytes": 1200,
+    "binaryBytes": 18660568,
+    "regions": [
+      {
+        "treeIndex": 0,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 0,
+        "length": 6499,
+        "byteLength": 25996
+      },
+      {
+        "treeIndex": 0,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 26000,
+        "length": 6499,
+        "byteLength": 25996
+      },
+      {
+        "treeIndex": 0,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 52000,
+        "length": 6499,
+        "byteLength": 25996
+      },
+      {
+        "treeIndex": 0,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 78000,
+        "length": 6499,
+        "byteLength": 51992
+      },
+      {
+        "treeIndex": 0,
+        "field": "value",
+        "type": "Float64",
+        "offset": 129992,
+        "length": 6499,
+        "byteLength": 51992
+      },
+      {
+        "treeIndex": 1,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 181984,
+        "length": 6699,
+        "byteLength": 26796
+      },
+      {
+        "treeIndex": 1,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 208784,
+        "length": 6699,
+        "byteLength": 26796
+      },
+      {
+        "treeIndex": 1,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 235584,
+        "length": 6699,
+        "byteLength": 26796
+      },
+      {
+        "treeIndex": 1,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 262384,
+        "length": 6699,
+        "byteLength": 53592
+      },
+      {
+        "treeIndex": 1,
+        "field": "value",
+        "type": "Float64",
+        "offset": 315976,
+        "length": 6699,
+        "byteLength": 53592
+      },
+      {
+        "treeIndex": 2,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 369568,
+        "length": 6203,
+        "byteLength": 24812
+      },
+      {
+        "treeIndex": 2,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 394384,
+        "length": 6203,
+        "byteLength": 24812
+      },
+      {
+        "treeIndex": 2,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 419200,
+        "length": 6203,
+        "byteLength": 24812
+      },
+      {
+        "treeIndex": 2,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 444016,
+        "length": 6203,
+        "byteLength": 49624
+      },
+      {
+        "treeIndex": 2,
+        "field": "value",
+        "type": "Float64",
+        "offset": 493640,
+        "length": 6203,
+        "byteLength": 49624
+      },
+      {
+        "treeIndex": 3,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 543264,
+        "length": 6689,
+        "byteLength": 26756
+      },
+      {
+        "treeIndex": 3,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 570024,
+        "length": 6689,
+        "byteLength": 26756
+      },
+      {
+        "treeIndex": 3,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 596784,
+        "length": 6689,
+        "byteLength": 26756
+      },
+      {
+        "treeIndex": 3,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 623544,
+        "length": 6689,
+        "byteLength": 53512
+      },
+      {
+        "treeIndex": 3,
+        "field": "value",
+        "type": "Float64",
+        "offset": 677056,
+        "length": 6689,
+        "byteLength": 53512
+      },
+      {
+        "treeIndex": 4,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 730568,
+        "length": 6487,
+        "byteLength": 25948
+      },
+      {
+        "treeIndex": 4,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 756520,
+        "length": 6487,
+        "byteLength": 25948
+      },
+      {
+        "treeIndex": 4,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 782472,
+        "length": 6487,
+        "byteLength": 25948
+      },
+      {
+        "treeIndex": 4,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 808424,
+        "length": 6487,
+        "byteLength": 51896
+      },
+      {
+        "treeIndex": 4,
+        "field": "value",
+        "type": "Float64",
+        "offset": 860320,
+        "length": 6487,
+        "byteLength": 51896
+      },
+      {
+        "treeIndex": 5,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 912216,
+        "length": 6213,
+        "byteLength": 24852
+      },
+      {
+        "treeIndex": 5,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 937072,
+        "length": 6213,
+        "byteLength": 24852
+      },
+      {
+        "treeIndex": 5,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 961928,
+        "length": 6213,
+        "byteLength": 24852
+      },
+      {
+        "treeIndex": 5,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 986784,
+        "length": 6213,
+        "byteLength": 49704
+      },
+      {
+        "treeIndex": 5,
+        "field": "value",
+        "type": "Float64",
+        "offset": 1036488,
+        "length": 6213,
+        "byteLength": 49704
+      },
+      {
+        "treeIndex": 6,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 1086192,
+        "length": 6817,
+        "byteLength": 27268
+      },
+      {
+        "treeIndex": 6,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 1113464,
+        "length": 6817,
+        "byteLength": 27268
+      },
+      {
+        "treeIndex": 6,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 1140736,
+        "length": 6817,
+        "byteLength": 27268
+      },
+      {
+        "treeIndex": 6,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 1168008,
+        "length": 6817,
+        "byteLength": 54536
+      },
+      {
+        "treeIndex": 6,
+        "field": "value",
+        "type": "Float64",
+        "offset": 1222544,
+        "length": 6817,
+        "byteLength": 54536
+      },
+      {
+        "treeIndex": 7,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 1277080,
+        "length": 6529,
+        "byteLength": 26116
+      },
+      {
+        "treeIndex": 7,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 1303200,
+        "length": 6529,
+        "byteLength": 26116
+      },
+      {
+        "treeIndex": 7,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 1329320,
+        "length": 6529,
+        "byteLength": 26116
+      },
+      {
+        "treeIndex": 7,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 1355440,
+        "length": 6529,
+        "byteLength": 52232
+      },
+      {
+        "treeIndex": 7,
+        "field": "value",
+        "type": "Float64",
+        "offset": 1407672,
+        "length": 6529,
+        "byteLength": 52232
+      },
+      {
+        "treeIndex": 8,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 1459904,
+        "length": 6999,
+        "byteLength": 27996
+      },
+      {
+        "treeIndex": 8,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 1487904,
+        "length": 6999,
+        "byteLength": 27996
+      },
+      {
+        "treeIndex": 8,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 1515904,
+        "length": 6999,
+        "byteLength": 27996
+      },
+      {
+        "treeIndex": 8,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 1543904,
+        "length": 6999,
+        "byteLength": 55992
+      },
+      {
+        "treeIndex": 8,
+        "field": "value",
+        "type": "Float64",
+        "offset": 1599896,
+        "length": 6999,
+        "byteLength": 55992
+      },
+      {
+        "treeIndex": 9,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 1655888,
+        "length": 6877,
+        "byteLength": 27508
+      },
+      {
+        "treeIndex": 9,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 1683400,
+        "length": 6877,
+        "byteLength": 27508
+      },
+      {
+        "treeIndex": 9,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 1710912,
+        "length": 6877,
+        "byteLength": 27508
+      },
+      {
+        "treeIndex": 9,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 1738424,
+        "length": 6877,
+        "byteLength": 55016
+      },
+      {
+        "treeIndex": 9,
+        "field": "value",
+        "type": "Float64",
+        "offset": 1793440,
+        "length": 6877,
+        "byteLength": 55016
+      },
+      {
+        "treeIndex": 10,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 1848456,
+        "length": 6921,
+        "byteLength": 27684
+      },
+      {
+        "treeIndex": 10,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 1876144,
+        "length": 6921,
+        "byteLength": 27684
+      },
+      {
+        "treeIndex": 10,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 1903832,
+        "length": 6921,
+        "byteLength": 27684
+      },
+      {
+        "treeIndex": 10,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 1931520,
+        "length": 6921,
+        "byteLength": 55368
+      },
+      {
+        "treeIndex": 10,
+        "field": "value",
+        "type": "Float64",
+        "offset": 1986888,
+        "length": 6921,
+        "byteLength": 55368
+      },
+      {
+        "treeIndex": 11,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 2042256,
+        "length": 6353,
+        "byteLength": 25412
+      },
+      {
+        "treeIndex": 11,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 2067672,
+        "length": 6353,
+        "byteLength": 25412
+      },
+      {
+        "treeIndex": 11,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 2093088,
+        "length": 6353,
+        "byteLength": 25412
+      },
+      {
+        "treeIndex": 11,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 2118504,
+        "length": 6353,
+        "byteLength": 50824
+      },
+      {
+        "treeIndex": 11,
+        "field": "value",
+        "type": "Float64",
+        "offset": 2169328,
+        "length": 6353,
+        "byteLength": 50824
+      },
+      {
+        "treeIndex": 12,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 2220152,
+        "length": 6805,
+        "byteLength": 27220
+      },
+      {
+        "treeIndex": 12,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 2247376,
+        "length": 6805,
+        "byteLength": 27220
+      },
+      {
+        "treeIndex": 12,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 2274600,
+        "length": 6805,
+        "byteLength": 27220
+      },
+      {
+        "treeIndex": 12,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 2301824,
+        "length": 6805,
+        "byteLength": 54440
+      },
+      {
+        "treeIndex": 12,
+        "field": "value",
+        "type": "Float64",
+        "offset": 2356264,
+        "length": 6805,
+        "byteLength": 54440
+      },
+      {
+        "treeIndex": 13,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 2410704,
+        "length": 6719,
+        "byteLength": 26876
+      },
+      {
+        "treeIndex": 13,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 2437584,
+        "length": 6719,
+        "byteLength": 26876
+      },
+      {
+        "treeIndex": 13,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 2464464,
+        "length": 6719,
+        "byteLength": 26876
+      },
+      {
+        "treeIndex": 13,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 2491344,
+        "length": 6719,
+        "byteLength": 53752
+      },
+      {
+        "treeIndex": 13,
+        "field": "value",
+        "type": "Float64",
+        "offset": 2545096,
+        "length": 6719,
+        "byteLength": 53752
+      },
+      {
+        "treeIndex": 14,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 2598848,
+        "length": 6813,
+        "byteLength": 27252
+      },
+      {
+        "treeIndex": 14,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 2626104,
+        "length": 6813,
+        "byteLength": 27252
+      },
+      {
+        "treeIndex": 14,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 2653360,
+        "length": 6813,
+        "byteLength": 27252
+      },
+      {
+        "treeIndex": 14,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 2680616,
+        "length": 6813,
+        "byteLength": 54504
+      },
+      {
+        "treeIndex": 14,
+        "field": "value",
+        "type": "Float64",
+        "offset": 2735120,
+        "length": 6813,
+        "byteLength": 54504
+      },
+      {
+        "treeIndex": 15,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 2789624,
+        "length": 6657,
+        "byteLength": 26628
+      },
+      {
+        "treeIndex": 15,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 2816256,
+        "length": 6657,
+        "byteLength": 26628
+      },
+      {
+        "treeIndex": 15,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 2842888,
+        "length": 6657,
+        "byteLength": 26628
+      },
+      {
+        "treeIndex": 15,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 2869520,
+        "length": 6657,
+        "byteLength": 53256
+      },
+      {
+        "treeIndex": 15,
+        "field": "value",
+        "type": "Float64",
+        "offset": 2922776,
+        "length": 6657,
+        "byteLength": 53256
+      },
+      {
+        "treeIndex": 16,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 2976032,
+        "length": 6287,
+        "byteLength": 25148
+      },
+      {
+        "treeIndex": 16,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 3001184,
+        "length": 6287,
+        "byteLength": 25148
+      },
+      {
+        "treeIndex": 16,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 3026336,
+        "length": 6287,
+        "byteLength": 25148
+      },
+      {
+        "treeIndex": 16,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 3051488,
+        "length": 6287,
+        "byteLength": 50296
+      },
+      {
+        "treeIndex": 16,
+        "field": "value",
+        "type": "Float64",
+        "offset": 3101784,
+        "length": 6287,
+        "byteLength": 50296
+      },
+      {
+        "treeIndex": 17,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 3152080,
+        "length": 6685,
+        "byteLength": 26740
+      },
+      {
+        "treeIndex": 17,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 3178824,
+        "length": 6685,
+        "byteLength": 26740
+      },
+      {
+        "treeIndex": 17,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 3205568,
+        "length": 6685,
+        "byteLength": 26740
+      },
+      {
+        "treeIndex": 17,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 3232312,
+        "length": 6685,
+        "byteLength": 53480
+      },
+      {
+        "treeIndex": 17,
+        "field": "value",
+        "type": "Float64",
+        "offset": 3285792,
+        "length": 6685,
+        "byteLength": 53480
+      },
+      {
+        "treeIndex": 18,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 3339272,
+        "length": 6517,
+        "byteLength": 26068
+      },
+      {
+        "treeIndex": 18,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 3365344,
+        "length": 6517,
+        "byteLength": 26068
+      },
+      {
+        "treeIndex": 18,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 3391416,
+        "length": 6517,
+        "byteLength": 26068
+      },
+      {
+        "treeIndex": 18,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 3417488,
+        "length": 6517,
+        "byteLength": 52136
+      },
+      {
+        "treeIndex": 18,
+        "field": "value",
+        "type": "Float64",
+        "offset": 3469624,
+        "length": 6517,
+        "byteLength": 52136
+      },
+      {
+        "treeIndex": 19,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 3521760,
+        "length": 6869,
+        "byteLength": 27476
+      },
+      {
+        "treeIndex": 19,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 3549240,
+        "length": 6869,
+        "byteLength": 27476
+      },
+      {
+        "treeIndex": 19,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 3576720,
+        "length": 6869,
+        "byteLength": 27476
+      },
+      {
+        "treeIndex": 19,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 3604200,
+        "length": 6869,
+        "byteLength": 54952
+      },
+      {
+        "treeIndex": 19,
+        "field": "value",
+        "type": "Float64",
+        "offset": 3659152,
+        "length": 6869,
+        "byteLength": 54952
+      },
+      {
+        "treeIndex": 20,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 3714104,
+        "length": 6871,
+        "byteLength": 27484
+      },
+      {
+        "treeIndex": 20,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 3741592,
+        "length": 6871,
+        "byteLength": 27484
+      },
+      {
+        "treeIndex": 20,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 3769080,
+        "length": 6871,
+        "byteLength": 27484
+      },
+      {
+        "treeIndex": 20,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 3796568,
+        "length": 6871,
+        "byteLength": 54968
+      },
+      {
+        "treeIndex": 20,
+        "field": "value",
+        "type": "Float64",
+        "offset": 3851536,
+        "length": 6871,
+        "byteLength": 54968
+      },
+      {
+        "treeIndex": 21,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 3906504,
+        "length": 6619,
+        "byteLength": 26476
+      },
+      {
+        "treeIndex": 21,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 3932984,
+        "length": 6619,
+        "byteLength": 26476
+      },
+      {
+        "treeIndex": 21,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 3959464,
+        "length": 6619,
+        "byteLength": 26476
+      },
+      {
+        "treeIndex": 21,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 3985944,
+        "length": 6619,
+        "byteLength": 52952
+      },
+      {
+        "treeIndex": 21,
+        "field": "value",
+        "type": "Float64",
+        "offset": 4038896,
+        "length": 6619,
+        "byteLength": 52952
+      },
+      {
+        "treeIndex": 22,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 4091848,
+        "length": 6623,
+        "byteLength": 26492
+      },
+      {
+        "treeIndex": 22,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 4118344,
+        "length": 6623,
+        "byteLength": 26492
+      },
+      {
+        "treeIndex": 22,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 4144840,
+        "length": 6623,
+        "byteLength": 26492
+      },
+      {
+        "treeIndex": 22,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 4171336,
+        "length": 6623,
+        "byteLength": 52984
+      },
+      {
+        "treeIndex": 22,
+        "field": "value",
+        "type": "Float64",
+        "offset": 4224320,
+        "length": 6623,
+        "byteLength": 52984
+      },
+      {
+        "treeIndex": 23,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 4277304,
+        "length": 6615,
+        "byteLength": 26460
+      },
+      {
+        "treeIndex": 23,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 4303768,
+        "length": 6615,
+        "byteLength": 26460
+      },
+      {
+        "treeIndex": 23,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 4330232,
+        "length": 6615,
+        "byteLength": 26460
+      },
+      {
+        "treeIndex": 23,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 4356696,
+        "length": 6615,
+        "byteLength": 52920
+      },
+      {
+        "treeIndex": 23,
+        "field": "value",
+        "type": "Float64",
+        "offset": 4409616,
+        "length": 6615,
+        "byteLength": 52920
+      },
+      {
+        "treeIndex": 24,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 4462536,
+        "length": 6711,
+        "byteLength": 26844
+      },
+      {
+        "treeIndex": 24,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 4489384,
+        "length": 6711,
+        "byteLength": 26844
+      },
+      {
+        "treeIndex": 24,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 4516232,
+        "length": 6711,
+        "byteLength": 26844
+      },
+      {
+        "treeIndex": 24,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 4543080,
+        "length": 6711,
+        "byteLength": 53688
+      },
+      {
+        "treeIndex": 24,
+        "field": "value",
+        "type": "Float64",
+        "offset": 4596768,
+        "length": 6711,
+        "byteLength": 53688
+      },
+      {
+        "treeIndex": 25,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 4650456,
+        "length": 7027,
+        "byteLength": 28108
+      },
+      {
+        "treeIndex": 25,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 4678568,
+        "length": 7027,
+        "byteLength": 28108
+      },
+      {
+        "treeIndex": 25,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 4706680,
+        "length": 7027,
+        "byteLength": 28108
+      },
+      {
+        "treeIndex": 25,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 4734792,
+        "length": 7027,
+        "byteLength": 56216
+      },
+      {
+        "treeIndex": 25,
+        "field": "value",
+        "type": "Float64",
+        "offset": 4791008,
+        "length": 7027,
+        "byteLength": 56216
+      },
+      {
+        "treeIndex": 26,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 4847224,
+        "length": 6539,
+        "byteLength": 26156
+      },
+      {
+        "treeIndex": 26,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 4873384,
+        "length": 6539,
+        "byteLength": 26156
+      },
+      {
+        "treeIndex": 26,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 4899544,
+        "length": 6539,
+        "byteLength": 26156
+      },
+      {
+        "treeIndex": 26,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 4925704,
+        "length": 6539,
+        "byteLength": 52312
+      },
+      {
+        "treeIndex": 26,
+        "field": "value",
+        "type": "Float64",
+        "offset": 4978016,
+        "length": 6539,
+        "byteLength": 52312
+      },
+      {
+        "treeIndex": 27,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 5030328,
+        "length": 6433,
+        "byteLength": 25732
+      },
+      {
+        "treeIndex": 27,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 5056064,
+        "length": 6433,
+        "byteLength": 25732
+      },
+      {
+        "treeIndex": 27,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 5081800,
+        "length": 6433,
+        "byteLength": 25732
+      },
+      {
+        "treeIndex": 27,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 5107536,
+        "length": 6433,
+        "byteLength": 51464
+      },
+      {
+        "treeIndex": 27,
+        "field": "value",
+        "type": "Float64",
+        "offset": 5159000,
+        "length": 6433,
+        "byteLength": 51464
+      },
+      {
+        "treeIndex": 28,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 5210464,
+        "length": 6855,
+        "byteLength": 27420
+      },
+      {
+        "treeIndex": 28,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 5237888,
+        "length": 6855,
+        "byteLength": 27420
+      },
+      {
+        "treeIndex": 28,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 5265312,
+        "length": 6855,
+        "byteLength": 27420
+      },
+      {
+        "treeIndex": 28,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 5292736,
+        "length": 6855,
+        "byteLength": 54840
+      },
+      {
+        "treeIndex": 28,
+        "field": "value",
+        "type": "Float64",
+        "offset": 5347576,
+        "length": 6855,
+        "byteLength": 54840
+      },
+      {
+        "treeIndex": 29,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 5402416,
+        "length": 6995,
+        "byteLength": 27980
+      },
+      {
+        "treeIndex": 29,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 5430400,
+        "length": 6995,
+        "byteLength": 27980
+      },
+      {
+        "treeIndex": 29,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 5458384,
+        "length": 6995,
+        "byteLength": 27980
+      },
+      {
+        "treeIndex": 29,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 5486368,
+        "length": 6995,
+        "byteLength": 55960
+      },
+      {
+        "treeIndex": 29,
+        "field": "value",
+        "type": "Float64",
+        "offset": 5542328,
+        "length": 6995,
+        "byteLength": 55960
+      },
+      {
+        "treeIndex": 30,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 5598288,
+        "length": 6361,
+        "byteLength": 25444
+      },
+      {
+        "treeIndex": 30,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 5623736,
+        "length": 6361,
+        "byteLength": 25444
+      },
+      {
+        "treeIndex": 30,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 5649184,
+        "length": 6361,
+        "byteLength": 25444
+      },
+      {
+        "treeIndex": 30,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 5674632,
+        "length": 6361,
+        "byteLength": 50888
+      },
+      {
+        "treeIndex": 30,
+        "field": "value",
+        "type": "Float64",
+        "offset": 5725520,
+        "length": 6361,
+        "byteLength": 50888
+      },
+      {
+        "treeIndex": 31,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 5776408,
+        "length": 7015,
+        "byteLength": 28060
+      },
+      {
+        "treeIndex": 31,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 5804472,
+        "length": 7015,
+        "byteLength": 28060
+      },
+      {
+        "treeIndex": 31,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 5832536,
+        "length": 7015,
+        "byteLength": 28060
+      },
+      {
+        "treeIndex": 31,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 5860600,
+        "length": 7015,
+        "byteLength": 56120
+      },
+      {
+        "treeIndex": 31,
+        "field": "value",
+        "type": "Float64",
+        "offset": 5916720,
+        "length": 7015,
+        "byteLength": 56120
+      },
+      {
+        "treeIndex": 32,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 5972840,
+        "length": 6949,
+        "byteLength": 27796
+      },
+      {
+        "treeIndex": 32,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 6000640,
+        "length": 6949,
+        "byteLength": 27796
+      },
+      {
+        "treeIndex": 32,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 6028440,
+        "length": 6949,
+        "byteLength": 27796
+      },
+      {
+        "treeIndex": 32,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 6056240,
+        "length": 6949,
+        "byteLength": 55592
+      },
+      {
+        "treeIndex": 32,
+        "field": "value",
+        "type": "Float64",
+        "offset": 6111832,
+        "length": 6949,
+        "byteLength": 55592
+      },
+      {
+        "treeIndex": 33,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 6167424,
+        "length": 6705,
+        "byteLength": 26820
+      },
+      {
+        "treeIndex": 33,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 6194248,
+        "length": 6705,
+        "byteLength": 26820
+      },
+      {
+        "treeIndex": 33,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 6221072,
+        "length": 6705,
+        "byteLength": 26820
+      },
+      {
+        "treeIndex": 33,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 6247896,
+        "length": 6705,
+        "byteLength": 53640
+      },
+      {
+        "treeIndex": 33,
+        "field": "value",
+        "type": "Float64",
+        "offset": 6301536,
+        "length": 6705,
+        "byteLength": 53640
+      },
+      {
+        "treeIndex": 34,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 6355176,
+        "length": 6877,
+        "byteLength": 27508
+      },
+      {
+        "treeIndex": 34,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 6382688,
+        "length": 6877,
+        "byteLength": 27508
+      },
+      {
+        "treeIndex": 34,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 6410200,
+        "length": 6877,
+        "byteLength": 27508
+      },
+      {
+        "treeIndex": 34,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 6437712,
+        "length": 6877,
+        "byteLength": 55016
+      },
+      {
+        "treeIndex": 34,
+        "field": "value",
+        "type": "Float64",
+        "offset": 6492728,
+        "length": 6877,
+        "byteLength": 55016
+      },
+      {
+        "treeIndex": 35,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 6547744,
+        "length": 6655,
+        "byteLength": 26620
+      },
+      {
+        "treeIndex": 35,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 6574368,
+        "length": 6655,
+        "byteLength": 26620
+      },
+      {
+        "treeIndex": 35,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 6600992,
+        "length": 6655,
+        "byteLength": 26620
+      },
+      {
+        "treeIndex": 35,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 6627616,
+        "length": 6655,
+        "byteLength": 53240
+      },
+      {
+        "treeIndex": 35,
+        "field": "value",
+        "type": "Float64",
+        "offset": 6680856,
+        "length": 6655,
+        "byteLength": 53240
+      },
+      {
+        "treeIndex": 36,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 6734096,
+        "length": 6431,
+        "byteLength": 25724
+      },
+      {
+        "treeIndex": 36,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 6759824,
+        "length": 6431,
+        "byteLength": 25724
+      },
+      {
+        "treeIndex": 36,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 6785552,
+        "length": 6431,
+        "byteLength": 25724
+      },
+      {
+        "treeIndex": 36,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 6811280,
+        "length": 6431,
+        "byteLength": 51448
+      },
+      {
+        "treeIndex": 36,
+        "field": "value",
+        "type": "Float64",
+        "offset": 6862728,
+        "length": 6431,
+        "byteLength": 51448
+      },
+      {
+        "treeIndex": 37,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 6914176,
+        "length": 6531,
+        "byteLength": 26124
+      },
+      {
+        "treeIndex": 37,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 6940304,
+        "length": 6531,
+        "byteLength": 26124
+      },
+      {
+        "treeIndex": 37,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 6966432,
+        "length": 6531,
+        "byteLength": 26124
+      },
+      {
+        "treeIndex": 37,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 6992560,
+        "length": 6531,
+        "byteLength": 52248
+      },
+      {
+        "treeIndex": 37,
+        "field": "value",
+        "type": "Float64",
+        "offset": 7044808,
+        "length": 6531,
+        "byteLength": 52248
+      },
+      {
+        "treeIndex": 38,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 7097056,
+        "length": 6655,
+        "byteLength": 26620
+      },
+      {
+        "treeIndex": 38,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 7123680,
+        "length": 6655,
+        "byteLength": 26620
+      },
+      {
+        "treeIndex": 38,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 7150304,
+        "length": 6655,
+        "byteLength": 26620
+      },
+      {
+        "treeIndex": 38,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 7176928,
+        "length": 6655,
+        "byteLength": 53240
+      },
+      {
+        "treeIndex": 38,
+        "field": "value",
+        "type": "Float64",
+        "offset": 7230168,
+        "length": 6655,
+        "byteLength": 53240
+      },
+      {
+        "treeIndex": 39,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 7283408,
+        "length": 6687,
+        "byteLength": 26748
+      },
+      {
+        "treeIndex": 39,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 7310160,
+        "length": 6687,
+        "byteLength": 26748
+      },
+      {
+        "treeIndex": 39,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 7336912,
+        "length": 6687,
+        "byteLength": 26748
+      },
+      {
+        "treeIndex": 39,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 7363664,
+        "length": 6687,
+        "byteLength": 53496
+      },
+      {
+        "treeIndex": 39,
+        "field": "value",
+        "type": "Float64",
+        "offset": 7417160,
+        "length": 6687,
+        "byteLength": 53496
+      },
+      {
+        "treeIndex": 40,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 7470656,
+        "length": 6619,
+        "byteLength": 26476
+      },
+      {
+        "treeIndex": 40,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 7497136,
+        "length": 6619,
+        "byteLength": 26476
+      },
+      {
+        "treeIndex": 40,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 7523616,
+        "length": 6619,
+        "byteLength": 26476
+      },
+      {
+        "treeIndex": 40,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 7550096,
+        "length": 6619,
+        "byteLength": 52952
+      },
+      {
+        "treeIndex": 40,
+        "field": "value",
+        "type": "Float64",
+        "offset": 7603048,
+        "length": 6619,
+        "byteLength": 52952
+      },
+      {
+        "treeIndex": 41,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 7656000,
+        "length": 6673,
+        "byteLength": 26692
+      },
+      {
+        "treeIndex": 41,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 7682696,
+        "length": 6673,
+        "byteLength": 26692
+      },
+      {
+        "treeIndex": 41,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 7709392,
+        "length": 6673,
+        "byteLength": 26692
+      },
+      {
+        "treeIndex": 41,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 7736088,
+        "length": 6673,
+        "byteLength": 53384
+      },
+      {
+        "treeIndex": 41,
+        "field": "value",
+        "type": "Float64",
+        "offset": 7789472,
+        "length": 6673,
+        "byteLength": 53384
+      },
+      {
+        "treeIndex": 42,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 7842856,
+        "length": 6719,
+        "byteLength": 26876
+      },
+      {
+        "treeIndex": 42,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 7869736,
+        "length": 6719,
+        "byteLength": 26876
+      },
+      {
+        "treeIndex": 42,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 7896616,
+        "length": 6719,
+        "byteLength": 26876
+      },
+      {
+        "treeIndex": 42,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 7923496,
+        "length": 6719,
+        "byteLength": 53752
+      },
+      {
+        "treeIndex": 42,
+        "field": "value",
+        "type": "Float64",
+        "offset": 7977248,
+        "length": 6719,
+        "byteLength": 53752
+      },
+      {
+        "treeIndex": 43,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 8031000,
+        "length": 6547,
+        "byteLength": 26188
+      },
+      {
+        "treeIndex": 43,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 8057192,
+        "length": 6547,
+        "byteLength": 26188
+      },
+      {
+        "treeIndex": 43,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 8083384,
+        "length": 6547,
+        "byteLength": 26188
+      },
+      {
+        "treeIndex": 43,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 8109576,
+        "length": 6547,
+        "byteLength": 52376
+      },
+      {
+        "treeIndex": 43,
+        "field": "value",
+        "type": "Float64",
+        "offset": 8161952,
+        "length": 6547,
+        "byteLength": 52376
+      },
+      {
+        "treeIndex": 44,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 8214328,
+        "length": 6359,
+        "byteLength": 25436
+      },
+      {
+        "treeIndex": 44,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 8239768,
+        "length": 6359,
+        "byteLength": 25436
+      },
+      {
+        "treeIndex": 44,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 8265208,
+        "length": 6359,
+        "byteLength": 25436
+      },
+      {
+        "treeIndex": 44,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 8290648,
+        "length": 6359,
+        "byteLength": 50872
+      },
+      {
+        "treeIndex": 44,
+        "field": "value",
+        "type": "Float64",
+        "offset": 8341520,
+        "length": 6359,
+        "byteLength": 50872
+      },
+      {
+        "treeIndex": 45,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 8392392,
+        "length": 6693,
+        "byteLength": 26772
+      },
+      {
+        "treeIndex": 45,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 8419168,
+        "length": 6693,
+        "byteLength": 26772
+      },
+      {
+        "treeIndex": 45,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 8445944,
+        "length": 6693,
+        "byteLength": 26772
+      },
+      {
+        "treeIndex": 45,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 8472720,
+        "length": 6693,
+        "byteLength": 53544
+      },
+      {
+        "treeIndex": 45,
+        "field": "value",
+        "type": "Float64",
+        "offset": 8526264,
+        "length": 6693,
+        "byteLength": 53544
+      },
+      {
+        "treeIndex": 46,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 8579808,
+        "length": 6645,
+        "byteLength": 26580
+      },
+      {
+        "treeIndex": 46,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 8606392,
+        "length": 6645,
+        "byteLength": 26580
+      },
+      {
+        "treeIndex": 46,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 8632976,
+        "length": 6645,
+        "byteLength": 26580
+      },
+      {
+        "treeIndex": 46,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 8659560,
+        "length": 6645,
+        "byteLength": 53160
+      },
+      {
+        "treeIndex": 46,
+        "field": "value",
+        "type": "Float64",
+        "offset": 8712720,
+        "length": 6645,
+        "byteLength": 53160
+      },
+      {
+        "treeIndex": 47,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 8765880,
+        "length": 6477,
+        "byteLength": 25908
+      },
+      {
+        "treeIndex": 47,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 8791792,
+        "length": 6477,
+        "byteLength": 25908
+      },
+      {
+        "treeIndex": 47,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 8817704,
+        "length": 6477,
+        "byteLength": 25908
+      },
+      {
+        "treeIndex": 47,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 8843616,
+        "length": 6477,
+        "byteLength": 51816
+      },
+      {
+        "treeIndex": 47,
+        "field": "value",
+        "type": "Float64",
+        "offset": 8895432,
+        "length": 6477,
+        "byteLength": 51816
+      },
+      {
+        "treeIndex": 48,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 8947248,
+        "length": 6667,
+        "byteLength": 26668
+      },
+      {
+        "treeIndex": 48,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 8973920,
+        "length": 6667,
+        "byteLength": 26668
+      },
+      {
+        "treeIndex": 48,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 9000592,
+        "length": 6667,
+        "byteLength": 26668
+      },
+      {
+        "treeIndex": 48,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 9027264,
+        "length": 6667,
+        "byteLength": 53336
+      },
+      {
+        "treeIndex": 48,
+        "field": "value",
+        "type": "Float64",
+        "offset": 9080600,
+        "length": 6667,
+        "byteLength": 53336
+      },
+      {
+        "treeIndex": 49,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 9133936,
+        "length": 6977,
+        "byteLength": 27908
+      },
+      {
+        "treeIndex": 49,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 9161848,
+        "length": 6977,
+        "byteLength": 27908
+      },
+      {
+        "treeIndex": 49,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 9189760,
+        "length": 6977,
+        "byteLength": 27908
+      },
+      {
+        "treeIndex": 49,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 9217672,
+        "length": 6977,
+        "byteLength": 55816
+      },
+      {
+        "treeIndex": 49,
+        "field": "value",
+        "type": "Float64",
+        "offset": 9273488,
+        "length": 6977,
+        "byteLength": 55816
+      },
+      {
+        "treeIndex": 50,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 9329304,
+        "length": 6527,
+        "byteLength": 26108
+      },
+      {
+        "treeIndex": 50,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 9355416,
+        "length": 6527,
+        "byteLength": 26108
+      },
+      {
+        "treeIndex": 50,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 9381528,
+        "length": 6527,
+        "byteLength": 26108
+      },
+      {
+        "treeIndex": 50,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 9407640,
+        "length": 6527,
+        "byteLength": 52216
+      },
+      {
+        "treeIndex": 50,
+        "field": "value",
+        "type": "Float64",
+        "offset": 9459856,
+        "length": 6527,
+        "byteLength": 52216
+      },
+      {
+        "treeIndex": 51,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 9512072,
+        "length": 7039,
+        "byteLength": 28156
+      },
+      {
+        "treeIndex": 51,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 9540232,
+        "length": 7039,
+        "byteLength": 28156
+      },
+      {
+        "treeIndex": 51,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 9568392,
+        "length": 7039,
+        "byteLength": 28156
+      },
+      {
+        "treeIndex": 51,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 9596552,
+        "length": 7039,
+        "byteLength": 56312
+      },
+      {
+        "treeIndex": 51,
+        "field": "value",
+        "type": "Float64",
+        "offset": 9652864,
+        "length": 7039,
+        "byteLength": 56312
+      },
+      {
+        "treeIndex": 52,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 9709176,
+        "length": 6887,
+        "byteLength": 27548
+      },
+      {
+        "treeIndex": 52,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 9736728,
+        "length": 6887,
+        "byteLength": 27548
+      },
+      {
+        "treeIndex": 52,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 9764280,
+        "length": 6887,
+        "byteLength": 27548
+      },
+      {
+        "treeIndex": 52,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 9791832,
+        "length": 6887,
+        "byteLength": 55096
+      },
+      {
+        "treeIndex": 52,
+        "field": "value",
+        "type": "Float64",
+        "offset": 9846928,
+        "length": 6887,
+        "byteLength": 55096
+      },
+      {
+        "treeIndex": 53,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 9902024,
+        "length": 6397,
+        "byteLength": 25588
+      },
+      {
+        "treeIndex": 53,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 9927616,
+        "length": 6397,
+        "byteLength": 25588
+      },
+      {
+        "treeIndex": 53,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 9953208,
+        "length": 6397,
+        "byteLength": 25588
+      },
+      {
+        "treeIndex": 53,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 9978800,
+        "length": 6397,
+        "byteLength": 51176
+      },
+      {
+        "treeIndex": 53,
+        "field": "value",
+        "type": "Float64",
+        "offset": 10029976,
+        "length": 6397,
+        "byteLength": 51176
+      },
+      {
+        "treeIndex": 54,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 10081152,
+        "length": 6177,
+        "byteLength": 24708
+      },
+      {
+        "treeIndex": 54,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 10105864,
+        "length": 6177,
+        "byteLength": 24708
+      },
+      {
+        "treeIndex": 54,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 10130576,
+        "length": 6177,
+        "byteLength": 24708
+      },
+      {
+        "treeIndex": 54,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 10155288,
+        "length": 6177,
+        "byteLength": 49416
+      },
+      {
+        "treeIndex": 54,
+        "field": "value",
+        "type": "Float64",
+        "offset": 10204704,
+        "length": 6177,
+        "byteLength": 49416
+      },
+      {
+        "treeIndex": 55,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 10254120,
+        "length": 6641,
+        "byteLength": 26564
+      },
+      {
+        "treeIndex": 55,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 10280688,
+        "length": 6641,
+        "byteLength": 26564
+      },
+      {
+        "treeIndex": 55,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 10307256,
+        "length": 6641,
+        "byteLength": 26564
+      },
+      {
+        "treeIndex": 55,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 10333824,
+        "length": 6641,
+        "byteLength": 53128
+      },
+      {
+        "treeIndex": 55,
+        "field": "value",
+        "type": "Float64",
+        "offset": 10386952,
+        "length": 6641,
+        "byteLength": 53128
+      },
+      {
+        "treeIndex": 56,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 10440080,
+        "length": 6579,
+        "byteLength": 26316
+      },
+      {
+        "treeIndex": 56,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 10466400,
+        "length": 6579,
+        "byteLength": 26316
+      },
+      {
+        "treeIndex": 56,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 10492720,
+        "length": 6579,
+        "byteLength": 26316
+      },
+      {
+        "treeIndex": 56,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 10519040,
+        "length": 6579,
+        "byteLength": 52632
+      },
+      {
+        "treeIndex": 56,
+        "field": "value",
+        "type": "Float64",
+        "offset": 10571672,
+        "length": 6579,
+        "byteLength": 52632
+      },
+      {
+        "treeIndex": 57,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 10624304,
+        "length": 6521,
+        "byteLength": 26084
+      },
+      {
+        "treeIndex": 57,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 10650392,
+        "length": 6521,
+        "byteLength": 26084
+      },
+      {
+        "treeIndex": 57,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 10676480,
+        "length": 6521,
+        "byteLength": 26084
+      },
+      {
+        "treeIndex": 57,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 10702568,
+        "length": 6521,
+        "byteLength": 52168
+      },
+      {
+        "treeIndex": 57,
+        "field": "value",
+        "type": "Float64",
+        "offset": 10754736,
+        "length": 6521,
+        "byteLength": 52168
+      },
+      {
+        "treeIndex": 58,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 10806904,
+        "length": 6389,
+        "byteLength": 25556
+      },
+      {
+        "treeIndex": 58,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 10832464,
+        "length": 6389,
+        "byteLength": 25556
+      },
+      {
+        "treeIndex": 58,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 10858024,
+        "length": 6389,
+        "byteLength": 25556
+      },
+      {
+        "treeIndex": 58,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 10883584,
+        "length": 6389,
+        "byteLength": 51112
+      },
+      {
+        "treeIndex": 58,
+        "field": "value",
+        "type": "Float64",
+        "offset": 10934696,
+        "length": 6389,
+        "byteLength": 51112
+      },
+      {
+        "treeIndex": 59,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 10985808,
+        "length": 6605,
+        "byteLength": 26420
+      },
+      {
+        "treeIndex": 59,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 11012232,
+        "length": 6605,
+        "byteLength": 26420
+      },
+      {
+        "treeIndex": 59,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 11038656,
+        "length": 6605,
+        "byteLength": 26420
+      },
+      {
+        "treeIndex": 59,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 11065080,
+        "length": 6605,
+        "byteLength": 52840
+      },
+      {
+        "treeIndex": 59,
+        "field": "value",
+        "type": "Float64",
+        "offset": 11117920,
+        "length": 6605,
+        "byteLength": 52840
+      },
+      {
+        "treeIndex": 60,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 11170760,
+        "length": 6739,
+        "byteLength": 26956
+      },
+      {
+        "treeIndex": 60,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 11197720,
+        "length": 6739,
+        "byteLength": 26956
+      },
+      {
+        "treeIndex": 60,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 11224680,
+        "length": 6739,
+        "byteLength": 26956
+      },
+      {
+        "treeIndex": 60,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 11251640,
+        "length": 6739,
+        "byteLength": 53912
+      },
+      {
+        "treeIndex": 60,
+        "field": "value",
+        "type": "Float64",
+        "offset": 11305552,
+        "length": 6739,
+        "byteLength": 53912
+      },
+      {
+        "treeIndex": 61,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 11359464,
+        "length": 6485,
+        "byteLength": 25940
+      },
+      {
+        "treeIndex": 61,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 11385408,
+        "length": 6485,
+        "byteLength": 25940
+      },
+      {
+        "treeIndex": 61,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 11411352,
+        "length": 6485,
+        "byteLength": 25940
+      },
+      {
+        "treeIndex": 61,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 11437296,
+        "length": 6485,
+        "byteLength": 51880
+      },
+      {
+        "treeIndex": 61,
+        "field": "value",
+        "type": "Float64",
+        "offset": 11489176,
+        "length": 6485,
+        "byteLength": 51880
+      },
+      {
+        "treeIndex": 62,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 11541056,
+        "length": 6543,
+        "byteLength": 26172
+      },
+      {
+        "treeIndex": 62,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 11567232,
+        "length": 6543,
+        "byteLength": 26172
+      },
+      {
+        "treeIndex": 62,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 11593408,
+        "length": 6543,
+        "byteLength": 26172
+      },
+      {
+        "treeIndex": 62,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 11619584,
+        "length": 6543,
+        "byteLength": 52344
+      },
+      {
+        "treeIndex": 62,
+        "field": "value",
+        "type": "Float64",
+        "offset": 11671928,
+        "length": 6543,
+        "byteLength": 52344
+      },
+      {
+        "treeIndex": 63,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 11724272,
+        "length": 6831,
+        "byteLength": 27324
+      },
+      {
+        "treeIndex": 63,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 11751600,
+        "length": 6831,
+        "byteLength": 27324
+      },
+      {
+        "treeIndex": 63,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 11778928,
+        "length": 6831,
+        "byteLength": 27324
+      },
+      {
+        "treeIndex": 63,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 11806256,
+        "length": 6831,
+        "byteLength": 54648
+      },
+      {
+        "treeIndex": 63,
+        "field": "value",
+        "type": "Float64",
+        "offset": 11860904,
+        "length": 6831,
+        "byteLength": 54648
+      },
+      {
+        "treeIndex": 64,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 11915552,
+        "length": 6891,
+        "byteLength": 27564
+      },
+      {
+        "treeIndex": 64,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 11943120,
+        "length": 6891,
+        "byteLength": 27564
+      },
+      {
+        "treeIndex": 64,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 11970688,
+        "length": 6891,
+        "byteLength": 27564
+      },
+      {
+        "treeIndex": 64,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 11998256,
+        "length": 6891,
+        "byteLength": 55128
+      },
+      {
+        "treeIndex": 64,
+        "field": "value",
+        "type": "Float64",
+        "offset": 12053384,
+        "length": 6891,
+        "byteLength": 55128
+      },
+      {
+        "treeIndex": 65,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 12108512,
+        "length": 6527,
+        "byteLength": 26108
+      },
+      {
+        "treeIndex": 65,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 12134624,
+        "length": 6527,
+        "byteLength": 26108
+      },
+      {
+        "treeIndex": 65,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 12160736,
+        "length": 6527,
+        "byteLength": 26108
+      },
+      {
+        "treeIndex": 65,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 12186848,
+        "length": 6527,
+        "byteLength": 52216
+      },
+      {
+        "treeIndex": 65,
+        "field": "value",
+        "type": "Float64",
+        "offset": 12239064,
+        "length": 6527,
+        "byteLength": 52216
+      },
+      {
+        "treeIndex": 66,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 12291280,
+        "length": 6703,
+        "byteLength": 26812
+      },
+      {
+        "treeIndex": 66,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 12318096,
+        "length": 6703,
+        "byteLength": 26812
+      },
+      {
+        "treeIndex": 66,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 12344912,
+        "length": 6703,
+        "byteLength": 26812
+      },
+      {
+        "treeIndex": 66,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 12371728,
+        "length": 6703,
+        "byteLength": 53624
+      },
+      {
+        "treeIndex": 66,
+        "field": "value",
+        "type": "Float64",
+        "offset": 12425352,
+        "length": 6703,
+        "byteLength": 53624
+      },
+      {
+        "treeIndex": 67,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 12478976,
+        "length": 6851,
+        "byteLength": 27404
+      },
+      {
+        "treeIndex": 67,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 12506384,
+        "length": 6851,
+        "byteLength": 27404
+      },
+      {
+        "treeIndex": 67,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 12533792,
+        "length": 6851,
+        "byteLength": 27404
+      },
+      {
+        "treeIndex": 67,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 12561200,
+        "length": 6851,
+        "byteLength": 54808
+      },
+      {
+        "treeIndex": 67,
+        "field": "value",
+        "type": "Float64",
+        "offset": 12616008,
+        "length": 6851,
+        "byteLength": 54808
+      },
+      {
+        "treeIndex": 68,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 12670816,
+        "length": 6781,
+        "byteLength": 27124
+      },
+      {
+        "treeIndex": 68,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 12697944,
+        "length": 6781,
+        "byteLength": 27124
+      },
+      {
+        "treeIndex": 68,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 12725072,
+        "length": 6781,
+        "byteLength": 27124
+      },
+      {
+        "treeIndex": 68,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 12752200,
+        "length": 6781,
+        "byteLength": 54248
+      },
+      {
+        "treeIndex": 68,
+        "field": "value",
+        "type": "Float64",
+        "offset": 12806448,
+        "length": 6781,
+        "byteLength": 54248
+      },
+      {
+        "treeIndex": 69,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 12860696,
+        "length": 6685,
+        "byteLength": 26740
+      },
+      {
+        "treeIndex": 69,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 12887440,
+        "length": 6685,
+        "byteLength": 26740
+      },
+      {
+        "treeIndex": 69,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 12914184,
+        "length": 6685,
+        "byteLength": 26740
+      },
+      {
+        "treeIndex": 69,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 12940928,
+        "length": 6685,
+        "byteLength": 53480
+      },
+      {
+        "treeIndex": 69,
+        "field": "value",
+        "type": "Float64",
+        "offset": 12994408,
+        "length": 6685,
+        "byteLength": 53480
+      },
+      {
+        "treeIndex": 70,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 13047888,
+        "length": 6733,
+        "byteLength": 26932
+      },
+      {
+        "treeIndex": 70,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 13074824,
+        "length": 6733,
+        "byteLength": 26932
+      },
+      {
+        "treeIndex": 70,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 13101760,
+        "length": 6733,
+        "byteLength": 26932
+      },
+      {
+        "treeIndex": 70,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 13128696,
+        "length": 6733,
+        "byteLength": 53864
+      },
+      {
+        "treeIndex": 70,
+        "field": "value",
+        "type": "Float64",
+        "offset": 13182560,
+        "length": 6733,
+        "byteLength": 53864
+      },
+      {
+        "treeIndex": 71,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 13236424,
+        "length": 7015,
+        "byteLength": 28060
+      },
+      {
+        "treeIndex": 71,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 13264488,
+        "length": 7015,
+        "byteLength": 28060
+      },
+      {
+        "treeIndex": 71,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 13292552,
+        "length": 7015,
+        "byteLength": 28060
+      },
+      {
+        "treeIndex": 71,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 13320616,
+        "length": 7015,
+        "byteLength": 56120
+      },
+      {
+        "treeIndex": 71,
+        "field": "value",
+        "type": "Float64",
+        "offset": 13376736,
+        "length": 7015,
+        "byteLength": 56120
+      },
+      {
+        "treeIndex": 72,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 13432856,
+        "length": 7043,
+        "byteLength": 28172
+      },
+      {
+        "treeIndex": 72,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 13461032,
+        "length": 7043,
+        "byteLength": 28172
+      },
+      {
+        "treeIndex": 72,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 13489208,
+        "length": 7043,
+        "byteLength": 28172
+      },
+      {
+        "treeIndex": 72,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 13517384,
+        "length": 7043,
+        "byteLength": 56344
+      },
+      {
+        "treeIndex": 72,
+        "field": "value",
+        "type": "Float64",
+        "offset": 13573728,
+        "length": 7043,
+        "byteLength": 56344
+      },
+      {
+        "treeIndex": 73,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 13630072,
+        "length": 6721,
+        "byteLength": 26884
+      },
+      {
+        "treeIndex": 73,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 13656960,
+        "length": 6721,
+        "byteLength": 26884
+      },
+      {
+        "treeIndex": 73,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 13683848,
+        "length": 6721,
+        "byteLength": 26884
+      },
+      {
+        "treeIndex": 73,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 13710736,
+        "length": 6721,
+        "byteLength": 53768
+      },
+      {
+        "treeIndex": 73,
+        "field": "value",
+        "type": "Float64",
+        "offset": 13764504,
+        "length": 6721,
+        "byteLength": 53768
+      },
+      {
+        "treeIndex": 74,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 13818272,
+        "length": 6871,
+        "byteLength": 27484
+      },
+      {
+        "treeIndex": 74,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 13845760,
+        "length": 6871,
+        "byteLength": 27484
+      },
+      {
+        "treeIndex": 74,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 13873248,
+        "length": 6871,
+        "byteLength": 27484
+      },
+      {
+        "treeIndex": 74,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 13900736,
+        "length": 6871,
+        "byteLength": 54968
+      },
+      {
+        "treeIndex": 74,
+        "field": "value",
+        "type": "Float64",
+        "offset": 13955704,
+        "length": 6871,
+        "byteLength": 54968
+      },
+      {
+        "treeIndex": 75,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 14010672,
+        "length": 6707,
+        "byteLength": 26828
+      },
+      {
+        "treeIndex": 75,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 14037504,
+        "length": 6707,
+        "byteLength": 26828
+      },
+      {
+        "treeIndex": 75,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 14064336,
+        "length": 6707,
+        "byteLength": 26828
+      },
+      {
+        "treeIndex": 75,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 14091168,
+        "length": 6707,
+        "byteLength": 53656
+      },
+      {
+        "treeIndex": 75,
+        "field": "value",
+        "type": "Float64",
+        "offset": 14144824,
+        "length": 6707,
+        "byteLength": 53656
+      },
+      {
+        "treeIndex": 76,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 14198480,
+        "length": 6707,
+        "byteLength": 26828
+      },
+      {
+        "treeIndex": 76,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 14225312,
+        "length": 6707,
+        "byteLength": 26828
+      },
+      {
+        "treeIndex": 76,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 14252144,
+        "length": 6707,
+        "byteLength": 26828
+      },
+      {
+        "treeIndex": 76,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 14278976,
+        "length": 6707,
+        "byteLength": 53656
+      },
+      {
+        "treeIndex": 76,
+        "field": "value",
+        "type": "Float64",
+        "offset": 14332632,
+        "length": 6707,
+        "byteLength": 53656
+      },
+      {
+        "treeIndex": 77,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 14386288,
+        "length": 6901,
+        "byteLength": 27604
+      },
+      {
+        "treeIndex": 77,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 14413896,
+        "length": 6901,
+        "byteLength": 27604
+      },
+      {
+        "treeIndex": 77,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 14441504,
+        "length": 6901,
+        "byteLength": 27604
+      },
+      {
+        "treeIndex": 77,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 14469112,
+        "length": 6901,
+        "byteLength": 55208
+      },
+      {
+        "treeIndex": 77,
+        "field": "value",
+        "type": "Float64",
+        "offset": 14524320,
+        "length": 6901,
+        "byteLength": 55208
+      },
+      {
+        "treeIndex": 78,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 14579528,
+        "length": 6777,
+        "byteLength": 27108
+      },
+      {
+        "treeIndex": 78,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 14606640,
+        "length": 6777,
+        "byteLength": 27108
+      },
+      {
+        "treeIndex": 78,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 14633752,
+        "length": 6777,
+        "byteLength": 27108
+      },
+      {
+        "treeIndex": 78,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 14660864,
+        "length": 6777,
+        "byteLength": 54216
+      },
+      {
+        "treeIndex": 78,
+        "field": "value",
+        "type": "Float64",
+        "offset": 14715080,
+        "length": 6777,
+        "byteLength": 54216
+      },
+      {
+        "treeIndex": 79,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 14769296,
+        "length": 6525,
+        "byteLength": 26100
+      },
+      {
+        "treeIndex": 79,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 14795400,
+        "length": 6525,
+        "byteLength": 26100
+      },
+      {
+        "treeIndex": 79,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 14821504,
+        "length": 6525,
+        "byteLength": 26100
+      },
+      {
+        "treeIndex": 79,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 14847608,
+        "length": 6525,
+        "byteLength": 52200
+      },
+      {
+        "treeIndex": 79,
+        "field": "value",
+        "type": "Float64",
+        "offset": 14899808,
+        "length": 6525,
+        "byteLength": 52200
+      },
+      {
+        "treeIndex": 80,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 14952008,
+        "length": 6551,
+        "byteLength": 26204
+      },
+      {
+        "treeIndex": 80,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 14978216,
+        "length": 6551,
+        "byteLength": 26204
+      },
+      {
+        "treeIndex": 80,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 15004424,
+        "length": 6551,
+        "byteLength": 26204
+      },
+      {
+        "treeIndex": 80,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 15030632,
+        "length": 6551,
+        "byteLength": 52408
+      },
+      {
+        "treeIndex": 80,
+        "field": "value",
+        "type": "Float64",
+        "offset": 15083040,
+        "length": 6551,
+        "byteLength": 52408
+      },
+      {
+        "treeIndex": 81,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 15135448,
+        "length": 6259,
+        "byteLength": 25036
+      },
+      {
+        "treeIndex": 81,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 15160488,
+        "length": 6259,
+        "byteLength": 25036
+      },
+      {
+        "treeIndex": 81,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 15185528,
+        "length": 6259,
+        "byteLength": 25036
+      },
+      {
+        "treeIndex": 81,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 15210568,
+        "length": 6259,
+        "byteLength": 50072
+      },
+      {
+        "treeIndex": 81,
+        "field": "value",
+        "type": "Float64",
+        "offset": 15260640,
+        "length": 6259,
+        "byteLength": 50072
+      },
+      {
+        "treeIndex": 82,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 15310712,
+        "length": 6627,
+        "byteLength": 26508
+      },
+      {
+        "treeIndex": 82,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 15337224,
+        "length": 6627,
+        "byteLength": 26508
+      },
+      {
+        "treeIndex": 82,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 15363736,
+        "length": 6627,
+        "byteLength": 26508
+      },
+      {
+        "treeIndex": 82,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 15390248,
+        "length": 6627,
+        "byteLength": 53016
+      },
+      {
+        "treeIndex": 82,
+        "field": "value",
+        "type": "Float64",
+        "offset": 15443264,
+        "length": 6627,
+        "byteLength": 53016
+      },
+      {
+        "treeIndex": 83,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 15496280,
+        "length": 6735,
+        "byteLength": 26940
+      },
+      {
+        "treeIndex": 83,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 15523224,
+        "length": 6735,
+        "byteLength": 26940
+      },
+      {
+        "treeIndex": 83,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 15550168,
+        "length": 6735,
+        "byteLength": 26940
+      },
+      {
+        "treeIndex": 83,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 15577112,
+        "length": 6735,
+        "byteLength": 53880
+      },
+      {
+        "treeIndex": 83,
+        "field": "value",
+        "type": "Float64",
+        "offset": 15630992,
+        "length": 6735,
+        "byteLength": 53880
+      },
+      {
+        "treeIndex": 84,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 15684872,
+        "length": 6841,
+        "byteLength": 27364
+      },
+      {
+        "treeIndex": 84,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 15712240,
+        "length": 6841,
+        "byteLength": 27364
+      },
+      {
+        "treeIndex": 84,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 15739608,
+        "length": 6841,
+        "byteLength": 27364
+      },
+      {
+        "treeIndex": 84,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 15766976,
+        "length": 6841,
+        "byteLength": 54728
+      },
+      {
+        "treeIndex": 84,
+        "field": "value",
+        "type": "Float64",
+        "offset": 15821704,
+        "length": 6841,
+        "byteLength": 54728
+      },
+      {
+        "treeIndex": 85,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 15876432,
+        "length": 6691,
+        "byteLength": 26764
+      },
+      {
+        "treeIndex": 85,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 15903200,
+        "length": 6691,
+        "byteLength": 26764
+      },
+      {
+        "treeIndex": 85,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 15929968,
+        "length": 6691,
+        "byteLength": 26764
+      },
+      {
+        "treeIndex": 85,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 15956736,
+        "length": 6691,
+        "byteLength": 53528
+      },
+      {
+        "treeIndex": 85,
+        "field": "value",
+        "type": "Float64",
+        "offset": 16010264,
+        "length": 6691,
+        "byteLength": 53528
+      },
+      {
+        "treeIndex": 86,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 16063792,
+        "length": 6573,
+        "byteLength": 26292
+      },
+      {
+        "treeIndex": 86,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 16090088,
+        "length": 6573,
+        "byteLength": 26292
+      },
+      {
+        "treeIndex": 86,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 16116384,
+        "length": 6573,
+        "byteLength": 26292
+      },
+      {
+        "treeIndex": 86,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 16142680,
+        "length": 6573,
+        "byteLength": 52584
+      },
+      {
+        "treeIndex": 86,
+        "field": "value",
+        "type": "Float64",
+        "offset": 16195264,
+        "length": 6573,
+        "byteLength": 52584
+      },
+      {
+        "treeIndex": 87,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 16247848,
+        "length": 6757,
+        "byteLength": 27028
+      },
+      {
+        "treeIndex": 87,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 16274880,
+        "length": 6757,
+        "byteLength": 27028
+      },
+      {
+        "treeIndex": 87,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 16301912,
+        "length": 6757,
+        "byteLength": 27028
+      },
+      {
+        "treeIndex": 87,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 16328944,
+        "length": 6757,
+        "byteLength": 54056
+      },
+      {
+        "treeIndex": 87,
+        "field": "value",
+        "type": "Float64",
+        "offset": 16383000,
+        "length": 6757,
+        "byteLength": 54056
+      },
+      {
+        "treeIndex": 88,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 16437056,
+        "length": 6691,
+        "byteLength": 26764
+      },
+      {
+        "treeIndex": 88,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 16463824,
+        "length": 6691,
+        "byteLength": 26764
+      },
+      {
+        "treeIndex": 88,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 16490592,
+        "length": 6691,
+        "byteLength": 26764
+      },
+      {
+        "treeIndex": 88,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 16517360,
+        "length": 6691,
+        "byteLength": 53528
+      },
+      {
+        "treeIndex": 88,
+        "field": "value",
+        "type": "Float64",
+        "offset": 16570888,
+        "length": 6691,
+        "byteLength": 53528
+      },
+      {
+        "treeIndex": 89,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 16624416,
+        "length": 6499,
+        "byteLength": 25996
+      },
+      {
+        "treeIndex": 89,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 16650416,
+        "length": 6499,
+        "byteLength": 25996
+      },
+      {
+        "treeIndex": 89,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 16676416,
+        "length": 6499,
+        "byteLength": 25996
+      },
+      {
+        "treeIndex": 89,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 16702416,
+        "length": 6499,
+        "byteLength": 51992
+      },
+      {
+        "treeIndex": 89,
+        "field": "value",
+        "type": "Float64",
+        "offset": 16754408,
+        "length": 6499,
+        "byteLength": 51992
+      },
+      {
+        "treeIndex": 90,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 16806400,
+        "length": 6813,
+        "byteLength": 27252
+      },
+      {
+        "treeIndex": 90,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 16833656,
+        "length": 6813,
+        "byteLength": 27252
+      },
+      {
+        "treeIndex": 90,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 16860912,
+        "length": 6813,
+        "byteLength": 27252
+      },
+      {
+        "treeIndex": 90,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 16888168,
+        "length": 6813,
+        "byteLength": 54504
+      },
+      {
+        "treeIndex": 90,
+        "field": "value",
+        "type": "Float64",
+        "offset": 16942672,
+        "length": 6813,
+        "byteLength": 54504
+      },
+      {
+        "treeIndex": 91,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 16997176,
+        "length": 6529,
+        "byteLength": 26116
+      },
+      {
+        "treeIndex": 91,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 17023296,
+        "length": 6529,
+        "byteLength": 26116
+      },
+      {
+        "treeIndex": 91,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 17049416,
+        "length": 6529,
+        "byteLength": 26116
+      },
+      {
+        "treeIndex": 91,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 17075536,
+        "length": 6529,
+        "byteLength": 52232
+      },
+      {
+        "treeIndex": 91,
+        "field": "value",
+        "type": "Float64",
+        "offset": 17127768,
+        "length": 6529,
+        "byteLength": 52232
+      },
+      {
+        "treeIndex": 92,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 17180000,
+        "length": 6149,
+        "byteLength": 24596
+      },
+      {
+        "treeIndex": 92,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 17204600,
+        "length": 6149,
+        "byteLength": 24596
+      },
+      {
+        "treeIndex": 92,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 17229200,
+        "length": 6149,
+        "byteLength": 24596
+      },
+      {
+        "treeIndex": 92,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 17253800,
+        "length": 6149,
+        "byteLength": 49192
+      },
+      {
+        "treeIndex": 92,
+        "field": "value",
+        "type": "Float64",
+        "offset": 17302992,
+        "length": 6149,
+        "byteLength": 49192
+      },
+      {
+        "treeIndex": 93,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 17352184,
+        "length": 7013,
+        "byteLength": 28052
+      },
+      {
+        "treeIndex": 93,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 17380240,
+        "length": 7013,
+        "byteLength": 28052
+      },
+      {
+        "treeIndex": 93,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 17408296,
+        "length": 7013,
+        "byteLength": 28052
+      },
+      {
+        "treeIndex": 93,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 17436352,
+        "length": 7013,
+        "byteLength": 56104
+      },
+      {
+        "treeIndex": 93,
+        "field": "value",
+        "type": "Float64",
+        "offset": 17492456,
+        "length": 7013,
+        "byteLength": 56104
+      },
+      {
+        "treeIndex": 94,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 17548560,
+        "length": 6581,
+        "byteLength": 26324
+      },
+      {
+        "treeIndex": 94,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 17574888,
+        "length": 6581,
+        "byteLength": 26324
+      },
+      {
+        "treeIndex": 94,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 17601216,
+        "length": 6581,
+        "byteLength": 26324
+      },
+      {
+        "treeIndex": 94,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 17627544,
+        "length": 6581,
+        "byteLength": 52648
+      },
+      {
+        "treeIndex": 94,
+        "field": "value",
+        "type": "Float64",
+        "offset": 17680192,
+        "length": 6581,
+        "byteLength": 52648
+      },
+      {
+        "treeIndex": 95,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 17732840,
+        "length": 6265,
+        "byteLength": 25060
+      },
+      {
+        "treeIndex": 95,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 17757904,
+        "length": 6265,
+        "byteLength": 25060
+      },
+      {
+        "treeIndex": 95,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 17782968,
+        "length": 6265,
+        "byteLength": 25060
+      },
+      {
+        "treeIndex": 95,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 17808032,
+        "length": 6265,
+        "byteLength": 50120
+      },
+      {
+        "treeIndex": 95,
+        "field": "value",
+        "type": "Float64",
+        "offset": 17858152,
+        "length": 6265,
+        "byteLength": 50120
+      },
+      {
+        "treeIndex": 96,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 17908272,
+        "length": 6329,
+        "byteLength": 25316
+      },
+      {
+        "treeIndex": 96,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 17933592,
+        "length": 6329,
+        "byteLength": 25316
+      },
+      {
+        "treeIndex": 96,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 17958912,
+        "length": 6329,
+        "byteLength": 25316
+      },
+      {
+        "treeIndex": 96,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 17984232,
+        "length": 6329,
+        "byteLength": 50632
+      },
+      {
+        "treeIndex": 96,
+        "field": "value",
+        "type": "Float64",
+        "offset": 18034864,
+        "length": 6329,
+        "byteLength": 50632
+      },
+      {
+        "treeIndex": 97,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 18085496,
+        "length": 6869,
+        "byteLength": 27476
+      },
+      {
+        "treeIndex": 97,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 18112976,
+        "length": 6869,
+        "byteLength": 27476
+      },
+      {
+        "treeIndex": 97,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 18140456,
+        "length": 6869,
+        "byteLength": 27476
+      },
+      {
+        "treeIndex": 97,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 18167936,
+        "length": 6869,
+        "byteLength": 54952
+      },
+      {
+        "treeIndex": 97,
+        "field": "value",
+        "type": "Float64",
+        "offset": 18222888,
+        "length": 6869,
+        "byteLength": 54952
+      },
+      {
+        "treeIndex": 98,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 18277840,
+        "length": 6737,
+        "byteLength": 26948
+      },
+      {
+        "treeIndex": 98,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 18304792,
+        "length": 6737,
+        "byteLength": 26948
+      },
+      {
+        "treeIndex": 98,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 18331744,
+        "length": 6737,
+        "byteLength": 26948
+      },
+      {
+        "treeIndex": 98,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 18358696,
+        "length": 6737,
+        "byteLength": 53896
+      },
+      {
+        "treeIndex": 98,
+        "field": "value",
+        "type": "Float64",
+        "offset": 18412592,
+        "length": 6737,
+        "byteLength": 53896
+      },
+      {
+        "treeIndex": 99,
+        "field": "childrenLeft",
+        "type": "Int32",
+        "offset": 18466488,
+        "length": 6931,
+        "byteLength": 27724
+      },
+      {
+        "treeIndex": 99,
+        "field": "childrenRight",
+        "type": "Int32",
+        "offset": 18494216,
+        "length": 6931,
+        "byteLength": 27724
+      },
+      {
+        "treeIndex": 99,
+        "field": "feature",
+        "type": "Int32",
+        "offset": 18521944,
+        "length": 6931,
+        "byteLength": 27724
+      },
+      {
+        "treeIndex": 99,
+        "field": "threshold",
+        "type": "Float64",
+        "offset": 18549672,
+        "length": 6931,
+        "byteLength": 55448
+      },
+      {
+        "treeIndex": 99,
+        "field": "value",
+        "type": "Float64",
+        "offset": 18605120,
+        "length": 6931,
+        "byteLength": 55448
+      }
+    ]
+  },
+  "binary": {
+    "file": "snow-rf-conus-v1.bin",
+    "bytes": 18660568,
+    "sha256": "b60056d477f13f68f590babad587badb607c174cb51b073c677294f920e27376"
+  }
+}

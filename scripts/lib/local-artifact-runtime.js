@@ -7,6 +7,7 @@ const {
   DEFAULT_CACHE_ROOT,
   DEFAULT_REFLECTIVITY_GATES,
   DEFAULT_VIEW_KEY,
+  HOVER_GRID_ENCODING,
   LOCAL_SOURCE_NAME,
   MODEL_CONFIG,
   VIEW_CONFIG,
@@ -27,7 +28,11 @@ const {
   normalizeParameterAvailability,
   normalizeRenderedFrameArtifacts,
 } = require("./local-artifact-manifest");
-const { inferHoverGridFormatFromKey, mergeHoverGridPayloads } = require("./hover-grid-binary");
+const {
+  inferHoverGridCompressionFromKey,
+  inferHoverGridFormatFromKey,
+  mergeHoverGridPayloads,
+} = require("./hover-grid-binary");
 const { pathExists, readJsonIfExists, writeBufferAtomic, writeJsonAtomic } = require("./local-artifact-io");
 const { FrameStatIndex } = require("./local-artifact-stat-index");
 const { getNoaaNamParameterMetadata } = require("./noaa-nam-parameter-catalog");
@@ -833,6 +838,8 @@ class LocalArtifactRuntime {
       const existingBody = await fs.promises.readFile(targetPath);
       return mergeHoverGridPayloads(existingBody, incomingBody, {
         format: inferHoverGridFormatFromKey(hoverGridKey),
+        compression: inferHoverGridCompressionFromKey(hoverGridKey),
+        encoding: HOVER_GRID_ENCODING,
       });
     } catch (error) {
       if (error?.code === "ENOENT") {
@@ -1350,7 +1357,7 @@ function buildSupplementalHoverGridKey(baseKey, name) {
   if (!key || !suffix) {
     return key;
   }
-  const replaced = key.replace(/\/hover-grid(\.[^/.]+)?\.gz$/i, `/hover-grid-${suffix}$1.gz`);
+  const replaced = key.replace(/\/hover-grid(\.[^/.]+)?\.(gz|br)$/i, `/hover-grid-${suffix}$1.$2`);
   return replaced === key ? `${key}.${suffix}` : replaced;
 }
 

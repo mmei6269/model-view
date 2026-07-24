@@ -5,6 +5,8 @@ const path = require("path");
 const SHARED_CONFIG = require("../../shared/modelview-config.json");
 const SYNOPTIC_STYLE = require("../../shared/synoptic-style-v1.json");
 const { normalizeRenderSelection } = require("./noaa-beta/selection");
+const { DEFAULT_HOVER_GRID_COMPRESSION } = require("./hover-grid-compression");
+const { HOVER_GRID_ENCODING } = require("./hover-grid-encoding");
 
 const DEFAULT_CACHE_ROOT = path.resolve(__dirname, "../../output/noaa-beta-cache");
 const DEFAULT_ARTIFACT_PREFIX = process.env.MODELVIEW_ARTIFACT_PREFIX || "tiles";
@@ -14,8 +16,8 @@ const LOCAL_SOURCE_NAME = "noaa-grib2-beta";
 const MANIFEST_SCHEMA_VERSION = Number(SHARED_CONFIG.manifestSchemaVersion) || 4;
 const SYNOPTIC_STYLE_VERSION = String(SYNOPTIC_STYLE.styleVersion || "v4-operational-contrast");
 // Detailed-mode MSLP interval override (owner decision 2026-07-09): thin
-// isobar every 2 hPa, bold every 8 — high-density with WPC-style major
-// emphasis. The shared style JSON is shape-frozen (public mirror) and feeds
+// isobar every 2 hPa, bold every 8 — dense operational spacing with
+// WPC-style major emphasis. The shared style JSON is shape-frozen and feeds
 // simple mode byte-identically, so the override lives in this derived object,
 // the single source for both the renderer's detailed pass and the manifest
 // stamp below. The +mslp2 styleVersion suffix marks detailed vectors AND
@@ -27,13 +29,10 @@ const DETAILED_SYNOPTIC_STYLE = Object.freeze({
   styleVersion: DETAILED_SYNOPTIC_STYLE_VERSION,
   mslp: Object.freeze({ ...SYNOPTIC_STYLE.mslp, minorIntervalHpa: 2 }),
 });
-// Schema v3 (2026-07-12): the binary payload's Int16 data region is
-// delta-encoded globally (wrapping int16, previous value carried across
-// variable boundaries) before gzip. Lossless — the decoder prefix-sums the
-// region back; measured on a real 220MB HRRR payload: compressed size
-// 57.6 -> 46.6MB (-19%) and gzip time 855 -> 734ms at level 1. v1/v2
-// payloads (no delta) remain decodable; there are no legacy clients.
-const HOVER_GRID_SCHEMA_VERSION = 3;
+// One resolved descriptor owns every producer-facing format decision. MVH4
+// is the default exact gradient predictor; MODELVIEW_NOAA_HOVER_ENCODING=mvh3
+// is the strict rollback to the byte-compatible global-prefix format.
+const HOVER_GRID_SCHEMA_VERSION = HOVER_GRID_ENCODING.schemaVersion;
 const LAYER_CONTENT_TYPE = "image/png";
 const JSON_CONTENT_TYPE = "application/json";
 const DEFAULT_REFLECTIVITY_LAYER_KEY = "reflectivity";
@@ -302,7 +301,7 @@ function buildFrameAssetKeySet({
     },
     contourVectorRefs,
     weatherVectorRefs,
-    hoverGridKey: `${frameBase}/hover-grid.${hoverGridExtension}.gz`,
+    hoverGridKey: `${frameBase}/hover-grid.${hoverGridExtension}.${DEFAULT_HOVER_GRID_COMPRESSION.extension}`,
   };
 }
 
@@ -479,6 +478,7 @@ module.exports = {
   DEFAULT_VIEW_KEY,
   DETAILED_SYNOPTIC_STYLE,
   DETAILED_SYNOPTIC_STYLE_VERSION,
+  HOVER_GRID_ENCODING,
   HOVER_GRID_SCHEMA_VERSION,
   LAYER_ORDER,
   LOCAL_SOURCE_NAME,
